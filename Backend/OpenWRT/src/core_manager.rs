@@ -398,10 +398,15 @@ pub fn build_args(
         settings.vk_auth_mode.as_str()
     };
 
-    let workers = settings.workers.clamp(
+    let mut workers = settings.workers.clamp(
         crate::settings::MIN_WORKERS,
         crate::settings::MAX_WORKERS,
     );
+    // Роутеры с малой памятью (напр. 64 МБ): много воркеров приводят к OOM и гибели netifd.
+    if low_memory() && workers > LOW_MEMORY_MAX_WORKERS {
+        log::warn!("[CORE] мало ОЗУ: воркеры {workers} -> {LOW_MEMORY_MAX_WORKERS}");
+        workers = LOW_MEMORY_MAX_WORKERS;
+    }
 
     let mut args: Vec<String> = vec![
         "--peer".into(), config.peer.clone(),
@@ -548,4 +553,20 @@ mod tests {
                 (protocol == "CSQTT 2.1.9").then_some("fixture-device"));
         }
     }
+}
+
+/// Максимум воркеров на роутере с малой памятью.
+pub const LOW_MEMORY_MAX_WORKERS: i32 = 3;
+
+/// true, если на роутере меньше 192 МБ ОЗУ (по /proc/meminfo).
+pub fn low_memory() -> bool {
+    std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|text| {
+            text.lines()
+                .find(|line| line.starts_with("MemTotal:"))
+                .and_then(|line| line.split_whitespace().nth(1))
+                .and_then(|kb| kb.parse::<u64>().ok())
+        })
+        .is_some_and(|kb| kb < 192 * 1024)
 }

@@ -48,6 +48,7 @@ async fn main() -> Result<()> {
     .init();
 
     log::info!("LaLune OpenWRT backend starting...");
+    tune_oom();
 
     let state = Arc::new(AppState::new().await?);
     let log_state = state.clone();
@@ -112,4 +113,22 @@ async fn shutdown_signal(state: Arc<AppState>) {
 
     log::info!("Shutdown signal received.");
     state.cleanup().await;
+}
+
+/// Защита роутера от OOM: нас (и дочернее ядро, оно наследует значение) убивают первыми,
+/// а сетевые службы (netifd, procd, dropbear и т.д.) — в последнюю очередь.
+fn tune_oom() {
+    let _ = std::fs::write("/proc/self/oom_score_adj", "1000");
+    const CRITICAL: &[&str] = &[
+        "netifd", "procd", "ubusd", "dropbear", "logd", "hostapd", "wpa_supplicant", "dnsmasq", "odhcpd", "rpcd",
+    ];
+    let Ok(entries) = std::fs::read_dir("/proc") else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name.to_str().filter(|n| n.bytes().all(|b| b.is_ascii_digit())) else { continue };
+        let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
+        if CRITICAL.contains(&comm.trim()) {
+            let _ = std::fs::write(format!("/proc/{pid}/oom_score_adj"), "-900");
+        }
+    }
 }
