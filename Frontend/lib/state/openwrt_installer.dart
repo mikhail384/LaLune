@@ -10,6 +10,7 @@ import 'package:dartssh2/dartssh2.dart';
 import 'package:flutter/services.dart' show rootBundle;
 
 import '../api/api_client.dart';
+import '../utils/keep_awake.dart';
 
 class OpenWrtInstallResult {
   final bool ok;
@@ -136,6 +137,7 @@ class OpenWrtInstaller {
   }) async {
     SSHClient? client;
     var stage = 'подключение к SSH';
+    await setKeepScreenOn(true);
     try {
       onProgress?.call('Подключение к SSH $host:22...');
       final socket = await SSHSocket.connect(
@@ -321,6 +323,7 @@ class OpenWrtInstaller {
         message: 'Не удалось установить OpenWRT backend на шаге «$stage»: $e',
       );
     } finally {
+      await setKeepScreenOn(false);
       if (client != null) {
         try {
           await client.close();

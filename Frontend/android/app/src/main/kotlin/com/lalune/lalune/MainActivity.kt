@@ -104,6 +104,18 @@ class MainActivity : FlutterActivity() {
                     scope.launch { ensureBackend("dart") }
                     result.success(true)
                 }
+                "keepScreenOn" -> {
+                    // Не даём экрану гаснуть на время установки на роутер.
+                    val enabled = call.argument<Boolean>("enabled") ?: false
+                    runOnUiThread {
+                        if (enabled) {
+                            window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                        } else {
+                            window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                        }
+                    }
+                    result.success(true)
+                }
                 "openUrl" -> {
                     // Только https-ссылки; открывает браузер/Telegram.
                     val url = call.argument<String>("url").orEmpty()
