@@ -166,43 +166,61 @@ class OpenWrtInstaller {
         final dir = (home.isEmpty ? '/root' : home) + '/la-lune';
         onProgress?.call('Передача backend на роутер (${(bytes.length / 1048576).toStringAsFixed(1)} МБ)...');
         await client.run('mkdir -p "$dir"');
-        // На OpenWrt (Dropbear) обычно нет SFTP-подсистемы, поэтому льём файл
-        // через обычный exec-канал: `cat > файл`.
         final target = '$dir/lalune-openwrt-backend';
-        // Роутеры с 64 МБ ОЗУ не переживают один длинный поток в 20 МБ: буфер записи на флеш
-        // раздувает память и Dropbear обрывает соединение. Поэтому льём порциями по 256 КБ,
-        // каждая — отдельным коротким exec с `cat >>`, и периодически делаем sync.
-        await client.run('rm -f "$target.part"');
-        const chunk = 256 * 1024;
-        var sent = 0;
-        var chunkIndex = 0;
-        for (var offset = 0; offset < bytes.length; offset += chunk) {
-          final end = offset + chunk < bytes.length ? offset + chunk : bytes.length;
-          final piece = Uint8List.sublistView(bytes, offset, end);
-          final session = await client.execute('cat >> "$target.part"');
-          session.stdin.add(piece);
-          await session.stdin.close();
-          await session.done;
-          sent = end;
-          chunkIndex++;
-          if (chunkIndex % 8 == 0) {
-            await client.run('sync');
-            onProgress?.call(
-                'Передача backend на роутер: ${(sent * 100 ~/ bytes.length)}%');
-          }
-        }
-        await client.run('sync');        final size = utf8
-            .decode(await client.run('wc -c < "$target.part"'), allowMalformed: true)
+
+        // Освобождаем ОЗУ: на роутерах с 64 МБ запущенный backend + заливка 20 МБ
+        // приводят к тому, что Dropbear рвёт соединение.
+        await client.run('/etc/init.d/lalune stop >/dev/null 2>&1; '
+            'killall lalune-openwrt-backend >/dev/null 2>&1; '
+            'killall csqtt-client >/dev/null 2>&1; sleep 1; '
+            'echo 3 > /proc/sys/vm/drop_caches 2>/dev/null; true');
+
+        // Если на роутере уже лежит файл нужного размера (прошлая установка) — не льём заново.
+        final existing = utf8
+            .decode(await client.run('wc -c < "$target" 2>/dev/null || echo 0'),
+                allowMalformed: true)
             .trim();
-        if (size != '${bytes.length}') {
-          return OpenWrtInstallResult(
-            ok: false,
-            message:
-                'Файл передан не полностью ($size из ${bytes.length} байт). Повторите установку.',
-            log: combined,
-          );
+        if (existing == '${bytes.length}') {
+          onProgress?.call('Файл backend на роутере уже актуален, загрузка не нужна');
+        } else {
+          // Роутеры с 64 МБ ОЗУ не переживают один длинный поток в 20 МБ: буфер записи на
+          // флеш раздувает память. Льём порциями по 128 КБ, каждая — отдельным коротким
+          // exec с `cat >>`, и периодически делаем sync и сбрасываем кэш.
+          await client.run('rm -f "$target.part"');
+          const chunk = 128 * 1024;
+          var sent = 0;
+          var chunkIndex = 0;
+          for (var offset = 0; offset < bytes.length; offset += chunk) {
+            final end = offset + chunk < bytes.length ? offset + chunk : bytes.length;
+            final piece = Uint8List.sublistView(bytes, offset, end);
+            final session = await client.execute('cat >> "$target.part"');
+            session.stdin.add(piece);
+            await session.stdin.close();
+            await session.done;
+            sent = end;
+            chunkIndex++;
+            if (chunkIndex % 8 == 0) {
+              await client.run(
+                  'sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null; true');
+              onProgress?.call(
+                  'Передача backend на роутер: ${(sent * 100 ~/ bytes.length)}%');
+            }
+          }
+          await client.run('sync');
+          final size = utf8
+              .decode(await client.run('wc -c < "$target.part"'),
+                  allowMalformed: true)
+              .trim();
+          if (size != '${bytes.length}') {
+            return OpenWrtInstallResult(
+              ok: false,
+              message:
+                  'Файл передан не полностью ($size из ${bytes.length} байт). Повторите установку.',
+              log: combined,
+            );
+          }
+          await client.run('mv -f "$target.part" "$target"');
         }
-        await client.run('mv -f "$target.part" "$target"');
         onProgress?.call('Установка backend и зависимостей...');
         result = await client.runWithResult('LALUNE_PREUPLOADED=1\n$script');
         stdout = utf8.decode(result.stdout, allowMalformed: true);
