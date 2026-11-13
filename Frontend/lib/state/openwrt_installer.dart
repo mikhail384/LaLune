@@ -166,15 +166,36 @@ class OpenWrtInstaller {
         final dir = (home.isEmpty ? '/root' : home) + '/la-lune';
         onProgress?.call('Передача backend на роутер (${(bytes.length / 1048576).toStringAsFixed(1)} МБ)...');
         await client.run('mkdir -p "$dir"');
-        final sftp = await client.sftp();
-        final remote = await sftp.open(
-          '$dir/lalune-openwrt-backend',
-          mode: SftpFileOpenMode.create |
-              SftpFileOpenMode.write |
-              SftpFileOpenMode.truncate,
-        );
-        await remote.writeBytes(bytes);
-        await remote.close();
+        // На OpenWrt (Dropbear) обычно нет SFTP-подсистемы, поэтому льём файл
+        // через обычный exec-канал: `cat > файл`.
+        final target = '$dir/lalune-openwrt-backend';
+        final upload = await client.execute('cat > "$target.part"');
+        const chunk = 32 * 1024;
+        var sent = 0;
+        for (var offset = 0; offset < bytes.length; offset += chunk) {
+          final end = offset + chunk < bytes.length ? offset + chunk : bytes.length;
+          upload.stdin.add(Uint8List.sublistView(bytes, offset, end));
+          sent = end;
+          if ((offset ~/ chunk) % 64 == 0) {
+            onProgress?.call(
+                'Передача backend на роутер: ${(sent * 100 ~/ bytes.length)}%');
+            await Future<void>.delayed(Duration.zero);
+          }
+        }
+        await upload.stdin.close();
+        await upload.done;
+        final size = utf8
+            .decode(await client.run('wc -c < "$target.part"'), allowMalformed: true)
+            .trim();
+        if (size != '${bytes.length}') {
+          return OpenWrtInstallResult(
+            ok: false,
+            message:
+                'Файл передан не полностью ($size из ${bytes.length} байт). Повторите установку.',
+            log: combined,
+          );
+        }
+        await client.run('mv -f "$target.part" "$target"');
         onProgress?.call('Установка backend и зависимостей...');
         result = await client.runWithResult('LALUNE_PREUPLOADED=1\n$script');
         stdout = utf8.decode(result.stdout, allowMalformed: true);
