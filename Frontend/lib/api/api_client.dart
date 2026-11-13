@@ -14,19 +14,38 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
 import 'api_exception.dart';
 
 class ApiClient {
   static const String _defaultHost = '127.0.0.1';
-  static const int _port = 1062;
+  static const int _defaultPort = 1062;
+  static int _localPort = _defaultPort;
   static const Duration _timeout = Duration(seconds: 30);
+
+  /// Port of THIS app's local backend (1062 original, 1064 LaLune Test).
+  static int get localPort => _localPort;
+
+  /// Read the package-specific Android backend port before creating providers.
+  static Future<void> initializeLocalPort() async {
+    if (defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      _localPort = await const MethodChannel('com.lalune/native')
+              .invokeMethod<int>('getApiPort') ??
+          _defaultPort;
+    } catch (_) {
+      _localPort = _defaultPort;
+    }
+  }
 
   final http.Client _http;
 
   /// Текущий host — изменяется через setBaseUrl.
   String _host = _defaultHost;
+  int _port = _localPort;
 
   /// Слушатели смены baseUrl (notifier'ы перезагружают данные).
   final _baseUrlChanges = StreamController<String>.broadcast();
@@ -41,8 +60,10 @@ class ApiClient {
 
   /// Переключить API на другой хост (или обратно на 127.0.0.1).
   void setBaseUrl(String host, {int? port}) {
-    if (_host == host) return;
+    final nextPort = host == _defaultHost ? _localPort : (port ?? _defaultPort);
+    if (_host == host && _port == nextPort) return;
     _host = host;
+    _port = nextPort;
     _baseUrlChanges.add(baseUrl);
   }
 
@@ -162,9 +183,8 @@ class ApiClient {
 
   Future<bool> ping() async {
     try {
-      final resp = await _http
-          .get(_uri('/ping'))
-          .timeout(const Duration(seconds: 2));
+      final resp =
+          await _http.get(_uri('/ping')).timeout(const Duration(seconds: 2));
       return resp.statusCode == 200;
     } catch (_) {
       return false;
@@ -176,7 +196,12 @@ class ApiClient {
   static Future<Map<String, dynamic>?> pingHost(String host,
       {Duration timeout = const Duration(milliseconds: 800)}) async {
     try {
-      final uri = Uri(scheme: 'http', host: host, port: _port, path: '/ping');
+      final uri = Uri(
+        scheme: 'http',
+        host: host,
+        port: _defaultPort,
+        path: '/ping',
+      );
       final client = http.Client();
       try {
         final resp = await client.get(uri).timeout(timeout);
@@ -198,7 +223,8 @@ class ApiClient {
       try {
         final decoded = jsonDecode(body);
         if (decoded is Map<String, dynamic>) {
-          final value = decoded['error'] ?? decoded['message'] ?? decoded['detail'];
+          final value =
+              decoded['error'] ?? decoded['message'] ?? decoded['detail'];
           if (value != null && value.toString().trim().isNotEmpty) {
             message = value.toString().trim();
           }

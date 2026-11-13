@@ -15,7 +15,7 @@ $ErrorActionPreference = 'Stop'
 #  Константы
 # ============================================================
 
-$REPO_LALUNE   = 'Endlad2/LaLune'
+$REPO_LALUNE   = 'mikhail384/LaLune'
 $REPO_CSQTT    = 'Endlad2/csqtt-core'
 $REPO_PAPERFLUX = 'Endlad2/PaperFlux-core'
 $REPO_CSQTTR = 'Endlad2/csqttr-core'

@@ -160,6 +160,61 @@ pub fn parse_link(link: &str) -> Result<ConfigItem> {
     }
 }
 
+/// The UI (Android/Windows) lets the user paste a link with a caption
+/// (`csqttr:csqtt://…`, `CSQTT 2.5.1: csqtt://…`) or with the `csqttr://`
+/// scheme. This mirrors the Android backend's `normalizeConfigLink`: it returns
+/// the canonical `csqtt://…` link and the core the caption/scheme implies.
+pub fn normalize_for_core(
+    raw: &str,
+    selected: crate::bundled_cores::Core,
+) -> (String, crate::bundled_cores::Core) {
+    use crate::bundled_cores::Core;
+    let trimmed = raw.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    let mut best: Option<(usize, &str)> = None;
+    for scheme in ["csqttr://", "csqtt://", "olcrtc://", "tots://", "openflux://"] {
+        if let Some(i) = lower.find(scheme) {
+            if best.map_or(true, |(b, _)| i < b) {
+                best = Some((i, scheme));
+            }
+        }
+    }
+    let Some((idx, scheme)) = best else {
+        return (trimmed.to_string(), selected);
+    };
+    let label = lower[..idx]
+        .trim()
+        .trim_end_matches(':')
+        .trim()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let uri = trimmed[idx..].lines().next().unwrap_or("").trim();
+    let after_scheme = &uri[scheme.len()..];
+    let explicit = match label.as_str() {
+        "csqtt 2.1.9" => Some(Core::Legacy),
+        "csqtt 2.5.1" => Some(Core::Csqtt),
+        "csqttr" => Some(Core::Csqttr),
+        _ => None,
+    };
+    let opaque_csqtt = scheme == "csqtt://" && !after_scheme.to_ascii_lowercase().starts_with("connect?");
+    let effective = explicit.unwrap_or(if scheme == "csqttr://" {
+        Core::Csqttr
+    } else if opaque_csqtt && selected == Core::Legacy {
+        // Legacy 2.1.9 only understands plain links; an opaque (encrypted)
+        // csqtt:// link needs the 2.5.1 core.
+        Core::Csqtt
+    } else {
+        selected
+    });
+    let canonical = if scheme == "csqttr://" {
+        format!("csqtt://{after_scheme}")
+    } else {
+        uri.to_string()
+    };
+    (canonical, effective)
+}
+
 pub fn parse_for_core(link: &str, core: crate::bundled_cores::Core) -> Result<ConfigItem> {
     let link = link.trim();
     if !link.starts_with("csqtt://") {
@@ -324,8 +379,38 @@ fn parse_generic(link: &str, protocol: &str, prefix: &str) -> Result<ConfigItem>
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_for_core, ConfigItem, ConfigStore};
+    use super::{normalize_for_core, parse_for_core, ConfigItem, ConfigStore};
     use crate::bundled_cores::Core;
+
+    #[test]
+    fn caption_and_csqttr_scheme_are_normalized() {
+        let plain = "csqtt://connect?v=2&host=1.2.3.4&peer=46000&password=p&hashes=h";
+        // Caption in front of the link (what the app lets the user paste).
+        assert_eq!(normalize_for_core(&format!("csqttr:{plain}"), Core::Legacy), (plain.into(), Core::Csqttr));
+        assert_eq!(normalize_for_core(&format!("CSQTT 2.5.1: {plain}"), Core::Legacy), (plain.into(), Core::Csqtt));
+        assert_eq!(normalize_for_core(&format!("csqtt 2.1.9:{plain}"), Core::Csqtt), (plain.into(), Core::Legacy));
+        // csqttr:// scheme becomes csqtt:// and selects the CSQTTR core.
+        assert_eq!(
+            normalize_for_core("csqttr://connect?v=2&host=1.2.3.4", Core::Legacy),
+            ("csqtt://connect?v=2&host=1.2.3.4".into(), Core::Csqttr)
+        );
+        // Opaque (encrypted) csqtt:// link with the legacy core selected needs 2.5.1.
+        assert_eq!(normalize_for_core("csqtt://AbCdEf_-123", Core::Legacy), ("csqtt://AbCdEf_-123".into(), Core::Csqtt));
+        // Untouched when nothing to normalize; a trailing second line is dropped.
+        assert_eq!(normalize_for_core(plain, Core::Csqtt), (plain.into(), Core::Csqtt));
+        assert_eq!(normalize_for_core(&format!("{plain}\nnoise"), Core::Csqtt), (plain.into(), Core::Csqtt));
+        // Not a known scheme: returned as is.
+        assert_eq!(normalize_for_core("vless://x", Core::Csqtt), ("vless://x".into(), Core::Csqtt));
+    }
+
+    #[test]
+    fn captioned_link_is_accepted_by_parse() {
+        let plain = "csqtt://connect?v=2&host=127.0.0.1&peer=46000&password=secret&hashes=h1+h2";
+        let (link, core) = normalize_for_core(&format!("csqttr:{plain}"), Core::Legacy);
+        let config = parse_for_core(&link, core).expect("captioned CSQTTR link parses");
+        assert_eq!(config.protocol, "CSQTTR");
+        assert_eq!(config.peer, "127.0.0.1:46000");
+    }
 
     #[test]
     fn csqttr_profile_keeps_protocol_when_parsed() {

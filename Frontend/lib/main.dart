@@ -24,16 +24,20 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'api/api_client.dart';
 import 'backend_watchdog.dart';
 import 'pages/connection_page.dart';
 import 'pages/info_page.dart';
 import 'pages/logs_page.dart';
 import 'pages/settings_page.dart';
+import 'state/configs_notifier.dart';
 import 'theme/app_theme.dart';
 import 'widgets/navbar.dart';
 import 'widgets/router_banner.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await ApiClient.initializeLocalPort();
   runApp(const ProviderScope(child: LaLuneApp()));
 }
 
@@ -59,15 +63,24 @@ class RootShell extends ConsumerStatefulWidget {
 }
 
 class _RootShellState extends ConsumerState<RootShell> {
-  int _currentPage = 0;
+  static const _pageTransitionDuration = Duration(milliseconds: 280);
 
+  int _currentPage = 0;
+  late final PageController _pageController;
 
   @override
   void initState() {
     super.initState();
+    _pageController = PageController();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(backendWatchdogProvider);
     });
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
   }
 
   // ConfigsNotifier already refreshes the list after add/delete. Avoid
@@ -75,31 +88,25 @@ class _RootShellState extends ConsumerState<RootShell> {
   void _reloadConnection() {}
 
   void _onNavSelect(int i) {
-    if (i == _currentPage) return;
+    if (i == _currentPage || i < 0 || i >= 4) return;
     setState(() => _currentPage = i);
-  }
-
-  Widget _buildPage() {
-    switch (_currentPage) {
-      case 0:
-        return ConnectionPage(
-          key: const ValueKey('connection'),
-          onReload: _reloadConnection,
-        );
-      case 1:
-        return const SettingsPage(key: ValueKey('settings'));
-      case 2:
-        return const InfoPage();
-      case 3:
-        return const LogsPage();
-      default:
-        return const SizedBox.shrink();
-    }
+    _pageController.animateToPage(
+      i,
+      duration: _pageTransitionDuration,
+      curve: Curves.easeInOutCubic,
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final backendStatus = ref.watch(backendWatchdogProvider);
+    // Backend снова отвечает — догружаем список конфигов, если прошлая
+    // загрузка не удалась (no-op, когда список уже загружен).
+    ref.listen<BackendStatus>(backendWatchdogProvider, (prev, next) {
+      if (next == BackendStatus.alive) {
+        ref.read(configsProvider.notifier).reloadIfNeeded();
+      }
+    });
 
     return Scaffold(
       body: Container(
@@ -114,19 +121,37 @@ class _RootShellState extends ConsumerState<RootShell> {
             children: [
               // Глобальный зелёный баннер, если подключены к OpenWRT-роутеру.
               const RouterBanner(),
-              if (backendStatus == BackendStatus.dead)
-                _BackendOfflineBanner(),
+              if (backendStatus == BackendStatus.dead) _BackendOfflineBanner(),
               Expanded(
                 child: RepaintBoundary(
-                  child: AnimatedSwitcher(
-                    // Avoid cross-fading two translucent pages on top of each
-                    // other: this produced ghosting/artifacts on some Android GPUs.
-                    duration: Duration.zero,
-                    transitionBuilder: (child, animation) => child,
-                    child: KeyedSubtree(
-                      key: ValueKey('page_$_currentPage'),
-                      child: _buildPage(),
+                  child: PageView(
+                    controller: _pageController,
+                    physics: const PageScrollPhysics(
+                      parent: ClampingScrollPhysics(),
                     ),
+                    onPageChanged: (i) {
+                      if (_currentPage != i) {
+                        setState(() => _currentPage = i);
+                      }
+                    },
+                    children: [
+                      _RetainedPage(
+                        key: const ValueKey('connection'),
+                        child: ConnectionPage(onReload: _reloadConnection),
+                      ),
+                      const _RetainedPage(
+                        key: ValueKey('settings'),
+                        child: SettingsPage(),
+                      ),
+                      const _RetainedPage(
+                        key: ValueKey('info'),
+                        child: InfoPage(),
+                      ),
+                      const _RetainedPage(
+                        key: ValueKey('logs'),
+                        child: LogsPage(),
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -139,6 +164,28 @@ class _RootShellState extends ConsumerState<RootShell> {
         ),
       ),
     );
+  }
+}
+
+/// Keeps a visited page mounted so navigation preserves its scroll and form state.
+class _RetainedPage extends StatefulWidget {
+  const _RetainedPage({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  State<_RetainedPage> createState() => _RetainedPageState();
+}
+
+class _RetainedPageState extends State<_RetainedPage>
+    with AutomaticKeepAliveClientMixin<_RetainedPage> {
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    return widget.child;
   }
 }
 

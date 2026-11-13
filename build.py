@@ -12,6 +12,7 @@
 # CI-режим:
 #     python build.py --ci --target windows
 #     python build.py --ci --target linux
+#     python build.py --ci --target macos   (только на Mac)
 #
 # Что собирает:
 #   * Backend/Desktop          → cargo build --release
@@ -291,6 +292,10 @@ def build_frontend(target_os: str) -> Path:
         run(["flutter", "build", "linux", "--release"], cwd=FRONTEND,
             label="flutter build linux --release")
         result_dir = FRONTEND / "build" / "linux" / "x64" / "release" / "bundle"
+    elif target_os == "macos":
+        run(["flutter", "build", "macos", "--release"], cwd=FRONTEND,
+            label="flutter build macos --release")
+        result_dir = FRONTEND / "build" / "macos" / "Build" / "Products" / "Release" / "lalune.app"
     else:
         die(f"unsupported target: {target_os}")
 
@@ -298,7 +303,8 @@ def build_frontend(target_os: str) -> Path:
         die(f"flutter build result not found: {result_dir}")
 
     # ── Гарантируем имя бинарника LaLune[.exe] ───────────────
-    rename_to_laLune(result_dir, target_os)
+    if target_os != "macos":
+        rename_to_laLune(result_dir, target_os)
     return result_dir
 
 def rename_to_laLune(result_dir: Path, target_os: str) -> None:
@@ -378,6 +384,22 @@ def package_linux(frontend_dir: Path, backend_bin: Path) -> None:
     zip_file(backend_bin, backend_zip, arcname="LaLuneManager")
     status("OK", f"{backend_zip.name}  ({backend_zip.stat().st_size // 1024} KB)")
 
+def package_macos(app_dir: Path, backend_bin: Path) -> None:
+    """LaLune-macOS.zip: .app со встроенным бэкендом (Contents/Resources/lalune-backend)."""
+    clean_dir(OUTPUT)
+    resources = app_dir / "Contents" / "Resources"
+    resources.mkdir(parents=True, exist_ok=True)
+    bundled = resources / "lalune-backend"
+    shutil.copy2(backend_bin, bundled)
+    bundled.chmod(0o755)
+    run(["codesign", "--force", "--deep", "--sign", "-", str(app_dir)],
+        cwd=app_dir.parent, label="codesign (ad-hoc)")
+    lalune_zip = OUTPUT / "LaLune-macOS.zip"
+    status("INFO", f"packaging {lalune_zip.name}…")
+    run(["ditto", "-c", "-k", "--keepParent", str(app_dir), str(lalune_zip)],
+        cwd=app_dir.parent, label="ditto zip")
+    status("OK", f"{lalune_zip.name}  ({lalune_zip.stat().st_size // 1024} KB)")
+
 # ────────────────────────────────────────────────────────────────
 #  Clean
 # ────────────────────────────────────────────────────────────────
@@ -416,11 +438,12 @@ def ask_target() -> str:
     print()
     print("    1) Windows")
     print("    2) Linux")
+    print("    3) macOS")
     print()
 
     while True:
         try:
-            choice = input("  Выбор [1/2]: ").strip()
+            choice = input("  Выбор [1/2/3]: ").strip()
         except EOFError:
             choice = ""
 
@@ -428,7 +451,9 @@ def ask_target() -> str:
             return "windows"
         if choice == "2" or choice.lower() in ("l", "linux"):
             return "linux"
-        print("  Введите 1 или 2.")
+        if choice == "3" or choice.lower() in ("m", "mac", "macos"):
+            return "macos"
+        print("  Введите 1, 2 или 3.")
 
 # ────────────────────────────────────────────────────────────────
 #  Main
@@ -443,7 +468,7 @@ def main() -> int:
         help="CI-режим: не задавать вопросы, использовать --target",
     )
     parser.add_argument(
-        "--target", choices=["windows", "linux"],
+        "--target", choices=["windows", "linux", "macos"],
         help="Целевая платформа (обязательно в --ci)",
     )
     parser.add_argument(
@@ -455,7 +480,7 @@ def main() -> int:
     # ── Выбор платформы ──────────────────────────────────────
     if args.ci:
         if not args.target:
-            die("--ci требует --target windows|linux")
+            die("--ci требует --target windows|linux|macos")
         target_os = args.target
     else:
         if args.target:
@@ -466,6 +491,9 @@ def main() -> int:
     # ── Проверки ─────────────────────────────────────────────
     if target_os == "windows" and not IS_WINDOWS_HOST:
         die("Windows target requires a Windows host")
+
+    if target_os == "macos" and platform.system() != "Darwin":
+        die("macOS target requires a macOS host (или используйте CI: build-desktop-macos)")
 
     status("INFO", f"target: {target_os}")
     print()
@@ -498,6 +526,8 @@ def main() -> int:
         status("INFO", "packaging…")
         if target_os == "windows":
             package_windows(frontend_dir, backend_bin, installer_exe)
+        elif target_os == "macos":
+            package_macos(frontend_dir, backend_bin)
         else:
             package_linux(frontend_dir, backend_bin)
 

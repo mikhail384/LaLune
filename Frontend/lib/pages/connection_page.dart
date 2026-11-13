@@ -3,9 +3,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../models/config_item.dart';
+import 'package:flutter/services.dart';
+
+import '../models/subscription.dart';
 import '../state/configs_notifier.dart';
+import '../state/logs_notifier.dart';
+import '../state/providers.dart';
+import '../state/subscriptions_notifier.dart';
 import '../state/vpn_notifier.dart';
+import '../utils/open_url.dart';
 import '../widgets/config_selector.dart';
 import '../widgets/moon_button.dart';
 import '../widgets/toast.dart';
@@ -41,11 +47,35 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
       );
       return;
     }
-    final sel = ref.read(configsProvider).selected;
+    final cfgState = ref.read(configsProvider);
+    final sel = cfgState.selected;
     if (sel == null) {
-      Toast.show(context, 'Выберите конфиг', isError: true);
+      Toast.show(
+        context,
+        cfgState.loaded
+            ? 'Выберите конфиг'
+            : 'Список конфигов ещё не загружен — backend недоступен',
+        isError: true,
+      );
       return;
     }
+    // Просроченный конфиг подписки подключать нельзя.
+    final owner = ref.read(subscriptionsProvider).ownerOf(sel.id);
+    if (owner != null) {
+      for (final c in owner.configs) {
+        if (owner.backendIds[c.key] == sel.id && c.expired) {
+          Toast.show(context, 'Срок действия конфига «${c.name}» истёк',
+              isError: true);
+          return;
+        }
+      }
+    }
+    // Трафик считаем на подписку только если подключается её конфиг.
+    ref.read(subscriptionsProvider.notifier).beginConnection(owner?.id);
+
+    // Новое подключение — новый лог: стираем старые записи в момент нажатия.
+    await ref.read(logsProvider.notifier).clear();
+    if (!mounted) return;
     final ok = await ref.read(vpnProvider.notifier).connect(sel.id);
     if (!mounted) return;
     if (ok) {
@@ -68,6 +98,19 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
     if (result.link.isEmpty) {
       if (!mounted) return;
       Toast.show(context, 'Введите ссылку', isError: true);
+      return;
+    }
+    // Подписка LaLuneSUB: http(s)-ссылка или data:-URL с JSON.
+    if (result.protocol == 'LaLuneSUB' || looksLikeSubscription(result.link)) {
+      final error =
+          await ref.read(subscriptionsProvider.notifier).add(result.link);
+      if (!mounted) return;
+      if (error == null) {
+        Toast.show(context, 'Подписка добавлена');
+      } else {
+        Toast.show(context, error,
+            isError: true, duration: const Duration(seconds: 6));
+      }
       return;
     }
     final ok = await ref
@@ -135,9 +178,89 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
     }
   }
 
+  // ---------------------------------------------------------------- подписки
+
+  Future<void> _refreshSubscriptions() async {
+    await ref.read(subscriptionsProvider.notifier).refreshAll();
+    if (!mounted) return;
+    final failed = ref
+        .read(subscriptionsProvider)
+        .items
+        .where((s) => s.error != null)
+        .length;
+    Toast.show(
+      context,
+      failed == 0 ? 'Подписки обновлены' : 'Не удалось обновить подписок: $failed',
+      isError: failed > 0,
+    );
+  }
+
+  Future<void> _openSubControl(Subscription sub) async {
+    final url = sub.subControl;
+    if (url == null) return;
+    final ok = await openExternalUrl(ref.read(apiClientProvider), url);
+    if (ok || !mounted) return;
+    await Clipboard.setData(ClipboardData(text: url));
+    if (mounted) Toast.show(context, 'Ссылка скопирована: $url');
+  }
+
+  Future<void> _selectSubConfig(Subscription sub, SubConfig config) async {
+    if (config.expired) {
+      Toast.show(context, 'Срок действия конфига «${config.name}» истёк',
+          isError: true);
+      return;
+    }
+    final id =
+        await ref.read(subscriptionsProvider.notifier).materialize(sub, config);
+    if (!mounted) return;
+    if (id == null) {
+      Toast.show(context, 'Не удалось подготовить конфиг «${config.name}»',
+          isError: true);
+      return;
+    }
+    await ref.read(configsProvider.notifier).select(id);
+  }
+
+  Future<void> _confirmDeleteSub(Subscription sub) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      barrierColor: Colors.black.withOpacity(0.55),
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0F1540),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: Colors.white.withOpacity(0.1)),
+        ),
+        title: Text('Удалить подписку «${sub.hoster}»?'),
+        content: const Text('Её конфиги будут удалены из списка.',
+            style: TextStyle(color: Colors.white70)),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Отмена')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+            child: const Text('Удалить'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) {
+      await ref.read(subscriptionsProvider.notifier).remove(sub.id);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final configsState = ref.watch(configsProvider);
+    final subsState = ref.watch(subscriptionsProvider);
+    final managedIds = subsState.managedIds;
+    final plainConfigs = managedIds.isEmpty
+        ? configsState.items
+        : configsState.items
+            .where((c) => !managedIds.contains(c.id))
+            .toList(growable: false);
     final vpn = ref.watch(vpnProvider);
     final tunChecking = vpn.state == 'checking' && vpn.message == 'Проверка TUN';
     final visuallyConnected = vpn.connected || tunChecking;
@@ -218,11 +341,26 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
                 ),
                 const SizedBox(height: 22),
                 ConfigSelector(
-                  configs: configsState.items,
+                  configs: plainConfigs,
                   selectedId: configsState.selectedId,
+                  subscriptions: subsState.items,
+                  expandedSubs: subsState.expanded,
+                  refreshingSubs: subsState.refreshing,
+                  onRefreshSubs: _refreshSubscriptions,
+                  onToggleSub: (s) => ref
+                      .read(subscriptionsProvider.notifier)
+                      .toggleExpanded(s.id),
+                  onOpenSubControl: _openSubControl,
+                  onDeleteSub: _confirmDeleteSub,
+                  onSelectSubConfig: _selectSubConfig,
                   onSelect: (cfg) =>
                       ref.read(configsProvider.notifier).select(cfg.id),
                   onDelete: _confirmDelete,
+                  loaded: configsState.loaded,
+                  loading: configsState.loading,
+                  error: configsState.loadError,
+                  onRetry: () =>
+                      ref.read(configsProvider.notifier).reload(),
                 ),
               ],
             ),

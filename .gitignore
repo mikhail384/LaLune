@@ -35,6 +35,7 @@ Frontend/ios/Runner.xcodeproj/project.xcworkspace/
 Frontend/macos/Pods/
 Frontend/macos/Flutter/ephemeral/
 Frontend/android/.gradle/
+Frontend/android/build/
 Frontend/android/local.properties
 Frontend/android/key.properties
 Frontend/android/app/debug/
@@ -43,6 +44,16 @@ Frontend/android/app/release/
 Frontend/android/.idea/
 Frontend/android/captures/
 Frontend/android/app/src/main/jniLibs/
+# Android CI stages these sources before building the Flutter APK.
+Frontend/android/app/src/main/kotlin/com/lalune/lalune/Backend.kt
+Frontend/android/app/src/main/kotlin/com/lalune/lalune/CoreManager.kt
+Frontend/android/app/src/main/kotlin/com/lalune/lalune/CsqttLink.kt
+Frontend/android/app/src/main/kotlin/com/lalune/lalune/LaLuneVpnService.kt
+Frontend/android/app/src/main/kotlin/com/lalune/lalune/LuaRuntime.kt
+Frontend/android/app/src/main/kotlin/com/lalune/lalune/Socks5Server.kt
+Frontend/android/app/src/main/kotlin/com/lalune/lalune/VkWebViewFetcher.kt
+Frontend/android/app/src/main/assets/SmartTunnel.lua
+Frontend/android/app/src/main/assets/csqtt_decode.lua
 Frontend/windows/flutter/ephemeral/
 Frontend/linux/flutter/ephemeral/
 
@@ -91,3 +102,6 @@ la-lune/
 .env
 .env.*
 !.env.example
+
+# Вложения ассистента
+.codex-attachments/

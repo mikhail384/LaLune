@@ -498,7 +498,7 @@ class _InstallProgressDialogState extends State<_InstallProgressDialog> {
                     if (!result.ok && result.log.isNotEmpty) ...[
                       const SizedBox(height: 12),
                       Container(
-                        constraints: const BoxConstraints(maxHeight: 180),
+                        constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.45),
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
                           color: Colors.black.withOpacity(0.22),

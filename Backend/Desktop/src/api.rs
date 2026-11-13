@@ -746,6 +746,8 @@ async fn vpn_connect(
     };
     #[cfg(target_os = "linux")]
     state.vpn.core_uid.store(core.user.as_ref().map_or(0, |user| user.uid), std::sync::atomic::Ordering::Release);
+    state.vpn.core_pid.store(core.child.id().unwrap_or(0), std::sync::atomic::Ordering::Release);
+    *state.vpn.core_peer.lock() = config.peer.clone();
     *state.core.lock() = Some(core);
     if !auto_api_call_ids.is_empty() {
         *state.active_vk_call_ids.lock() = auto_api_call_ids;
@@ -947,7 +949,7 @@ async fn finish_vpn(state: &Arc<AppState>) {
     state.vpn.stop_tun().await;
     #[cfg(target_os = "windows")]
     vpn::cleanup_routes(&state.vpn, &state.events);
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     state.vpn.proxy_routes.lock().clear();
     crate::socks5::stop(state);
     let core = { state.core.lock().take() };

@@ -18,6 +18,7 @@ import org.luaj.vm2.lib.TwoArgFunction
 import org.luaj.vm2.lib.ZeroArgFunction
 import org.luaj.vm2.lib.jse.JsePlatform
 import java.io.File
+import java.security.MessageDigest
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
@@ -37,6 +38,8 @@ class LuaRuntime(
         private const val TAG = "LaLune-Lua"
         private const val ASSET_SMART = "SmartTunnel.lua"
         private const val ASSET_DECODE = "csqtt_decode.lua"
+        private const val LEGACY_SMART_TUNNEL_SHA256 =
+            "fb81692f3f2b82e6c1f7f510b4a66b4c0866ea195fdf8b02bca0780dc2f032a0"
     }
 
     @Volatile private var globals: Globals? = null
@@ -230,24 +233,54 @@ class LuaRuntime(
 
     private fun loadOrExtractAsset(name: String): String? {
         val inAppDir = File(appDir, name)
+        val bundledText = try {
+            context.assets.open(name).bufferedReader().use { it.readText() }
+        } catch (_: Exception) {
+            null
+        }
+
         if (inAppDir.exists()) {
             return try {
-                inAppDir.readText()
+                val existing = inAppDir.readText()
+                val managedHashFile = File(appDir, ".$name.sha256")
+                val existingHash = sha256(existing)
+                val recordedHash = try {
+                    managedHashFile.readText().trim()
+                } catch (_: Exception) {
+                    ""
+                }
+                val isUnmodifiedBundledAsset = existingHash == recordedHash ||
+                    (name == ASSET_SMART && existingHash == LEGACY_SMART_TUNNEL_SHA256)
+
+                if (isUnmodifiedBundledAsset && bundledText != null && existing != bundledText) {
+                    inAppDir.writeText(bundledText)
+                    managedHashFile.writeText(sha256(bundledText))
+                    logFn("[LUA] updated bundled $name")
+                    bundledText
+                } else {
+                    existing
+                }
             } catch (e: Exception) {
                 Log.w(TAG, "read $name from appDir failed: ${e.message}")
                 null
             }
         }
-        return try {
-            val text = context.assets.open(name).bufferedReader().use { it.readText() }
-            try {
-                inAppDir.parentFile?.mkdirs()
-                inAppDir.writeText(text)
-            } catch (_: Exception) {}
-            text
+
+        val text = bundledText ?: return null
+        try {
+            inAppDir.parentFile?.mkdirs()
+            inAppDir.writeText(text)
+            File(appDir, ".$name.sha256").writeText(sha256(text))
         } catch (_: Exception) {
-            null
+            // The bundled asset remains usable even when app-private storage is unavailable.
         }
+        return text
+    }
+
+    private fun sha256(text: String): String {
+        val normalized = text.replace("\r\n", "\n").toByteArray(Charsets.UTF_8)
+        return MessageDigest.getInstance("SHA-256").digest(normalized)
+            .joinToString("") { byte -> "%02x".format(byte) }
     }
 
     // ============================================================
@@ -275,13 +308,14 @@ class LuaRuntime(
     }
 
     fun onConnect() {
-        smarttunnelRunning = true
-        callOptional("on_connect")
+        syncSmartTunnelState()
     }
 
+    @Synchronized
     fun onDisconnect() {
+        val wasRunning = smarttunnelRunning
         smarttunnelRunning = false
-        callOptional("on_disconnect")
+        if (wasRunning) callOptional("on_disconnect")
     }
 
     private fun startTicker() {
@@ -290,6 +324,7 @@ class LuaRuntime(
             Thread(r, "lalune-lua-tick").apply { isDaemon = true }
         }
         ticker?.scheduleAtFixedRate({
+            syncSmartTunnelState()
             if (!smarttunnelRunning) return@scheduleAtFixedRate
             val g = globals ?: return@scheduleAtFixedRate
             try {
@@ -299,6 +334,19 @@ class LuaRuntime(
                 Log.w(TAG, "on_tick error: ${e.message}")
             }
         }, 1, 1, TimeUnit.SECONDS)
+    }
+
+    @Synchronized
+    private fun syncSmartTunnelState() {
+        val shouldRun = try {
+            vpnRunningFn() && settingsProvider().optBoolean("enableSmartTunnel", false)
+        } catch (_: Exception) {
+            false
+        }
+        if (shouldRun == smarttunnelRunning) return
+
+        smarttunnelRunning = shouldRun
+        callOptional(if (shouldRun) "on_connect" else "on_disconnect")
     }
 
     // ============================================================

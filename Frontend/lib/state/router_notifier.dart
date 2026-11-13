@@ -301,7 +301,8 @@ class RouterNotifier extends StateNotifier<RouterState> {
       final uri = Uri(
         scheme: 'http',
         host: host,
-        port: 1062,
+        // Local backend uses the per-package port; routers always use 1062.
+        port: host == '127.0.0.1' ? ApiClient.localPort : 1062,
         path: '/core/protocols',
       );
       final resp = await client.get(uri).timeout(const Duration(seconds: 4));

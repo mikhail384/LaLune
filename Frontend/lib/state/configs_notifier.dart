@@ -4,7 +4,6 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../api/api_client.dart';
 import '../api/api_exception.dart';
 import '../models/config_item.dart';
 import 'providers.dart';
@@ -15,12 +14,25 @@ class ConfigsState {
   final bool loading;
   final String? error;
 
+  /// true только после УСПЕШНОГО ответа GET /configs. Пока false, пустой
+  /// `items` — это «ещё не знаем», а не подтверждённый пустой список.
+  final bool loaded;
+
+  /// Ошибка именно ЗАГРУЗКИ списка (backend/API недоступен). `error` же
+  /// остаётся для ошибок add/delete.
+  final String? loadError;
+
   const ConfigsState({
     this.items = const [],
     this.selectedId,
-    this.loading = false,
+    this.loading = true,
     this.error,
+    this.loaded = false,
+    this.loadError,
   });
+
+  /// Подтверждённо пустой список (API ответил, конфигов нет).
+  bool get confirmedEmpty => loaded && items.isEmpty;
 
   ConfigsState copyWith({
     List<ConfigItem>? items,
@@ -29,12 +41,17 @@ class ConfigsState {
     bool? loading,
     String? error,
     bool clearError = false,
+    bool? loaded,
+    String? loadError,
+    bool clearLoadError = false,
   }) =>
       ConfigsState(
         items: items ?? this.items,
         selectedId: clearSelected ? null : (selectedId ?? this.selectedId),
         loading: loading ?? this.loading,
         error: clearError ? null : (error ?? this.error),
+        loaded: loaded ?? this.loaded,
+        loadError: clearLoadError ? null : (loadError ?? this.loadError),
       );
 
   ConfigItem? get selected {
@@ -56,11 +73,69 @@ class ConfigsNotifier extends StateNotifier<ConfigsState> {
   ConfigsNotifier(this._ref) : super(const ConfigsState()) {
     final api = _ref.read(apiClientProvider);
     _baseUrlSub = api.baseUrlChanges.listen((_) {
+      // Другой хост (роутер <-> локальный backend): список прежнего хоста
+      // не показываем и не смешиваем с новым.
+      _retryTimer?.cancel();
+      _retryAttempt = 0;
+      state = const ConfigsState();
       reload();
     });
   }
 
-  Future<void> reload() async {
+  bool _reloadAgain = false;
+  Timer? _retryTimer;
+  int _retryAttempt = 0;
+  static const List<int> _retryDelaysSec = [1, 2, 4, 8, 10];
+
+  /// Повторная загрузка после восстановления backend: только если прошлая
+  /// загрузка не удалась или ещё не состоялась. Если загрузка уже идёт —
+  /// просто присоединяемся к ней, без лишнего второго прохода.
+  Future<void> reloadIfNeeded() async {
+    if (state.loaded && state.loadError == null) return;
+    final running = _inFlight;
+    if (running != null) return running;
+    await reload();
+  }
+
+  /// Ограниченный по частоте автоповтор, пока список не загружен (backend
+  /// ещё стартует или перезапускается). Останавливается при успехе.
+  void _scheduleRetry() {
+    _retryTimer?.cancel();
+    final delay = _retryDelaysSec[
+        _retryAttempt < _retryDelaysSec.length ? _retryAttempt : _retryDelaysSec.length - 1];
+    _retryAttempt++;
+    _retryTimer = Timer(Duration(seconds: delay), () {
+      if (!mounted) return;
+      reloadIfNeeded();
+    });
+  }
+
+  Future<void>? _inFlight;
+
+  Future<void> reload() {
+    // Single-flight: параллельные reload() схлопываются в один повтор,
+    // а вызывающий дожидается актуального результата.
+    final running = _inFlight;
+    if (running != null) {
+      _reloadAgain = true;
+      return running;
+    }
+    final f = () async {
+      try {
+        do {
+          _reloadAgain = false;
+          await _reloadOnce();
+        } while (_reloadAgain && mounted);
+      } finally {
+        _inFlight = null;
+      }
+    }();
+    _inFlight = f;
+    return f;
+  }
+
+  Future<void> _reloadOnce() async {
+    // Уже известные items/selectedId НЕ сбрасываем на время загрузки/ошибки.
     state = state.copyWith(loading: true, clearError: true);
     final api = _ref.read(apiClientProvider);
     try {
@@ -69,10 +144,25 @@ class ConfigsNotifier extends StateNotifier<ConfigsState> {
           .map((e) => ConfigItem.fromJson(e as Map<String, dynamic>))
           .toList();
 
+      int? persistedSelectedId;
+      try {
+        final selected = await api.getJson('/configs/selected');
+        final rawId = selected['id'];
+        persistedSelectedId = rawId is num
+            ? rawId.toInt()
+            : int.tryParse(rawId?.toString() ?? '');
+      } catch (_) {
+        // Older router backends may not expose selected config state.
+      }
+
       int? newSelected = state.selectedId;
       if (newSelected == null || !items.any((c) => c.id == newSelected)) {
-        newSelected = items.isNotEmpty ? items.first.id : null;
-        if (newSelected != null) {
+        final persistedExists = persistedSelectedId != null &&
+            items.any((c) => c.id == persistedSelectedId);
+        newSelected = persistedExists
+            ? persistedSelectedId
+            : (items.isNotEmpty ? items.first.id : null);
+        if (newSelected != null && newSelected != persistedSelectedId) {
           await _selectOnBackend(newSelected);
         }
       }
@@ -81,10 +171,18 @@ class ConfigsNotifier extends StateNotifier<ConfigsState> {
         items: items,
         selectedId: newSelected,
         loading: false,
+        loaded: true,
         clearError: true,
+        clearLoadError: true,
       );
+      _retryTimer?.cancel();
+      _retryAttempt = 0;
     } catch (e) {
-      state = state.copyWith(loading: false, error: _configErrorText(e));
+      if (!mounted) return;
+      // Ошибка API — не «пустой список»: items и loaded остаются как были.
+      final text = _configErrorText(e);
+      state = state.copyWith(loading: false, error: text, loadError: text);
+      _scheduleRetry();
     }
   }
 
@@ -96,8 +194,7 @@ class ConfigsNotifier extends StateNotifier<ConfigsState> {
   Future<void> _selectOnBackend(int? id) async {
     final api = _ref.read(apiClientProvider);
     try {
-      await api.putJson(
-          '/configs/selected', id == null ? {} : {'id': id});
+      await api.putJson('/configs/selected', id == null ? {} : {'id': id});
     } catch (_) {}
   }
 
@@ -111,8 +208,8 @@ class ConfigsNotifier extends StateNotifier<ConfigsState> {
       // the response. Re-read the list before telling the user it failed.
       await reload();
       final normalizedLink = link.trim();
-      final persisted = state.items.any((item) =>
-          item.rawLink.trim() == normalizedLink);
+      final persisted =
+          state.items.any((item) => item.rawLink.trim() == normalizedLink);
       if (persisted) return true;
       state = state.copyWith(error: _configErrorText(e));
       return false;
@@ -140,6 +237,7 @@ class ConfigsNotifier extends StateNotifier<ConfigsState> {
 
   @override
   void dispose() {
+    _retryTimer?.cancel();
     _baseUrlSub?.cancel();
     super.dispose();
   }
@@ -147,5 +245,7 @@ class ConfigsNotifier extends StateNotifier<ConfigsState> {
 
 final configsProvider =
     StateNotifierProvider<ConfigsNotifier, ConfigsState>((ref) {
+  // Без побочных эффектов: первая загрузка — ConnectionPage.initState, а
+  // повтор при восстановлении backend — слушатель в RootShell (main.dart).
   return ConfigsNotifier(ref);
 });

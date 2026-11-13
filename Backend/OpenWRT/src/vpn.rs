@@ -233,7 +233,112 @@ struct OpenWrtRouting {
     uid_rule: bool,
     mark_rule: bool,
     route: bool,
+    nat: NatMode,
+    /// iptables NAT chain is actually populated (MASQUERADE or SNAT).
+    nat_chain_used: bool,
+    /// Native nftables table `ip lalune_nat` was created.
+    nft_nat: bool,
+    /// Packet marking done by nftables table `ip lalune_mangle` (router without iptables).
+    nft_mangle: bool,
     events: EventBus,
+}
+
+/// Which NAT implementation worked on this router.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NatMode {
+    IptMasquerade,
+    Nft,
+    IptSnat,
+    /// No NAT available: only the router's own traffic goes through the tunnel.
+    None,
+}
+
+const NFT_NAT_TABLE: &str = "lalune_nat";
+const NFT_MANGLE_TABLE: &str = "lalune_mangle";
+
+/// Installs NAT for traffic leaving through the TUN. Never fails: the router's
+/// own traffic does not need NAT, so a missing kernel module only disables
+/// forwarding of LAN clients (reported in the log with the package to install).
+fn install_nat(name: &str, iptables_nat: bool, events: &EventBus) -> NatMode {
+    // 1. classic iptables MASQUERADE (needs xt_MASQUERADE / kmod-ipt-nat)
+    if iptables_nat {
+        match iptables(&["-t", "nat", "-A", NAT_CHAIN, "-j", "MASQUERADE"]) {
+            Ok(_) => return NatMode::IptMasquerade,
+            Err(error) => events.emit(Event::log(format!(
+                "[ROUTE] iptables MASQUERADE unavailable ({}); trying nftables",
+                first_line(&error.to_string())
+            ))),
+        }
+    }
+
+    // 2. native nftables masquerade (needs nft_masq / kmod-nft-nat)
+    try_nft(&["delete", "table", "ip", NFT_NAT_TABLE]);
+    let script = nft_masquerade_script(name);
+    if run_nft_script(&script).is_ok() {
+        events.emit(Event::log("[ROUTE] NAT via nftables masquerade"));
+        return NatMode::Nft;
+    }
+    try_nft(&["delete", "table", "ip", NFT_NAT_TABLE]);
+
+    // 3. fixed-address SNAT (xt_SNAT is sometimes present without MASQUERADE)
+    if let Some(addr) = tun_ipv4(name).filter(|_| iptables_nat) {
+        if iptables(&["-t", "nat", "-A", NAT_CHAIN, "-j", "SNAT", "--to-source", &addr]).is_ok() {
+            events.emit(Event::log(format!("[ROUTE] NAT via iptables SNAT -> {addr}")));
+            return NatMode::IptSnat;
+        }
+    }
+
+    events.emit(Event::log(
+        "[ROUTE] WARNING: NAT недоступен (нет xt_MASQUERADE/nft_masq в ядре). \
+         Трафик самого роутера идёт через VPN, клиенты LAN — нет. \
+         Установите kmod-ipt-nat и kmod-nft-nat (opkg/apk install) для полной работы",
+    ));
+    NatMode::None
+}
+
+fn first_line(text: &str) -> String {
+    text.lines().next().unwrap_or("").chars().take(160).collect()
+}
+
+fn nft_masquerade_script(name: &str) -> String {
+    format!(
+        "table ip {NFT_NAT_TABLE} {{\n\
+         \tchain postrouting {{\n\
+         \t\ttype nat hook postrouting priority srcnat; policy accept;\n\
+         \t\toifname \"{name}\" masquerade\n\
+         \t}}\n\
+         }}\n"
+    )
+}
+
+fn run_nft_script(script: &str) -> Result<()> {
+    use std::io::Write;
+    let mut child = Command::new("nft")
+        .args(["-f", "-"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .context("Не удалось запустить nft")?;
+    child
+        .stdin
+        .take()
+        .context("nft stdin")?
+        .write_all(script.as_bytes())?;
+    let output = child.wait_with_output()?;
+    if !output.status.success() {
+        bail!("nft: {}", String::from_utf8_lossy(&output.stderr).trim());
+    }
+    Ok(())
+}
+
+/// First IPv4 address of the TUN device (e.g. `10.66.67.2`).
+fn tun_ipv4(name: &str) -> Option<String> {
+    let out = ip(&["-4", "-o", "addr", "show", "dev", name]).ok()?;
+    out.split_whitespace()
+        .skip_while(|t| *t != "inet")
+        .nth(1)
+        .map(|cidr| cidr.split('/').next().unwrap_or(cidr).to_string())
 }
 
 impl OpenWrtRouting {
@@ -242,7 +347,16 @@ impl OpenWrtRouting {
             bail!("OpenWRT VPN требует root/CAP_NET_ADMIN");
         }
         require_program("ip")?;
-        require_iptables()?;
+        // Малые сборки OpenWrt 25.x (Keenetic и др.) идут без iptables-nft, но с nftables:
+        // тогда разметку пакетов делаем средствами nft.
+        // nft предпочтительнее и при наличии iptables: матч `skuid` исключает пакеты ядра из
+        // разметки, а iptables `-m owner` (xt_owner) на малых прошивках часто отсутствует.
+        let nft_ok = Command::new("nft").args(["list", "tables"]).output().is_ok_and(|o| o.status.success());
+        let use_nft = nft_ok || iptables_program().is_none();
+        if use_nft && !nft_ok {
+            bail!("Не найдены ни iptables, ни работающий nft");
+        }
+        try_nft(&["delete", "table", "ip", NFT_MANGLE_TABLE]);
 
         cleanup_legacy_policy(&events);
         cleanup_stale_chains(name, &events);
@@ -255,16 +369,35 @@ impl OpenWrtRouting {
             output_jump: false, prerouting_jump: false, nat_jump: false,
             forward_out: false, forward_in: false, fw4_handles: Vec::new(),
             uid_rule: false, mark_rule: false, route: false,
+            nat: NatMode::None, nat_chain_used: false, nft_nat: false, nft_mangle: false,
             events,
         };
+        if use_nft {
+            routing.install_nft(name, &wan, uid, dns)?;
+            return Ok(routing);
+        }
 
         routing.create_chain("mangle", OUTPUT_CHAIN)?;
         routing.output_chain = true;
         routing.create_chain("mangle", PREROUTING_CHAIN)?;
         routing.prerouting_chain = true;
-        routing.create_chain("nat", NAT_CHAIN)?;
-        routing.nat_chain = true;
+        // The iptables nat table may be missing entirely on stripped kernels;
+        // that only disables LAN NAT (see install_nat), not the whole VPN.
+        routing.nat_chain = routing.create_chain("nat", NAT_CHAIN).is_ok();
 
+        // Пакеты самого ядра не помечаем вовсе. Одного правила `ip rule uidrange` мало: после
+        // смены метки в mangle/OUTPUT ядро заново ищет маршрут и (на ряде ядер) теряет UID сокета,
+        // из-за чего трафик ядра к TURN/серверу уходил обратно в TUN и зацикливался.
+        let uid_text = uid.to_string();
+        if let Err(error) = iptables(&[
+            "-t", "mangle", "-A", OUTPUT_CHAIN,
+            "-m", "owner", "--uid-owner", &uid_text, "-j", "RETURN",
+        ]) {
+            routing.events.emit(Event::log(format!(
+                "[ROUTE] WARNING: iptables owner match unavailable ({}); install iptables-mod-extra/kmod-ipt-extra",
+                first_line(&error.to_string())
+            )));
+        }
         for destination in LOCAL_DESTINATIONS {
             iptables(&["-t", "mangle", "-A", OUTPUT_CHAIN, "-d", *destination, "-j", "RETURN"])?;
         }
@@ -282,7 +415,12 @@ impl OpenWrtRouting {
             "-t", "mangle", "-A", PREROUTING_CHAIN,
             "-j", "MARK", "--set-xmark", VPN_MARK,
         ])?;
-        iptables(&["-t", "nat", "-A", NAT_CHAIN, "-j", "MASQUERADE"])?;
+        // NAT for forwarded LAN traffic. The kernel of small ramips builds often
+        // lacks xt_MASQUERADE ("Extension MASQUERADE revision 0 not supported"),
+        // so try several implementations instead of failing the whole connect.
+        routing.nat = install_nat(name, routing.nat_chain, &routing.events);
+        routing.nat_chain_used = matches!(routing.nat, NatMode::IptMasquerade | NatMode::IptSnat);
+        routing.nft_nat = matches!(routing.nat, NatMode::Nft);
 
         // Table 10620 contains only the VPN default. The core UID has a higher
         // priority rule to main, so its transport can never recurse into lalune0.
@@ -305,8 +443,10 @@ impl OpenWrtRouting {
         routing.output_jump = true;
         iptables(&["-t", "mangle", "-A", "PREROUTING", "-j", PREROUTING_CHAIN])?;
         routing.prerouting_jump = true;
-        iptables(&["-t", "nat", "-A", "POSTROUTING", "-o", name, "-j", NAT_CHAIN])?;
-        routing.nat_jump = true;
+        if routing.nat_chain_used {
+            iptables(&["-t", "nat", "-A", "POSTROUTING", "-o", name, "-j", NAT_CHAIN])?;
+            routing.nat_jump = true;
+        }
 
         // Legacy firewall3/iptables path. On firewall4 we additionally insert
         // temporary accept rules into inet/fw4 below, because a separate nft
@@ -322,6 +462,49 @@ impl OpenWrtRouting {
             "[ROUTE] wan={wan}; core_uid={uid}; OUTPUT/PREROUTING -> mark {VPN_MARK}; NAT -> {name}"
         )));
         Ok(routing)
+    }
+
+    /// Вариант без iptables: mark + policy routing + NAT целиком на nftables.
+    fn install_nft(&mut self, name: &str, wan: &str, uid: u32, dns: &str) -> Result<()> {
+        let local = LOCAL_DESTINATIONS.join(", ");
+        let set_mark = "meta mark set meta mark & 0xffff0000 | 0x1062";
+        let script = format!(
+            "table ip {NFT_MANGLE_TABLE} {{\n\
+             \tchain output {{\n\
+             \t\ttype route hook output priority mangle; policy accept;\n\
+             \t\tmeta skuid {uid} return\n\
+             \t\tip daddr {{ {local} }} return\n\
+             \t\t{set_mark}\n\
+             \t}}\n\
+             \tchain prerouting {{\n\
+             \t\ttype filter hook prerouting priority mangle; policy accept;\n\
+             \t\tiifname \"{name}\" return\n\
+             \t\tiifname \"{wan}\" return\n\
+             \t\tip daddr {{ {local} }} return\n\
+             \t\t{set_mark}\n\
+             \t}}\n\
+             }}\n"
+        );
+        // Сначала маршрутная таблица, потом правила разметки — как и в iptables-варианте.
+        ip(&["-4", "route", "add", "default", "dev", name, "table", ROUTE_TABLE])?;
+        self.route = true;
+        let uidrange = format!("{uid}-{uid}");
+        ip(&["-4", "rule", "add", "priority", UID_RULE_PRIORITY, "uidrange", &uidrange, "lookup", "main"])?;
+        self.uid_rule = true;
+        ip(&["-4", "rule", "add", "priority", MARK_RULE_PRIORITY, "fwmark", VPN_MARK, "lookup", ROUTE_TABLE])?;
+        self.mark_rule = true;
+
+        self.nat = install_nat(name, false, &self.events);
+        self.nft_nat = matches!(self.nat, NatMode::Nft);
+
+        self.nft_mangle = true; // даже при ошибке Drop удалит возможные остатки
+        run_nft_script(&script).context("Не удалось создать nft-таблицу разметки LaLune")?;
+        self.fw4_handles = install_fw4_compat(name)?;
+        self.install_dns(dns)?;
+        self.events.emit(Event::log(format!(
+            "[ROUTE] nftables-режим (iptables не найден): wan={wan}; core_uid={uid}; mark {VPN_MARK}; NAT -> {name}"
+        )));
+        Ok(())
     }
 
     fn create_chain(&self, table: &str, chain: &str) -> Result<()> {
@@ -385,6 +568,12 @@ impl Drop for OpenWrtRouting {
             try_iptables(&["-t", "nat", "-F", NAT_CHAIN]);
             try_iptables(&["-t", "nat", "-X", NAT_CHAIN]);
         }
+        if self.nft_mangle {
+            try_nft(&["delete", "table", "ip", NFT_MANGLE_TABLE]);
+        }
+        if self.nft_nat {
+            try_nft(&["delete", "table", "ip", NFT_NAT_TABLE]);
+        }
         if let Some((path, previous, installed)) = &self.dns {
             if fs::read(path).ok().as_deref() == Some(installed.as_slice()) {
                 if let Err(error) = fs::write(path, previous) {
@@ -396,6 +585,17 @@ impl Drop for OpenWrtRouting {
             "[ROUTE] iptables/policy routing removed (core_uid={})",
             self.uid
         )));
+    }
+}
+
+/// `ip -N` (numeric) есть не во всех сборках iproute2 (на ip-tiny/busybox его может не быть):
+/// пробуем с `-N`, иначе без него. Названия таблиц разбираются в вызывающем коде.
+fn ip_numeric(args: &[&str]) -> Result<String> {
+    let mut with_n = vec!["-N"];
+    with_n.extend_from_slice(args);
+    match ip(&with_n) {
+        Ok(out) => Ok(out),
+        Err(_) => ip(args),
     }
 }
 
@@ -527,9 +727,9 @@ fn cleanup_legacy_policy(events: &EventBus) {
     // Previous OpenWRT releases used linux_tun's three-rule full-tunnel setup:
     // 10620 uidrange -> main, 10621 main suppress default, 10622 -> table 10620.
     // A hard-killed backend could leave those rules behind after csqtt0 vanished.
-    let Ok(rules) = ip(&["-N", "-4", "rule", "show"]) else { return };
+    let Ok(rules) = ip_numeric(&["-4", "rule", "show"]) else { return };
     let uses_main = |line: &str| line.split_whitespace().collect::<Vec<_>>().windows(2)
-        .any(|pair| pair == ["lookup", "254"]);
+        .any(|pair| pair == ["lookup", "254"] || pair == ["lookup", "main"]);
     let legacy = rules.lines().any(|line| {
         line.trim_start().starts_with("10620:")
             && line.contains("uidrange ") && uses_main(line)
@@ -572,10 +772,11 @@ fn cleanup_stale_chains(name: &str, events: &EventBus) {
     try_ip(&["-4", "rule", "del", "priority", MARK_RULE_PRIORITY]);
     try_ip(&["-4", "rule", "del", "priority", UID_RULE_PRIORITY]);
     try_ip(&["-4", "route", "flush", "table", ROUTE_TABLE]);
+    try_nft(&["delete", "table", "ip", NFT_NAT_TABLE]);
 }
 
 fn ensure_route_slots_free() -> Result<()> {
-    let rules = ip(&["-N", "-4", "rule", "show"])?;
+    let rules = ip_numeric(&["-4", "rule", "show"])?;
     for line in rules.lines() {
         let priority = line.split(':').next().map(str::trim).unwrap_or("");
         if priority == UID_RULE_PRIORITY || priority == MARK_RULE_PRIORITY || line.contains(&format!("lookup {ROUTE_TABLE}")) {
@@ -583,7 +784,7 @@ fn ensure_route_slots_free() -> Result<()> {
         }
     }
     // Querying a single, not-yet-created FIB table exits with an error.
-    let routes = ip(&["-N", "-4", "route", "show", "table", "all"])?;
+    let routes = ip_numeric(&["-4", "route", "show", "table", "all"])?;
     if routes.lines().any(|line| line.split_whitespace().collect::<Vec<_>>()
         .windows(2).any(|pair| pair == ["table", ROUTE_TABLE])) {
         bail!("Таблица маршрутизации {ROUTE_TABLE} уже содержит маршруты");

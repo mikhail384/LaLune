@@ -23,21 +23,27 @@ class GlassCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final card = ClipRRect(
+    final decoration = BoxDecoration(
+      color: Colors.white.withOpacity(opacity),
       borderRadius: BorderRadius.circular(radius),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
-        child: Container(
-          padding: padding,
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(opacity),
-            borderRadius: BorderRadius.circular(radius),
-            border: Border.all(color: Colors.white.withOpacity(0.12), width: 1),
-          ),
-          child: child,
-        ),
-      ),
+      border: Border.all(color: Colors.white.withOpacity(0.12), width: 1),
     );
+    final surface = Container(
+      padding: padding,
+      decoration: decoration,
+      child: child,
+    );
+    // Avoid a separate GPU blur pass for every glass card on Android.
+    final isAndroid = Theme.of(context).platform == TargetPlatform.android;
+    final card = isAndroid
+        ? surface
+        : ClipRRect(
+            borderRadius: BorderRadius.circular(radius),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+              child: surface,
+            ),
+          );
 
     if (onTap == null) return card;
 

@@ -31,7 +31,7 @@
     </queries>
 
     <application
-        android:label="LaLune"
+        android:label="LaLune Test"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true"

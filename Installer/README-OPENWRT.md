@@ -1,8 +1,22 @@
 # openwrt.sh — установщик LaLune для OpenWRT
 
-Установщик поддерживает ARM64 (`armsr/armv8`) и `ramips/mt7621`
-(`mipsel_24kc`). Он скачивает один backend-бинарник для нужной архитектуры.
-Внутри обоих backend уже встроены **CSQTT**, **CSQTTR** и **CSQTT 2.1.9**.
+Установщик определяет архитектуру пакетов роутера (`DISTRIB_ARCH` из
+`/etc/openwrt_release`) и скачивает один backend-бинарник под неё:
+
+| `DISTRIB_ARCH` | Сборка | Примеры |
+|---|---|---|
+| `aarch64_*` | `lalune-openwrt-backend` | Cudy, Xiaomi AX, Raspberry Pi |
+| `x86_64` | `-x86_64` | мини-ПК, виртуальные машины |
+| `i386_pentium4` | `-i386` | x86 с SSE2 |
+| `mipsel_*` (кроме `mipsel_mips32`) | `-ramips` | mt7621, mt76x8, mt7620 |
+| `mips_*` (кроме `mips_mips32`) | `-mips` | ath79, lantiq, realtek |
+| `arm_cortex-a5/a7/a8/a9/a15/a53*` | `-armv7` | ipq40xx, mvebu, bcm27xx |
+| прочие `arm_*` | `-armv5` | arm926ej-s, xscale, arm1176 |
+
+Не поддерживаются: PowerPC, MIPS64, LoongArch, RISC-V (backend не прошёл проверку
+в эмуляторе), mips32r1 (Broadcom bmips) и
+`i386_pentium-mmx` (нет SSE2).
+Внутри всех backend уже встроены **CSQTT**, **CSQTTR** и **CSQTT 2.1.9**.
 
 ## Установка
 
@@ -27,7 +41,7 @@ sh openwrt.sh --status
 ## Что делает
 
 - создаёт `~/.la-lune/`;
-- выбирает `lalune-openwrt-backend` либо `lalune-openwrt-backend-ramips`;
+- выбирает `lalune-openwrt-backend[-<abi>]` по `DISTRIB_ARCH` (таблица выше);
 - проверяет/ставит `ip-full`, `kmod-tun`, `iptables-nft`/`iptables` и `nohup`;
 - скачивает backend и делает его executable;
 - останавливает предыдущий процесс, запускает новый через `nohup`;

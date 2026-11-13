@@ -46,7 +46,7 @@ curl -fsSL https://raw.githubusercontent.com/Endlad2/LaLune/main/Installer/insta
 Что делает: создаёт `~/.la-lune/`, качает клиент, backend, ядро,
 иконку, создаёт `.desktop`-файл и симлинк `~/.local/bin/lalune`.
 
-### OpenWRT (роутер, ARM64 или ramips/mt7621)
+### OpenWRT (роутер: aarch64, x86_64, i386, mips/mipsel, arm)
 
 ```
 wget -O - https://raw.githubusercontent.com/Endlad2/LaLune/main/Installer/openwrt.sh | sh

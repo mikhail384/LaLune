@@ -4,7 +4,6 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../api/api_client.dart';
 import '../models/vk_token_state.dart';
 import 'providers.dart';
 

@@ -92,6 +92,12 @@ pub struct VpnRuntime {
     pub handle: Mutex<Option<crate::linux_tun::Session>>,
     #[cfg(target_os = "linux")]
     pub core_uid: AtomicU32,
+
+    #[cfg(target_os = "macos")]
+    pub handle: Mutex<Option<crate::macos_tun::Session>>,
+    /// PID и адрес сервера ядра: нужны macOS, чтобы трафик самого ядра шёл мимо TUN.
+    pub core_pid: std::sync::atomic::AtomicU32,
+    pub core_peer: Mutex<String>,
     pub operation: tokio::sync::Mutex<()>,
     pub watchdog: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
@@ -119,6 +125,11 @@ impl VpnRuntime {
             handle: Mutex::new(None),
             #[cfg(target_os = "linux")]
             core_uid: AtomicU32::new(0),
+
+            #[cfg(target_os = "macos")]
+            handle: Mutex::new(None),
+            core_pid: std::sync::atomic::AtomicU32::new(0),
+            core_peer: Mutex::new(String::new()),
             operation: tokio::sync::Mutex::new(()),
             watchdog: Mutex::new(None),
         }
@@ -175,7 +186,7 @@ impl VpnRuntime {
             self.tun_generation.fetch_add(1, Ordering::AcqRel);
             *self.wintun.lock() = None;
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             let session = { self.handle.lock().take() };
             if let Some(session) = session { session.stop().await; }
@@ -708,6 +719,65 @@ fn start_tun_linux(
         "[TUN] bridge started (Linux full tunnel)"
     } else {
         "[TUN] bridge started (Linux SOCKS5 proxy mode)"
+    }));
+    Ok(())
+}
+
+// ============================================================
+//  macOS: utun через крейт tun
+// ============================================================
+
+#[cfg(target_os = "macos")]
+pub fn start_tun(
+    runtime: Arc<VpnRuntime>,
+    tun_ip: String,
+    tun_dns: String,
+    events: EventBus,
+) -> Result<()> {
+    start_tun_macos(runtime, tun_ip, tun_dns, events, true)
+}
+
+#[cfg(target_os = "macos")]
+pub fn start_proxy_tun(
+    runtime: Arc<VpnRuntime>,
+    tun_ip: String,
+    tun_dns: String,
+    events: EventBus,
+) -> Result<()> {
+    start_tun_macos(runtime, tun_ip, tun_dns, events, false)
+}
+
+#[cfg(target_os = "macos")]
+fn start_tun_macos(
+    runtime: Arc<VpnRuntime>,
+    tun_ip: String,
+    tun_dns: String,
+    events: EventBus,
+    full_tunnel: bool,
+) -> Result<()> {
+    let bypass = runtime.bypass_routes.lock().clone();
+    let peer = runtime.core_peer.lock().clone();
+    let session = crate::macos_tun::Session::start(
+        &tun_ip,
+        &tun_dns,
+        TUN_MTU,
+        CORE_LISTEN_PORT,
+        runtime.core_pid.load(Ordering::Acquire),
+        &peer,
+        runtime.running.clone(),
+        runtime.rx_bytes.clone(),
+        runtime.tx_bytes.clone(),
+        events.clone(),
+        full_tunnel,
+        bypass,
+    )?;
+    *runtime.handle.lock() = Some(session);
+    *runtime.started_at.lock() = Some(Instant::now());
+    *runtime.tun_conf.lock() = Some(TunConf { ip: tun_ip, dns: tun_dns, mtu: TUN_MTU });
+    events.emit(Event::log(if full_tunnel {
+        "[TUN] bridge started (macOS full tunnel)"
+    } else {
+        "[TUN] bridge started (macOS SOCKS5 proxy mode)"
     }));
     Ok(())
 }

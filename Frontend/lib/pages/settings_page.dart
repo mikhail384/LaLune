@@ -85,7 +85,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   bool get _isAndroid => defaultTargetPlatform == TargetPlatform.android;
   bool get _isDesktop =>
       defaultTargetPlatform == TargetPlatform.windows ||
-      defaultTargetPlatform == TargetPlatform.linux;
+      defaultTargetPlatform == TargetPlatform.linux ||
+      defaultTargetPlatform == TargetPlatform.macOS;
 
   String _pfTransport = 'yandex';
   String _pfMode = 'proxy';
@@ -129,8 +130,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   }
 
   Future<void> _load() async {
-    await ref.read(settingsProvider.notifier).reload();
-    await ref.read(configsProvider.notifier).reload();
+    await Future.wait([
+      ref.read(settingsProvider.notifier).reload(),
+      ref.read(configsProvider.notifier).reload(),
+    ]);
     if (!mounted) return;
 
     final s = ref.read(settingsProvider).data;
@@ -164,7 +167,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     _ipRoutingIpsCtl.text = s.ipRoutingIps;
     _androidAppRoutingMode = s.androidAppRoutingMode;
     _androidVpnApps = s.androidVpnApps.toSet();
-    if (_isAndroid) _loadInstalledApps();
 
     _pfTransport = s.pfTransport.isEmpty ? 'yandex' : s.pfTransport;
     _pfMode = s.pfMode.isEmpty ? 'proxy' : s.pfMode;
@@ -191,18 +193,30 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   }
 
   Future<void> _save() async {
-    setState(() => _busy = true);
+    if (_busy) return;
 
-    var w = int.tryParse(_workersCtl.text) ?? kDefaultWorkers;
+    // Commit the active IME edit before normalizing controllers or building
+    // the payload. On Android the keyboard can keep a composing value alive
+    // while the user scrolls to this button without pressing its checkmark.
+    FocusManager.instance.primaryFocus?.unfocus();
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+
+    final workersText = _workersCtl.text.trim();
+    final autoApiWorkersText = _autoApiWorkersCtl.text.trim();
+
+    var w = int.tryParse(workersText) ?? kDefaultWorkers;
     if (w < kMinWorkers) w = kMinWorkers;
     if (w > kMaxWorkers) w = kMaxWorkers;
 
-    var aw = int.tryParse(_autoApiWorkersCtl.text) ?? kDefaultAutoApiWorkers;
+    var aw = int.tryParse(autoApiWorkersText) ?? kDefaultAutoApiWorkers;
     if (aw < kMinAutoApiWorkers) aw = kMinAutoApiWorkers;
     if (aw > kMaxAutoApiWorkers) aw = kMaxAutoApiWorkers;
 
-    _workersCtl.text = w.toString();
-    _autoApiWorkersCtl.text = aw.toString();
+    if (_workersCtl.text != w.toString()) _workersCtl.text = w.toString();
+    if (_autoApiWorkersCtl.text != aw.toString()) {
+      _autoApiWorkersCtl.text = aw.toString();
+    }
 
     // ВАЖНО: vkHashes всегда из контроллера — не подменяем на конфиг.
     // Это позволяет пользователю ввести хеши вручную и сохранить их
@@ -239,7 +253,13 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       pfMaxUid: _pfMaxUidCtl.text.trim(),
     );
 
-    final ok = await ref.read(settingsProvider.notifier).save(s);
+    setState(() => _busy = true);
+    var ok = false;
+    try {
+      ok = await ref.read(settingsProvider.notifier).save(s);
+    } catch (_) {
+      // Keep the button usable even if a provider or transport throws.
+    }
     if (!mounted) return;
     setState(() {
       _busy = false;
@@ -342,47 +362,42 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     final vk = ref.watch(vkProvider);
     final routerState = ref.watch(routerProvider);
 
-    return SingleChildScrollView(
+    final items = <WidgetBuilder>[
+      (_) => _sectionTitle('Основные настройки'),
+      (_) => GlassCard(child: _buildMainBlock()),
+      (_) => const SizedBox(height: 18),
+      if (!_isPaperFlux) ...[
+        (_) => _sectionTitle('Авторизация'),
+        (_) => _buildAuthBlock(vk),
+        (_) => const SizedBox(height: 18),
+      ],
+      (_) => _sectionTitle('Маршрутизация VPN'),
+      (_) => GlassCard(child: _buildRoutingBlock()),
+      (_) => const SizedBox(height: 18),
+      (_) => _sectionTitle(
+          _isPaperFlux ? 'Настройки PaperFlux' : 'Продвинутые настройки'),
+      (_) => _isPaperFlux
+          ? GlassCard(child: _buildPaperFluxBlock())
+          : GlassCard(child: _buildCsqttAdvancedBlock()),
+      (_) => const SizedBox(height: 18),
+      (_) => _sectionTitle('Экспериментальное'),
+      (_) => GlassCard(child: _buildExperimentalBlock(routerState: routerState)),
+      (_) => const SizedBox(height: 22),
+      (_) => ElevatedButton(
+          onPressed: _busy ? null : _save,
+          child: Text(_busy ? 'Сохранение...' : 'Сохранить настройки')),
+    ];
+
+    return ListView.builder(
+      key: const PageStorageKey('settings-page'),
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
-      child: Center(
+      itemCount: items.length,
+      itemBuilder: (context, index) => Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 520),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _sectionTitle('Основные настройки'),
-              GlassCard(child: _buildMainBlock()),
-              const SizedBox(height: 18),
-
-              if (!_isPaperFlux) ...[
-                _sectionTitle('Авторизация'),
-                _buildAuthBlock(vk),
-                const SizedBox(height: 18),
-              ],
-
-              _sectionTitle('Маршрутизация VPN'),
-              GlassCard(child: _buildRoutingBlock()),
-              const SizedBox(height: 18),
-
-              _sectionTitle(_isPaperFlux ? 'Настройки PaperFlux' : 'Продвинутые настройки'),
-              if (_isPaperFlux)
-                GlassCard(child: _buildPaperFluxBlock())
-              else
-                GlassCard(child: _buildCsqttAdvancedBlock()),
-
-              const SizedBox(height: 18),
-
-              _sectionTitle('Экспериментальное'),
-              GlassCard(
-                  child: _buildExperimentalBlock(
-                      routerState: routerState)),
-
-              const SizedBox(height: 22),
-              ElevatedButton(
-                onPressed: _busy ? null : _save,
-                child: Text(_busy ? 'Сохранение...' : 'Сохранить настройки'),
-              ),
-            ],
+          child: SizedBox(
+            width: double.infinity,
+            child: items[index](context),
           ),
         ),
       ),
@@ -426,7 +441,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         if (!_isPaperFlux) ...[
           InputRow(label: 'Peer', controller: _peerCtl, readOnly: true),
           InputRow(
-              label: 'Password', controller: _passwordCtl, readOnly: true),
+            label: 'Password',
+            controller: _passwordCtl,
+            readOnly: true,
+            obscureText: true,
+          ),
         ],
 
         Padding(
@@ -440,17 +459,44 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                         TextStyle(color: Colors.white.withOpacity(0.7))),
               ),
               Expanded(
-                child: TextField(
-                  controller: _workersCtl,
-                  keyboardType: TextInputType.number,
-                  style: const TextStyle(fontSize: 13.5),
-                  decoration: const InputDecoration(
-                    hintText: '9',
-                    helperText: 'От 1 до 127',
-                    helperStyle: TextStyle(fontSize: 10.5),
-                  ),
-                  onChanged: (_) => _markDirty(),
-                ),
+                child: Builder(builder: (context) {
+                  final value = int.tryParse(_workersCtl.text.trim());
+                  final tooMany = value != null && value > 30;
+                  return TextField(
+                    controller: _workersCtl,
+                    keyboardType: TextInputType.number,
+                    style: const TextStyle(fontSize: 13.5),
+                    decoration: InputDecoration(
+                      hintText: '$kDefaultWorkers',
+                      helperText: tooMany
+                          ? 'Рекомендуется $kDefaultWorkers. Больше 30 может '
+                              'исчерпать лимит потоков сервера — подключение '
+                              'зависнет'
+                          : 'Рекомендуется $kDefaultWorkers · допустимо от '
+                              '$kMinWorkers до $kMaxWorkers',
+                      helperMaxLines: 3,
+                      helperStyle: TextStyle(
+                        fontSize: 10.5,
+                        color: tooMany ? const Color(0xFFFFB74D) : null,
+                      ),
+                      suffixIcon: value == kDefaultWorkers
+                          ? null
+                          : IconButton(
+                              tooltip: 'Сбросить на $kDefaultWorkers',
+                              icon: const Icon(Icons.restart_alt, size: 18),
+                              onPressed: () {
+                                setState(() => _workersCtl.text =
+                                    '$kDefaultWorkers');
+                                _markDirty();
+                              },
+                            ),
+                    ),
+                    onChanged: (_) {
+                      setState(() {});
+                      _markDirty();
+                    },
+                  );
+                }),
               ),
             ],
           ),

@@ -2,13 +2,16 @@
 
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/update_info.dart';
 import '../state/providers.dart';
 import '../theme/assets.dart';
 import '../widgets/glass_card.dart';
+import '../widgets/toast.dart';
 
 class InfoPage extends ConsumerStatefulWidget {
   const InfoPage({super.key});
@@ -234,6 +237,7 @@ class _InfoPageState extends ConsumerState<InfoPage> {
               _block('Авторы', [
                 _kv('CSQTT', 'amurcanov'),
                 _kv('LaLune', '@Endlad7373'),
+                _linkRow('Канал проекта', 't.me/endlad_new', _channelUrl),
               ]),
               const SizedBox(height: 18),
 
@@ -290,6 +294,48 @@ class _InfoPageState extends ConsumerState<InfoPage> {
                     color: Colors.white.withOpacity(0.4))),
             const SizedBox(height: 8),
             ...children,
+          ],
+        ),
+      ),
+    );
+  }
+
+  static const String _channelUrl = 'https://t.me/endlad_new';
+
+  Future<void> _openUrl(String url) async {
+    try {
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        await const MethodChannel('com.lalune/native')
+            .invokeMethod('openUrl', {'url': url});
+        return;
+      }
+      await ref.read(apiClientProvider).postJson('/platform/open-url', {'url': url});
+    } catch (_) {
+      // Не удалось открыть — копируем ссылку, чтобы её можно было вставить.
+      await Clipboard.setData(ClipboardData(text: url));
+      if (mounted) Toast.show(context, 'Ссылка скопирована: $url');
+    }
+  }
+
+  Widget _linkRow(String k, String label, String url) {
+    return InkWell(
+      onTap: () => _openUrl(url),
+      borderRadius: BorderRadius.circular(6),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(k,
+                  style: TextStyle(color: Colors.white.withOpacity(0.65))),
+            ),
+            Text(label,
+                style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF6C8CFF),
+                    decoration: TextDecoration.underline)),
+            const SizedBox(width: 4),
+            const Icon(Icons.open_in_new, size: 14, color: Color(0xFF6C8CFF)),
           ],
         ),
       ),

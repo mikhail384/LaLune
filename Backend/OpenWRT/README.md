@@ -1,7 +1,9 @@
 # LaLune Backend — OpenWRT
 
-Backend для OpenWrt ARM64 (`armsr/armv8`) и `ramips/mt7621` (`mipsel_24kc`).
-Обе release-сборки содержат внутри backend одинаковый набор из трёх ядер:
+Backend для OpenWrt: aarch64, `ramips` (`mipsel_24kc`), а также x86_64, i386,
+armv7, armv5 и mips (big-endian) (см. `build-multiarch.sh` ниже; riscv64 в
+скрипте есть, но в релиз не входит: backend не прошёл проверку в qemu).
+Все release-сборки содержат внутри backend одинаковый набор из трёх ядер:
 **CSQTT**, **CSQTTR** и **CSQTT 2.1.9**. Отдельно скачивать core на роутер не нужно.
 
 ## Сборка
@@ -35,6 +37,21 @@ cd Backend/OpenWRT
 
 - `output/lalune-openwrt-backend-ramips`;
 - `output/lalune-openwrt-cores-ramips.zip`.
+
+x86_64, i386, armv7, armv5, mips (и экспериментально riscv64):
+
+```sh
+cd Backend/OpenWRT
+./build-multiarch.sh <abi>      # нужны curl, xz, zip, unzip, python3, rustup, qemu-user
+```
+
+Статический musl-бинарник собирается Rust + `zig cc` (закреплённая версия zig,
+SHA256 проверяется), три ядра берутся из тех же закреплённых ревизий. Скрипт
+проверяет ELF (класс, порядок байт, машина, без INTERP/NEEDED), запускает ядра и
+backend (нативно или в `qemu-user`) и проверяет `/ping` и `/core/protocols`.
+Результат: `output/lalune-openwrt-backend-<abi>` и
+`output/lalune-openwrt-cores-<abi>.zip`. В CI это матрица
+`build-openwrt-multiarch`.
 
 При подключении backend извлекает во временный файл только выбранное ядро.
 `GET /core/protocols` сообщает все три протокола как доступные в обеих

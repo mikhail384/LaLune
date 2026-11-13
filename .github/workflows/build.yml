@@ -18,7 +18,7 @@ permissions:
 env:
   PYTHONIOENCODING: utf-8
   PYTHONUTF8: "1"
-  FLUTTER_VERSION: "3.29.0"
+  FLUTTER_VERSION: "3.47.5"
   RUST_VERSION: "stable"
   LALUNE_VERSION: ${{ inputs.stable_version }}
 
@@ -138,6 +138,66 @@ jobs:
           path: Output/*.zip
           if-no-files-found: error
 
+  # ============================================================
+  #  Desktop macOS (универсальный бэкенд + Flutter .app)
+  #  Не блокирует релиз: собирается с continue-on-error.
+  # ============================================================
+  build-desktop-macos:
+    name: Desktop macOS
+    needs: prepare-version
+    runs-on: macos-14
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare-version.outputs.build_ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Build universal backend
+        working-directory: Backend/Desktop
+        run: |
+          set -euo pipefail
+          cargo build --release --target x86_64-apple-darwin
+          cargo build --release --target aarch64-apple-darwin
+          mkdir -p ../../dist-macos
+          lipo -create -output ../../dist-macos/lalune-backend \
+            target/x86_64-apple-darwin/release/lalune-backend \
+            target/aarch64-apple-darwin/release/lalune-backend
+
+      - name: Build Flutter app
+        working-directory: Frontend
+        run: |
+          set -euo pipefail
+          flutter config --enable-macos-desktop
+          flutter pub get
+          flutter build macos --release
+
+      - name: Bundle backend into the app and zip
+        run: |
+          set -euo pipefail
+          APP="Frontend/build/macos/Build/Products/Release/lalune.app"
+          cp dist-macos/lalune-backend "$APP/Contents/Resources/lalune-backend"
+          chmod +x "$APP/Contents/Resources/lalune-backend"
+          codesign --force --deep --sign - "$APP"
+          mkdir -p Output
+          ditto -c -k --keepParent "$APP" Output/LaLune-macOS.zip
+          cp dist-macos/lalune-backend Output/lalune-backend-macos
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Output-macOS
+          path: Output/*
+          if-no-files-found: error
   # ============================================================
   #  Desktop Windows
   # ============================================================
@@ -294,7 +354,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends curl zstd zip unzip cmake jq qemu-user
 
-      - name: Build ramips/mt7621 backend and bundled cores
+      - name: Build ramips (mipsel_24kc) backend and bundled cores
         working-directory: Backend/OpenWRT
         run: bash build-ramips.sh
 
@@ -328,6 +388,66 @@ jobs:
           path: |
             Backend/OpenWRT/output/lalune-openwrt-backend-ramips
             Backend/OpenWRT/output/lalune-openwrt-cores-ramips.zip
+          if-no-files-found: error
+          compression-level: 0
+
+  # ============================================================
+  #  OpenWRT installer: architecture detection
+  # ============================================================
+  check-openwrt-installer:
+    name: OpenWRT installer checks
+    needs: prepare-version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare-version.outputs.build_ref }}
+      - name: Syntax (POSIX sh) and architecture mapping
+        run: |
+          set -euo pipefail
+          sh -n Installer/openwrt.sh
+          sh Installer/test-abi.sh Installer/openwrt.sh
+      - name: Syntax under BusyBox ash (what routers run)
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends busybox-static
+          busybox ash -n Installer/openwrt.sh
+          busybox ash Installer/test-abi.sh Installer/openwrt.sh
+
+  # ============================================================
+  #  OpenWRT backend: x86_64, i386, armv7, armv5, mips
+  #  (zig cc + Rust static musl; aarch64/mipsel use the SDK jobs above)
+  # ============================================================
+  build-openwrt-multiarch:
+    name: OpenWRT Backend (${{ matrix.abi }})
+    needs: prepare-version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [x86_64, i386, armv7, armv5, mips]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare-version.outputs.build_ref }}
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends curl xz-utils zip unzip python3 qemu-user binutils
+
+      - name: Build ${{ matrix.abi }} backend and bundled cores (+ smoke test)
+        working-directory: Backend/OpenWRT
+        run: bash build-multiarch.sh ${{ matrix.abi }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Output-OpenWRT-Multi-${{ matrix.abi }}
+          path: |
+            Backend/OpenWRT/output/lalune-openwrt-backend-${{ matrix.abi }}
+            Backend/OpenWRT/output/lalune-openwrt-cores-${{ matrix.abi }}.zip
           if-no-files-found: error
           compression-level: 0
 
@@ -662,8 +782,11 @@ jobs:
       - prepare-version
       - build-desktop-linux
       - build-desktop-windows
+      - build-desktop-macos
       - build-desktop-openwrt
       - build-openwrt-ramips
+      - build-openwrt-multiarch
+      - check-openwrt-installer
       - build-android
       - build-token-fetcher
     runs-on: ubuntu-latest
@@ -686,6 +809,12 @@ jobs:
           path: release/linux
 
       - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: Output-macOS
+          path: release/macos
+
+      - uses: actions/download-artifact@v4
         with:
           name: Output-Android
           path: release/android
@@ -699,6 +828,12 @@ jobs:
         with:
           name: Output-OpenWRT-Ramips
           path: release/openwrt-ramips
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Output-OpenWRT-Multi-*
+          merge-multiple: true
+          path: release/openwrt-multi
 
       - uses: actions/download-artifact@v4
         with:
@@ -724,7 +859,12 @@ jobs:
           cp release/openwrt/lalune-openwrt-cores-aarch64.zip release/assets/
           cp release/openwrt-ramips/lalune-openwrt-backend-ramips release/assets/
           cp release/openwrt-ramips/lalune-openwrt-cores-ramips.zip release/assets/
+          for abi in x86_64 i386 armv7 armv5 mips; do
+            cp "release/openwrt-multi/lalune-openwrt-backend-$abi" release/assets/
+            cp "release/openwrt-multi/lalune-openwrt-cores-$abi.zip" release/assets/
+          done
           cp release/android/LaLune-Android.apk release/assets/
+          if [ -f release/macos/LaLune-macOS.zip ]; then cp release/macos/LaLune-macOS.zip release/assets/; fi
           cp release/token-fetcher-windows/LaLuneTokenFetcher_Windows.zip release/assets/
           cp release/token-fetcher-linux/LaLuneTokenFetcher_Linux.zip release/assets/
 
@@ -767,7 +907,9 @@ jobs:
             fi
             SHORT_SHA="$(git rev-parse --short=7 HEAD)"
             VERSION="${STABLE}-${SHORT_SHA}"
-            PRERELEASE=true
+            # Не prerelease: установщики берут файлы по /releases/latest/download/,
+            # а GitHub не считает prerelease "latest" — автоустановка тогда получала бы 404.
+            PRERELEASE=false
           fi
           echo "tag=$VERSION" >> "$GITHUB_OUTPUT"
           echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
@@ -777,7 +919,9 @@ jobs:
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: LaLune ${{ steps.version.outputs.tag }}
+          make_latest: true
           files: |
+            release/assets/LaLune-macOS.zip
             release/assets/LaLune-Windows.zip
             release/assets/Backend-Windows.zip
             release/assets/Installer-Windows.zip
@@ -787,6 +931,16 @@ jobs:
             release/assets/lalune-openwrt-cores-aarch64.zip
             release/assets/lalune-openwrt-backend-ramips
             release/assets/lalune-openwrt-cores-ramips.zip
+            release/assets/lalune-openwrt-backend-x86_64
+            release/assets/lalune-openwrt-cores-x86_64.zip
+            release/assets/lalune-openwrt-backend-i386
+            release/assets/lalune-openwrt-cores-i386.zip
+            release/assets/lalune-openwrt-backend-armv7
+            release/assets/lalune-openwrt-cores-armv7.zip
+            release/assets/lalune-openwrt-backend-armv5
+            release/assets/lalune-openwrt-cores-armv5.zip
+            release/assets/lalune-openwrt-backend-mips
+            release/assets/lalune-openwrt-cores-mips.zip
             release/assets/LaLune-Android.apk
             release/assets/LaLuneTokenFetcher_Windows.zip
             release/assets/LaLuneTokenFetcher_Linux.zip

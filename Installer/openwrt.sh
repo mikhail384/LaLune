@@ -1,13 +1,13 @@
 #!/bin/sh
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #
-# openwrt.sh — установщик LaLune для OpenWRT (ARM64 и ramips/mt7621).
+# openwrt.sh — установщик LaLune для OpenWRT (aarch64, x86_64, i386, mips/mipsel, arm).
 # Оба backend-бинарника уже содержат CSQTT, CSQTTR и CSQTT 2.1.9.
 
 set -e
 
-BACKEND_URL="https://github.com/Endlad2/LaLune/releases/latest/download/lalune-openwrt-backend"
-RAMIPS_BACKEND_URL="https://github.com/Endlad2/LaLune/releases/latest/download/lalune-openwrt-backend-ramips"
+BACKEND_BASE="https://github.com/mikhail384/LaLune/releases/latest/download"
+BACKEND_URL=""
 BACKEND_NAME="lalune-openwrt-backend"
 
 APP_DIR="${HOME}/.la-lune"
@@ -96,18 +96,47 @@ case "$MODE" in
         exit 0 ;;
 esac
 
-arch="$(uname -m)"
-case "$arch" in
-    aarch64|arm64) ;;
-    mips|mipsel)
-        unset DISTRIB_TARGET DISTRIB_ARCH
-        [ -r /etc/openwrt_release ] && . /etc/openwrt_release
-        [ "${DISTRIB_TARGET:-}" = ramips/mt7621 ] && [ "${DISTRIB_ARCH:-}" = mipsel_24kc ] \
-            || fail "Нужен OpenWrt ramips/mt7621 (mipsel_24kc), обнаружено: ${DISTRIB_TARGET:-?} (${DISTRIB_ARCH:-?})"
-        BACKEND_URL="$RAMIPS_BACKEND_URL"
-        ;;
-    *) fail "Неподдерживаемая архитектура: $arch (ARM64 или ramips/mt7621)" ;;
+# Выбор сборки backend по архитектуре пакетов OpenWrt (DISTRIB_ARCH).
+# Статический musl-бинарник один на архитектуру (не на SoC): mt7621, mt76x8,
+# ath79 и т.д. используют одну и ту же сборку. Функция проверяется в CI.
+lalune_abi() {
+    case "${1:-}" in
+        aarch64_*) echo aarch64 ;;
+        x86_64) echo x86_64 ;;
+        # i386 build needs SSE2 (pentium4 class); pentium-mmx is not supported.
+        i386_pentium-mmx) return 1 ;;
+        i386_*) echo i386 ;;
+        # mips32r1 (Broadcom bmips) не поддерживается: сборки под mips32r2.
+        mipsel_mips32|mips_mips32) return 1 ;;
+        mipsel_*) echo ramips ;;
+        mips_*) echo mips ;;
+        arm_cortex-a5*|arm_cortex-a7*|arm_cortex-a8*|arm_cortex-a9*|arm_cortex-a15*|arm_cortex-a17*|arm_cortex-a53*|arm_cortex-a72*|arm_neoverse*) echo armv7 ;;
+        arm_*) echo armv5 ;;
+        *) return 1 ;;
+    esac
+}
+
+unset DISTRIB_TARGET DISTRIB_ARCH
+[ -r /etc/openwrt_release ] && . /etc/openwrt_release
+arch="$(uname -m 2>/dev/null || true)"
+abi=""
+[ -n "${DISTRIB_ARCH:-}" ] && abi="$(lalune_abi "$DISTRIB_ARCH" || true)"
+if [ -z "$abi" ]; then
+    # Нет /etc/openwrt_release: определяем по uname (mips по uname не различить).
+    case "$arch" in
+        aarch64|arm64) abi=aarch64 ;;
+        x86_64) abi=x86_64 ;;
+        i386|i486|i586|i686) abi=i386 ;;
+        armv7*|armv8l) abi=armv7 ;;
+        armv5*|armv6*) abi=armv5 ;;
+    esac
+fi
+[ -n "$abi" ] || fail "Неподдерживаемая архитектура: uname=$arch, OpenWrt=${DISTRIB_TARGET:-?} (${DISTRIB_ARCH:-?}). Поддерживаются: aarch64, x86_64, i386 (SSE2), mips/mipsel, arm."
+case "$abi" in
+    aarch64) BACKEND_URL="$BACKEND_BASE/lalune-openwrt-backend" ;;
+    *) BACKEND_URL="$BACKEND_BASE/lalune-openwrt-backend-$abi" ;;
 esac
+log "router: ${DISTRIB_TARGET:-?} (${DISTRIB_ARCH:-$arch}) -> build $abi"
 
 log "app dir: $APP_DIR"
 mkdir -p "$APP_DIR"
@@ -129,6 +158,13 @@ if ! have iptables && ! have iptables-nft; then
     install_package iptables-nft || install_package iptables || true
 fi
 (have iptables || have iptables-nft) || fail "установите iptables-nft (нужны mangle/MARK и nat/MASQUERADE)"
+
+# NAT для клиентов LAN: на сборках без xt_MASQUERADE iptables пишет
+# "Extension MASQUERADE revision 0 not supported". Модули ядра ставим
+# по возможности (версия kmod должна совпадать с ядром), ошибки не фатальны.
+for pkg in kmod-ipt-nat kmod-nft-nat kmod-nft-compat iptables-mod-nat-extra iptables-mod-extra kmod-ipt-extra; do
+    install_package "$pkg" >/dev/null 2>&1 || true
+done
 
 if ! have nohup; then
     install_package coreutils-nohup || true

@@ -19,10 +19,13 @@ const _protocols = <String>[
   'CSQTT 2.5.1',
   'CSQTTR',
   'PaperFlux',
+  'LaLuneSUB',
 ];
 
 String _placeholderFor(String protocol) {
   switch (protocol) {
+    case 'LaLuneSUB':
+      return 'https://… или data:application/json;base64,…';
     case 'PaperFlux':
       return 'paperflux://config?v=1&id=...&name=...&server=...&ip=...'
           '&transport=...&doc=...&token=...&volga=...';
@@ -153,6 +156,10 @@ class _AddConfigDialogState extends State<_AddConfigDialog> {
                 controller: _linkController,
                 autofocus: true,
                 keyboardType: TextInputType.url,
+                autocorrect: false,
+                enableSuggestions: false,
+                smartDashesType: SmartDashesType.disabled,
+                smartQuotesType: SmartQuotesType.disabled,
                 textInputAction: TextInputAction.done,
                 onSubmitted: (_) => _save(),
                 maxLines: 4,

@@ -4,7 +4,6 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../api/api_client.dart';
 import '../api/api_exception.dart';
 import '../api/sse_client.dart';
 import '../models/vpn_status.dart';

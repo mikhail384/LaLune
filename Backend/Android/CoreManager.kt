@@ -20,6 +20,35 @@ class CoreManager(private val context: Context) {
     companion object {
         private const val TAG = "LaLune-Core"
 
+        @Volatile private var activeCore: Process? = null
+
+        /**
+         * Kills core processes of THIS app that nobody manages any more (left by a
+         * previous Backend instance). Matches by the native library directory, so
+         * it never touches other apps; same UID, so killProcess is allowed.
+         */
+        fun killStaleCores(context: Context) {
+            val libDir = context.applicationInfo.nativeLibraryDir
+            val me = android.os.Process.myPid()
+            val killed = ArrayList<Int>()
+            try {
+                File("/proc").listFiles()?.forEach { dir ->
+                    val pid = dir.name.toIntOrNull() ?: return@forEach
+                    if (pid == me) return@forEach
+                    val cmd = try {
+                        File(dir, "cmdline").readBytes().toString(Charsets.ISO_8859_1)
+                    } catch (_: Exception) { return@forEach }
+                    if (cmd.startsWith(libDir)) {
+                        android.os.Process.killProcess(pid)
+                        killed.add(pid)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "[CORE] killStaleCores: ${e.message}")
+            }
+            if (killed.isNotEmpty()) Log.w(TAG, "[CORE] killed stale core process(es): $killed")
+        }
+
         const val PROTO_CSQTT = "CSQTT"
         const val PROTO_CSQTT_219 = "CSQTT 2.1.9"
         const val PROTO_CSQTT_251 = "CSQTT 2.5.1"
@@ -30,7 +59,7 @@ class CoreManager(private val context: Context) {
         const val LATEST_CSQTT_URL =
             "https://raw.githubusercontent.com/Endlad2/csqtt-core/refs/heads/main/LATEST"
         const val LATEST_CSQTTR_URL =
-            "https://raw.githubusercontent.com/Endlad2/csqttr-core/refs/heads/release-2.5.2/LATEST"
+            "https://raw.githubusercontent.com/Endlad2/csqttr-core/refs/heads/main/LATEST"
         const val CSQTTR_URL_TEMPLATE =
             "https://github.com/Endlad2/csqttr-core/releases/download/%s/%s"
         const val LATEST_PAPERFLUX_URL =
@@ -63,7 +92,13 @@ class CoreManager(private val context: Context) {
     private val latestPaper = File(appDir, "LATEST.PaperFlux")
     private val latestCsqttr = File(appDir, "LATEST.CSQTTR")
 
-    private var coreProcess: Process? = null
+    // The core process is process-wide: a restarted Backend creates a new
+    // CoreManager, and it must still be able to stop the core started by the
+    // previous instance (otherwise it is orphaned, keeps port 52230 and its
+    // VK/TURN streams, and the next connect fails with "port busy").
+    private var coreProcess: Process?
+        get() = activeCore
+        set(value) { activeCore = value }
 
     @Volatile
     var isRunning: Boolean = false
@@ -333,11 +368,19 @@ class CoreManager(private val context: Context) {
             buildCsqttArgs(corePath, protocol, peer, password, hashes)
         }
 
+        // Never start a second core next to a running/orphaned one (port 52230).
+        stopCore()
+        killStaleCores(context)
+        try { Thread.sleep(300) } catch (_: InterruptedException) {}
+
         return try {
             logsFile.writeText("")
-            onLog("[CORE] starting: ${finalArgs.joinToString(" ")}")
+            onLog("[CORE] starting: ${redactCoreArgs(finalArgs).joinToString(" ")}")
 
             val pb = ProcessBuilder(finalArgs)
+            if (protocol.equals(PROTO_CSQTTR, ignoreCase = true)) {
+                pb.environment()["CSQTT_PASSWORD"] = password
+            }
             pb.redirectErrorStream(true)
             pb.directory(coreDir)
 
@@ -351,8 +394,9 @@ class CoreManager(private val context: Context) {
                     var line: String?
                     while (reader.readLine().also { line = it } != null) {
                         val l = line ?: continue
-                        try { logsFile.appendText(l + "\n") } catch (_: Exception) {}
-                        onLog(l)
+                        val safe = LogRedactor.redact(l)
+                        try { logsFile.appendText(safe + "\n") } catch (_: Exception) {}
+                        onLog(safe)
                     }
                 } catch (_: Exception) {}
                 isRunning = false
@@ -399,6 +443,52 @@ class CoreManager(private val context: Context) {
             .filter { it.isNotEmpty() }
             .take(6)
 
+        if (protocol.equals(PROTO_CSQTTR, ignoreCase = true)) {
+            val authMode = settings.optString("authMode", "manual")
+            val autoVk = authMode.equals("autoVk", ignoreCase = true)
+            val hashMode = if (autoVk) "auto_js" else "manual"
+            val vkAuthMode = if (autoVk) "auto_js"
+                else settings.optString("vkAuthMode", "vkcalls").ifBlank { "vkcalls" }
+            val args = mutableListOf(
+                corePath,
+                "--peer", peer,
+                "--vk-hash-mode", hashMode,
+                "--vk-auth-mode", vkAuthMode,
+                "--listen", "127.0.0.1:52230",
+                "-n", workers.toString(),
+                "--obfs", obfs,
+                "--fingerprint", fingerprint,
+                "--client-ids", clientIds,
+                "--captcha-mode", captchaMode,
+                "--turn-transport", turnTransport,
+            )
+            if (!autoVk && clean.isNotEmpty()) {
+                args.add("--vk")
+                args.add(clean.joinToString(","))
+            }
+            if (autoVk) {
+                val token = try {
+                    val tokenJson = org.json.JSONObject(File(appDir, "token.json").readText())
+                    tokenJson.optString("Token", tokenJson.optString("token", "")).trim()
+                } catch (_: Exception) { "" }
+                if (token.isNotEmpty()) {
+                    args.add("--token")
+                    args.add(token)
+                }
+            }
+            val turnHost = settings.optString("turnHost", "")
+            if (turnHost.isNotEmpty()) { args.add("--turn"); args.add(turnHost) }
+            val turnPort = settings.optString("turnPort", "")
+            if (turnPort.isNotEmpty()) { args.add("--port"); args.add(turnPort) }
+            if (settings.optBoolean("allowHashRedistribution", false)) {
+                args.add("--allow-hash-redistribution")
+            }
+            if (settings.optBoolean("validateVkHashes", false)) {
+                args.add("--validate-vk-hashes")
+            }
+            return args
+        }
+
         val args = mutableListOf(
             corePath,
             "-peer", peer,
@@ -422,6 +512,34 @@ class CoreManager(private val context: Context) {
             args.add(deviceId)
         }
         return args
+    }
+
+    private fun redactCoreArgs(args: List<String>): List<String> {
+        // Allow-list: only values of known non-secret flags are printed, every
+        // other flag value (tokens, ids, urls, device id, ...) is redacted.
+        val safeFlags = setOf(
+            "-n", "-listen", "--listen", "-obfs", "-fingerprint", "-client-ids",
+            "-vk-auth-mode", "--vk-auth-mode", "-vk-hash-mode", "--vk-hash-mode",
+            "-captcha-mode", "-turn-transport", "--transport", "--client-ip",
+            "--tcp-recovery", "--mode", "--socks5", "-peer", "--peer", "--turn", "--port"
+        )
+        var redactNext = false
+        return args.mapIndexed { i, arg ->
+            when {
+                redactNext -> { redactNext = false; "[redacted]" }
+                arg.startsWith("-") && arg.contains("=") -> {
+                    val name = arg.substringBefore("=")
+                    if (name in safeFlags) arg else "$name=[redacted]"
+                }
+                arg.startsWith("-") -> {
+                    val next = args.getOrNull(i + 1)
+                    redactNext = arg !in safeFlags && next != null && !next.startsWith("-")
+                    arg
+                }
+                i == 0 -> arg.substringAfterLast('/')
+                else -> arg
+            }
+        }
     }
 
     fun stopCore() {

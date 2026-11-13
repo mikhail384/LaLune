@@ -194,12 +194,12 @@ class VkWebViewFetcher(
             override fun onReceivedError(
                 view: WebView?, request: WebResourceRequest?, error: WebResourceError?
             ) {
-                Log.e(TAG, "onReceivedError: ${request?.url} -> ${error?.description}")
+                Log.e(TAG, "onReceivedError: ${LogRedactor.safeUrl(request?.url?.toString())} -> ${error?.description}")
             }
             override fun onReceivedHttpError(
                 view: WebView?, request: WebResourceRequest?, errorResponse: WebResourceResponse?
             ) {
-                Log.w(TAG, "onReceivedHttpError: ${request?.url} -> ${errorResponse?.statusCode}")
+                Log.w(TAG, "onReceivedHttpError: ${LogRedactor.safeUrl(request?.url?.toString())} -> ${errorResponse?.statusCode}")
             }
         }
         return wv
@@ -344,7 +344,8 @@ class VkWebViewFetcher(
     private fun logUrl(url: String) {
         if (url == lastLoggedUrl) return
         lastLoggedUrl = url
-        Log.i(TAG, "[VK] URL: $url")
+        // Never log query/fragment: the OAuth access_token lives in the fragment.
+        Log.i(TAG, "[VK] URL: ${LogRedactor.safeUrl(url)}")
     }
 
     private fun finishWithToken(token: String) {

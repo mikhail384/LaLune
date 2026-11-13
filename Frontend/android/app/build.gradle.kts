@@ -30,7 +30,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.lalune.lalune"
+        applicationId = "com.lalune.lalune.test"
         minSdk = 24
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
@@ -40,6 +40,10 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("debug")
+            // LuaJ is used through reflective library registration; R8 removed
+            // an inner LuaJ class in the release APK on Android 7.
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 

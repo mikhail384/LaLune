@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -11,6 +12,13 @@ import 'package:lalune/state/providers.dart';
 import 'package:lalune/state/settings_notifier.dart';
 
 void main() {
+  setUp(() {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+  });
+  tearDown(() {
+    debugDefaultTargetPlatformOverride = null;
+  });
+
   final desired = Settings(
     desktopSocks5Mode: true,
     ipRoutingMode: 'blacklist',

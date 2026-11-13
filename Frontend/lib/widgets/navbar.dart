@@ -24,34 +24,41 @@ class NavBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final borderRadius = BorderRadius.circular(18);
+    final bar = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.06),
+        borderRadius: borderRadius,
+        border: Border.all(color: Colors.white.withOpacity(0.12), width: 1),
+      ),
+      child: Row(
+        children: List.generate(_items.length, (i) {
+          return Expanded(
+            child: _NavButton(
+              item: _items[i],
+              selected: i == currentIndex,
+              onTap: () => onSelect(i),
+            ),
+          );
+        }),
+      ),
+    );
+    // Keep the translucent surface but skip its costly blur pass on Android.
+    final content = Theme.of(context).platform == TargetPlatform.android
+        ? bar
+        : ClipRRect(
+            borderRadius: borderRadius,
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+              child: bar,
+            ),
+          );
+
     return RepaintBoundary(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
-        child: ClipRRect(
-        borderRadius: BorderRadius.circular(18),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.06),
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: Colors.white.withOpacity(0.12), width: 1),
-            ),
-            child: Row(
-              children: List.generate(_items.length, (i) {
-                return Expanded(
-                  child: _NavButton(
-                    item: _items[i],
-                    selected: i == currentIndex,
-                    onTap: () => onSelect(i),
-                  ),
-                );
-              }),
-            ),
-          ),
-        ),
-      ),
+        child: content,
       ),
     );
   }
@@ -85,17 +92,18 @@ class _NavButtonState extends State<_NavButton> {
   Widget build(BuildContext context) {
     final active = widget.selected;
     final scale = _hover ? 0.92 : 1.0;
+    const activeColor = Color(0xFF8FA9FF);
 
     final chipColor = active
-        ? const Color(0xFFF7E84E).withOpacity(0.18)
+        ? activeColor.withOpacity(0.12)
         : (_hover ? Colors.white.withOpacity(0.10) : Colors.transparent);
 
     final chipBorder = active
-        ? const Color(0xFFF7E84E).withOpacity(0.75)
+        ? Colors.transparent
         : (_hover ? Colors.white.withOpacity(0.22) : Colors.transparent);
 
     final labelColor = active
-        ? const Color(0xFFF7E84E)
+        ? activeColor
         : Colors.white.withOpacity(_hover ? 0.95 : 0.55);
 
     final iconOpacity = active ? 1.0 : (_hover ? 1.0 : 0.85);
@@ -127,15 +135,6 @@ class _NavButtonState extends State<_NavButton> {
                     color: chipColor,
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(color: chipBorder, width: 1),
-                    boxShadow: active
-                        ? [
-                            BoxShadow(
-                              color: const Color(0xFFF7E84E).withOpacity(0.35),
-                              blurRadius: 16,
-                              spreadRadius: 1,
-                            ),
-                          ]
-                        : null,
                   ),
                   child: AnimatedOpacity(
                     opacity: iconOpacity,
@@ -150,7 +149,7 @@ class _NavButtonState extends State<_NavButton> {
                         Icons.circle_outlined,
                         size: 26,
                         color: active
-                            ? const Color(0xFFF7E84E)
+                            ? activeColor
                             : Colors.white.withOpacity(0.7),
                       ),
                     ),

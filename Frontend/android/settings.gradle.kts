@@ -41,13 +41,11 @@ pluginManagement {
 
 plugins {
     id("dev.flutter.flutter-plugin-loader") version "1.0.0"
-    // AGP 8.7.3 — стабильный, есть на google() без redirects.
-    id("com.android.application") version "8.7.3" apply false
-    id("com.android.library") version "8.7.3" apply false
-    // Kotlin 2.0.21 — есть на Maven Central, но plugin portal redirect'ит на GitHub.
-    // Оставляем 2.0.21, но репозитории выше гарантируют, что Gradle пойдёт
-    // в mavenCentral первым.
-    id("org.jetbrains.kotlin.android") version "2.0.21" apply false
+    // Flutter 3.47 requires Android Gradle Plugin 8.11.1 or newer.
+    id("com.android.application") version "8.11.1" apply false
+    id("com.android.library") version "8.11.1" apply false
+    // Kotlin version required by the current Flutter Gradle plugin.
+    id("org.jetbrains.kotlin.android") version "2.2.20" apply false
 }
 
 include(":app")

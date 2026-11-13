@@ -75,6 +75,23 @@ class LaLuneVpnService : VpnService() {
         const val EXTRA_STATE = "state"
         const val EXTRA_MESSAGE = "message"
 
+        /**
+         * Process-wide snapshot of the last published VPN state. A freshly
+         * created Backend (after a restart) reads it so it does not report
+         * "disconnected" while the tunnel is actually up.
+         */
+        /**
+         * Real tunnel traffic for the current connection (bytes that passed the TUN
+         * device in each direction). Reset by every new connection; read by
+         * `/vpn/stats` so the UI can account traffic per subscription.
+         */
+        val tunTxBytes = java.util.concurrent.atomic.AtomicLong(0)
+        val tunRxBytes = java.util.concurrent.atomic.AtomicLong(0)
+
+        @Volatile var snapshotConnected: Boolean = false
+        @Volatile var snapshotState: String = "disconnected"
+        @Volatile var snapshotMessage: String = ""
+
         fun notifyStatus(
             ctx: Context,
             connected: Boolean,
@@ -178,6 +195,8 @@ class LaLuneVpnService : VpnService() {
 
     private fun startFlow() {
         Log.d(TAG, "startFlow")
+        tunTxBytes.set(0)
+        tunRxBytes.set(0)
         flowJob?.cancel()
         flowJob = scope.launch {
             val logsFile = File(filesDir, "la-lune/logs.log")
@@ -284,6 +303,9 @@ class LaLuneVpnService : VpnService() {
         val changed = state != connectionState || message != connectionMessage
         connectionState = state
         connectionMessage = message
+        snapshotConnected = connected
+        snapshotState = state
+        snapshotMessage = message
         if (changed || connected) {
             notifyStatus(this, connected, state, message)
             updateNotification()
@@ -455,7 +477,10 @@ class LaLuneVpnService : VpnService() {
         while (isRunning && tunEstablished && generation == tunnelGeneration) {
             try {
                 val n = input.read(buf)
-                if (n > 0) socket.send(DatagramPacket(buf.copyOf(n), n))
+                if (n > 0) {
+                    socket.send(DatagramPacket(buf.copyOf(n), n))
+                    tunTxBytes.addAndGet(n.toLong())
+                }
             } catch (e: Exception) {
                 if (isRunning && generation == tunnelGeneration) Log.w(TAG, "tunToUdp: ${e.message}")
                 break
@@ -475,6 +500,7 @@ class LaLuneVpnService : VpnService() {
                 val packet = DatagramPacket(buf, buf.size)
                 socket.receive(packet)
                 output.write(packet.data, 0, packet.length)
+                tunRxBytes.addAndGet(packet.length.toLong())
             } catch (e: Exception) {
                 if (isRunning && generation == tunnelGeneration) Log.w(TAG, "udpToTun: ${e.message}")
                 break
@@ -534,6 +560,9 @@ class LaLuneVpnService : VpnService() {
         try { unregisterReceiver(screenReceiver) } catch (_: Exception) {}
         stopFlow()
         scope.cancel()
+        snapshotConnected = false
+        snapshotState = "disconnected"
+        snapshotMessage = ""
         super.onDestroy()
     }
 

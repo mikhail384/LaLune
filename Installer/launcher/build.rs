@@ -10,9 +10,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 const URL_LALUNE_ZIP: &str =
-    "https://github.com/Endlad2/LaLune/releases/latest/download/LaLune-Windows.zip";
+    "https://github.com/mikhail384/LaLune/releases/latest/download/LaLune-Windows.zip";
 const URL_BACKEND_ZIP: &str =
-    "https://github.com/Endlad2/LaLune/releases/latest/download/Backend-Windows.zip";
+    "https://github.com/mikhail384/LaLune/releases/latest/download/Backend-Windows.zip";
 const URL_CSQTT_EXE: &str =
     "https://github.com/Endlad2/csqtt-core/releases/latest/download/client-windows-x86_64.exe";
 const URL_CSQTT_219_EXE: &str =
@@ -29,7 +29,7 @@ const URL_LATEST_CSQTT: &str =
 const URL_LATEST_PF: &str =
     "https://raw.githubusercontent.com/Endlad2/PaperFlux-core/refs/heads/main/LATEST";
 const URL_ICON: &str =
-    "https://raw.githubusercontent.com/Endlad2/LaLune/refs/heads/main/icon.ico";
+    "https://raw.githubusercontent.com/mikhail384/LaLune/refs/heads/main/icon.ico";
 
 const WINTUN_SOURCES: &[&str] = &[
     "https://raw.githubusercontent.com/Endlad2/Endlad2.github.io/refs/heads/main/wintun.zip",

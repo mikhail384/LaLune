@@ -23,6 +23,10 @@ mod linux_core;
 #[path = "../../linux_tun.rs"]
 mod linux_tun;
 
+#[cfg(target_os = "macos")]
+#[path = "../../macos_tun.rs"]
+mod macos_tun;
+
 #[cfg(target_os = "windows")]
 mod wintun;
 

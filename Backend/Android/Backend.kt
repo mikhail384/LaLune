@@ -20,8 +20,11 @@ import android.os.Looper
 import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.BufferedInputStream
 import java.io.BufferedReader
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.InputStream
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
@@ -43,8 +46,19 @@ class Backend(private val context: Context) {
     companion object {
         const val TAG = "LaLune-Backend"
         const val PORT = 1062
+        const val TEST_PORT = 1063
+        // com.lalune.lalune.test ("LaLune Test") has its own port so it can run
+        // next to the original app (1062) without a bind conflict.
+        const val LALUNE_TEST_PORT = 1064
         const val HOST = "127.0.0.1"
         const val VERSION = "0.9.12"
+
+        /** Single source of truth for the loopback API port of a package. */
+        fun portFor(packageName: String): Int = when {
+            packageName.endsWith(".codextest") -> TEST_PORT
+            packageName.endsWith(".test") -> LALUNE_TEST_PORT
+            else -> PORT
+        }
 
         const val DEFAULT_WORKERS = 9
         const val MIN_WORKERS = 1
@@ -66,6 +80,7 @@ class Backend(private val context: Context) {
         const val PROTO_PAPERFLUX = "PaperFlux"
     }
 
+    private val apiPort = portFor(context.packageName)
     private val appDir = File(context.filesDir, "la-lune").apply { mkdirs() }
     private val configsJson = File(appDir, "configs.json")
     private val settingsFile = File(appDir, "settings.json")
@@ -78,6 +93,10 @@ class Backend(private val context: Context) {
     private val logs = CopyOnWriteArrayList<String>()
     private val activeCallIds = CopyOnWriteArrayList<String>()
     private var httpServer: ServerSocket? = null
+
+    @Volatile private var lastStatsAt = 0L
+    @Volatile private var lastRx = 0L
+    @Volatile private var lastTx = 0L
 
     @Volatile private var running = false
     @Volatile private var vpnConnected = false
@@ -128,6 +147,16 @@ class Backend(private val context: Context) {
         if (running) { Log.w(TAG, "Backend already running"); return }
         running = true
         coreManager = CoreManager(context)
+        // A restarted backend must not forget an already running tunnel.
+        if (LaLuneVpnService.snapshotConnected) {
+            vpnConnected = true
+            vpnState = LaLuneVpnService.snapshotState
+            vpnMessage = LaLuneVpnService.snapshotMessage
+        } else {
+            // No tunnel: any core process of this app is an orphan (it would hold
+            // port 52230 and server-side streams). Clean up before serving.
+            CoreManager.killStaleCores(context)
+        }
 
         ensureDefaults()
         registerVpnReceiver()
@@ -136,7 +165,7 @@ class Backend(private val context: Context) {
         CsqttLink.ensureAvailable(context)
 
         startHttpServer()
-        addLog("[BACKEND] LaLune Android backend started on http://$HOST:$PORT")
+        addLog("[BACKEND] LaLune Android backend started on http://$HOST:$apiPort")
     }
 
     fun stop() {
@@ -190,33 +219,68 @@ class Backend(private val context: Context) {
     //  HTTP
     // ============================================================
 
+    /** True once the HTTP socket is bound and accepting connections. */
+    @Volatile var httpReady = false
+        private set
+    /** Non-empty when the HTTP server gave up binding the port. */
+    @Volatile var httpError: String = ""
+        private set
+
     private fun startHttpServer() {
+        httpReady = false
+        httpError = ""
         thread(name = "lalune-http", isDaemon = true) {
-            try {
-                val server = ServerSocket(PORT, 50, InetAddress.getByName(HOST))
-                httpServer = server
-                Log.i(TAG, "HTTP listening on $HOST:$PORT")
-                while (running) {
-                    try {
-                        val client = server.accept()
-                        thread(isDaemon = true) { handleClient(client) }
-                    } catch (e: Exception) {
-                        if (running) Log.e(TAG, "accept: ${e.message}")
+            // A previous instance may still be releasing the port after a
+            // restart; retry briefly instead of failing silently.
+            var server: ServerSocket? = null
+            var lastErr = ""
+            for (attempt in 1..20) {
+                if (!running) return@thread
+                try {
+                    server = ServerSocket(apiPort, 50, InetAddress.getByName(HOST))
+                    break
+                } catch (e: Exception) {
+                    lastErr = e.message ?: e.javaClass.simpleName
+                    if (attempt == 1 || attempt % 5 == 0) {
+                        Log.w(TAG, "HTTP bind $HOST:$apiPort attempt $attempt/20 failed: $lastErr")
                     }
+                    try { Thread.sleep(250) } catch (_: InterruptedException) { return@thread }
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "HTTP server failed: ${e.message}", e)
             }
+            if (server == null) {
+                httpError = lastErr
+                Log.e(TAG, "HTTP server failed on $HOST:$apiPort: $lastErr")
+                return@thread
+            }
+            if (!running) {
+                try { server.close() } catch (_: Exception) {}
+                return@thread
+            }
+            httpServer = server
+            httpReady = true
+            Log.i(TAG, "HTTP listening on $HOST:$apiPort (pkg=${context.packageName})")
+            while (running) {
+                try {
+                    val client = server.accept()
+                    thread(isDaemon = true) { handleClient(client) }
+                } catch (e: Exception) {
+                    if (running) Log.e(TAG, "accept: ${e.message}")
+                }
+            }
+            httpReady = false
         }
     }
 
     private fun handleClient(socket: Socket) {
         try {
             socket.use { s ->
-                val input = BufferedReader(InputStreamReader(s.getInputStream()))
+                // Content-Length is a byte count. Read headers and body from
+                // one byte stream so UTF-8 text in settings cannot leave the
+                // server waiting for phantom characters after the body ends.
+                val input = BufferedInputStream(s.getInputStream())
                 val output = OutputStreamWriter(s.getOutputStream())
 
-                val requestLine = input.readLine() ?: return
+                val requestLine = readHttpLine(input) ?: return
                 val parts = requestLine.split(" ")
                 if (parts.size < 2) return
                 val method = parts[0]
@@ -224,7 +288,7 @@ class Backend(private val context: Context) {
 
                 val headers = mutableMapOf<String, String>()
                 while (true) {
-                    val line = input.readLine() ?: break
+                    val line = readHttpLine(input) ?: break
                     if (line.isEmpty()) break
                     val idx = line.indexOf(':')
                     if (idx > 0) headers[line.substring(0, idx).trim().lowercase()] =
@@ -233,14 +297,15 @@ class Backend(private val context: Context) {
 
                 val contentLength = headers["content-length"]?.toIntOrNull() ?: 0
                 val body = if (contentLength > 0) {
-                    val buf = CharArray(contentLength)
+                    val buf = ByteArray(contentLength)
                     var read = 0
                     while (read < contentLength) {
                         val n = input.read(buf, read, contentLength - read)
                         if (n < 0) break
                         read += n
                     }
-                    String(buf, 0, read)
+                    if (read != contentLength) return
+                    String(buf, 0, read, Charsets.UTF_8)
                 } else ""
 
                 if (pathAndQuery.startsWith("/events")) { handleSse(s, output); return }
@@ -260,6 +325,20 @@ class Backend(private val context: Context) {
             }
         } catch (e: Exception) {
             Log.e(TAG, "handleClient: ${e.message}")
+        }
+    }
+
+    private fun readHttpLine(input: InputStream): String? {
+        val line = ByteArrayOutputStream()
+        var receivedByte = false
+        while (true) {
+            val value = input.read()
+            if (value < 0) {
+                return if (receivedByte) String(line.toByteArray(), Charsets.ISO_8859_1) else null
+            }
+            receivedByte = true
+            if (value == '\n'.code) return String(line.toByteArray(), Charsets.ISO_8859_1)
+            if (value != '\r'.code) line.write(value)
         }
     }
 
@@ -287,6 +366,7 @@ class Backend(private val context: Context) {
                     "arch" to android.os.Build.SUPPORTED_ABIS.firstOrNull().orEmpty(),
                     "hostname" to android.os.Build.MODEL,
                     "platform" to "android",
+                    "package" to context.packageName,
                     "uptime" to 0,
                     "socks5Port" to socks5Port
                 )
@@ -303,7 +383,7 @@ class Backend(private val context: Context) {
                     val protocol = b.optString("protocol", PROTO_CSQTT)
                     Log.i(TAG, "[API] POST /configs/parse link_len=${link.length} protocol=$protocol")
                     val parsed = parseLink(link, protocol)
-                    Log.i(TAG, "[API] /configs/parse OK: peer=${parsed.optString("peer")}")
+                    Log.i(TAG, "[API] /configs/parse OK: peer=${LogRedactor.safePeer(parsed.optString("peer"))}")
                     200 to parsed.toString()
                 }
                 path == "/configs/selected" && method == "GET" -> {
@@ -405,11 +485,23 @@ class Backend(private val context: Context) {
                 path == "/vpn/reconnect" && method == "POST" -> {
                     vpnDisconnect(); Thread.sleep(300); vpnConnect("{}")
                 }
-                path == "/vpn/stats" && method == "GET" -> 200 to jsonOk(
-                    "rxBytes" to 0, "txBytes" to 0, "rxRate" to 0, "txRate" to 0,
-                    "activeSessions" to if (vpnConnected) 1 else 0,
-                    "socks5Port" to socks5Port
-                )
+                path == "/vpn/stats" && method == "GET" -> {
+                    // Real counters from the TUN bridge, rates from the delta
+                    // between two consecutive calls.
+                    val rx = LaLuneVpnService.tunRxBytes.get()
+                    val tx = LaLuneVpnService.tunTxBytes.get()
+                    val now = System.currentTimeMillis()
+                    val dt = (now - lastStatsAt).coerceAtLeast(1)
+                    val rxRate = if (lastStatsAt > 0 && rx >= lastRx) (rx - lastRx) * 1000 / dt else 0L
+                    val txRate = if (lastStatsAt > 0 && tx >= lastTx) (tx - lastTx) * 1000 / dt else 0L
+                    lastStatsAt = now; lastRx = rx; lastTx = tx
+                    200 to jsonOk(
+                        "rxBytes" to rx, "txBytes" to tx,
+                        "rxRate" to rxRate, "txRate" to txRate,
+                        "activeSessions" to if (vpnConnected) 1 else 0,
+                        "socks5Port" to socks5Port
+                    )
+                }
                 path == "/vpn/tunconf" && method == "GET" -> 200 to "{}"
 
                 path == "/logs" && method == "GET" ->
@@ -421,7 +513,13 @@ class Backend(private val context: Context) {
                     val tail = if (start < filtered.size) filtered.subList(start, filtered.size) else emptyList()
                     200 to JSONArray(tail).toString()
                 }
-                path == "/logs" && method == "DELETE" -> { logs.clear(); 200 to jsonOk("ok" to true) }
+                path == "/logs" && method == "DELETE" -> {
+                    // Also truncate the core log file: otherwise the history is
+                    // read back from logs.log on the next refresh.
+                    logs.clear()
+                    try { logsFile.writeText("") } catch (_: Exception) {}
+                    200 to jsonOk("ok" to true)
+                }
                 path == "/logs/export" && method == "GET" ->
                     200 to filterLogs(logs.toList(), queryParam(query, "source")).joinToString("\n")
 
@@ -558,9 +656,13 @@ class Backend(private val context: Context) {
 
                 else -> 404 to jsonErr("route not found: $method $path")
             }
+        } catch (e: org.json.JSONException) {
+            // org.json messages embed the whole request body (may hold links/tokens).
+            Log.w(TAG, "$method $path: malformed JSON (${body.length} bytes)")
+            return 400 to jsonErr("bad json")
         } catch (e: Exception) {
-            Log.e(TAG, "route error: ${e.message}", e)
-            return 500 to jsonErr(e.message ?: "internal error")
+            Log.e(TAG, "route error: ${e.javaClass.simpleName} on $method $path")
+            return 500 to jsonErr("internal error")
         }
     }
 
@@ -765,7 +867,8 @@ class Backend(private val context: Context) {
         eventSubscribers.forEach { it.send(event) }
     }
 
-    private fun addLog(line: String) {
+    private fun addLog(raw: String) {
+        val line = LogRedactor.redact(raw)
         Log.d(TAG, line)
         logs.add(line)
         if (logs.size > 2000) logs.removeAt(0)
@@ -774,7 +877,8 @@ class Backend(private val context: Context) {
         luaRuntime?.onLog(line)
     }
 
-    private fun addCoreLog(line: String) {
+    private fun addCoreLog(raw: String) {
+        val line = LogRedactor.redact(raw)
         Log.d(TAG, "[core] $line")
         val tagged = CORE_PREFIX + line
         logs.add(tagged)
@@ -951,38 +1055,46 @@ class Backend(private val context: Context) {
         return null
     }
 
-    private fun createConfig(body: String): Pair<Int, String> = try {
-        val b = JSONObject(body)
-        val link = b.optString("link", "")
-        val protocol = b.optString("protocol", PROTO_CSQTT)
-        Log.i(TAG, "[API] POST /configs link_len=${link.length} protocol=$protocol")
-        val parsed = if (link.isNotEmpty()) parseLink(link, protocol) else JSONObject().apply {
-            put("protocol", protocol)
-            put("peer", b.optString("peer", ""))
-            put("password", b.optString("password", ""))
-            put("hashes", b.optString("hashes", ""))
-            put("name", b.optString("name", ""))
-            put("profileId", b.optString("profileId", ""))
-            put("profileToken", b.optString("profileToken", ""))
-            put("clientIp", b.optString("clientIp", ""))
-            put("transport", b.optString("transport", ""))
-            put("url", b.optString("url", ""))
-            put("urls", b.optString("urls", ""))
-            put("volgaUrl", b.optString("volgaUrl", ""))
-            put("relayUrl", b.optString("relayUrl", ""))
-            put("relayToken", b.optString("relayToken", ""))
-            put("maxToken", b.optString("maxToken", ""))
-            put("maxUid", b.optString("maxUid", ""))
-            put("server", b.optString("server", ""))
+    private fun createConfig(body: String): Pair<Int, String> {
+        return try {
+            val b = JSONObject(body)
+            val link = b.optString("link", "")
+            val protocol = b.optString("protocol", PROTO_CSQTT)
+            Log.i(TAG, "[API] POST /configs link_len=${link.length} protocol=$protocol")
+            val parsed = if (link.isNotEmpty()) parseLink(link, protocol) else JSONObject().apply {
+                put("protocol", protocol)
+                put("peer", b.optString("peer", ""))
+                put("password", b.optString("password", ""))
+                put("hashes", b.optString("hashes", ""))
+                put("name", b.optString("name", ""))
+                put("profileId", b.optString("profileId", ""))
+                put("profileToken", b.optString("profileToken", ""))
+                put("clientIp", b.optString("clientIp", ""))
+                put("transport", b.optString("transport", ""))
+                put("url", b.optString("url", ""))
+                put("urls", b.optString("urls", ""))
+                put("volgaUrl", b.optString("volgaUrl", ""))
+                put("relayUrl", b.optString("relayUrl", ""))
+                put("relayToken", b.optString("relayToken", ""))
+                put("maxToken", b.optString("maxToken", ""))
+                put("maxUid", b.optString("maxUid", ""))
+                put("server", b.optString("server", ""))
+            }
+
+            if (link.isNotEmpty() && parsed.optString("peer").isBlank()) {
+                400 to jsonErr("Ссылка не содержит рабочего адреса сервера")
+            } else {
+                val id = System.currentTimeMillis()
+                parsed.put("id", id); parsed.put("rawLink", link)
+                val arr = loadConfigs(); arr.put(parsed); saveConfigs(arr)
+                Log.i(TAG, "[API] /configs INSERTED id=$id peer=${LogRedactor.safePeer(parsed.optString("peer"))}")
+                200 to jsonOk("id" to id)
+            }
+        } catch (e: Exception) {
+            // Do not log/echo e.message: org.json embeds the full request body.
+            Log.e(TAG, "[API] /configs insert failed: ${e.javaClass.simpleName}")
+            400 to jsonErr(if (e is org.json.JSONException) "bad json" else (e.message ?: "bad json"))
         }
-        val id = System.currentTimeMillis()
-        parsed.put("id", id); parsed.put("rawLink", link)
-        val arr = loadConfigs(); arr.put(parsed); saveConfigs(arr)
-        Log.i(TAG, "[API] /configs INSERTED id=$id peer=${parsed.optString("peer")}")
-        200 to jsonOk("id" to id)
-    } catch (e: Exception) {
-        Log.e(TAG, "[API] /configs insert failed: ${e.message}", e)
-        400 to jsonErr(e.message ?: "bad json")
     }
 
     private fun updateConfig(id: Long, body: String): Pair<Int, String> = try {
@@ -1024,14 +1136,54 @@ class Backend(private val context: Context) {
     //  parseLink — csqtt-link (ProcessBuilder) → Lua → нативный
     // ============================================================
 
-    private fun parseLink(link: String, protocol: String = PROTO_CSQTT): JSONObject {
-        val lower = link.trim().lowercase()
-        if (lower.startsWith("paperflux://") || lower.startsWith("openflux://")) {
-            return parsePaperFlux(link)
+    private fun normalizeConfigLink(rawLink: String, selectedProtocol: String): Pair<String, String> {
+        val trimmed = rawLink.trim()
+        val schemes = listOf("paperflux://", "openflux://", "csqtt://", "csqttr://")
+        val match = schemes.mapNotNull { scheme ->
+            val index = trimmed.indexOf(scheme, ignoreCase = true)
+            if (index >= 0) index to scheme else null
+        }.minByOrNull { it.first } ?: return trimmed to selectedProtocol
+
+        val (index, scheme) = match
+        val label = trimmed.substring(0, index)
+            .trim().trimEnd(':').trim().lowercase(Locale.ROOT).replace(Regex("\\s+"), " ")
+        val explicitProtocol = when (label) {
+            "csqtt 2.1.9" -> PROTO_CSQTT_219
+            "csqtt 2.5.1" -> PROTO_CSQTT_251
+            "csqttr" -> CoreManager.PROTO_CSQTTR
+            "paperflux" -> PROTO_PAPERFLUX
+            else -> null
         }
-        return parseCsqtt(link, protocol).apply {
-            if (protocol.equals("CSQTT 2.5.1", ignoreCase = true)) {
-                put("protocol", "CSQTT 2.5.1")
+
+        val uri = trimmed.substring(index).trim().lineSequence().firstOrNull().orEmpty()
+        val normalizedScheme = scheme.lowercase(Locale.ROOT)
+        val isOpaqueCsqtt = normalizedScheme == "csqtt://" &&
+            !uri.substringAfter("://").startsWith("connect?", ignoreCase = true)
+        val effectiveProtocol = explicitProtocol ?: when {
+            normalizedScheme == "csqttr://" -> CoreManager.PROTO_CSQTTR
+            isOpaqueCsqtt && selectedProtocol.equals(PROTO_CSQTT_219, ignoreCase = true) -> PROTO_CSQTT_251
+            else -> selectedProtocol
+        }
+        val canonicalUri = if (normalizedScheme == "csqttr://") {
+            "csqtt://" + uri.substringAfter("://")
+        } else {
+            uri
+        }
+        return canonicalUri to effectiveProtocol
+    }
+
+    private fun parseLink(link: String, protocol: String = PROTO_CSQTT): JSONObject {
+        val (normalizedLink, effectiveProtocol) = normalizeConfigLink(link, protocol)
+        val lower = normalizedLink.trim().lowercase(Locale.ROOT)
+        if (lower.startsWith("paperflux://") || lower.startsWith("openflux://")) {
+            return parsePaperFlux(normalizedLink).apply { put("protocol", PROTO_PAPERFLUX) }
+        }
+        return parseCsqtt(normalizedLink, effectiveProtocol).apply {
+            when {
+                effectiveProtocol.equals(PROTO_CSQTT_251, ignoreCase = true) ->
+                    put("protocol", PROTO_CSQTT_251)
+                effectiveProtocol.equals(CoreManager.PROTO_CSQTTR, ignoreCase = true) ->
+                    put("protocol", CoreManager.PROTO_CSQTTR)
             }
         }
     }
@@ -1088,7 +1240,7 @@ class Backend(private val context: Context) {
             Log.i(TAG, "[PARSE][CSQTT] trying Lua (csqtt_decode.lua)...")
             val decoded = lua.decodeCsqttLink(link)
             if (decoded != null) {
-                Log.i(TAG, "[PARSE][CSQTT] Lua OK: peer=${decoded.peer}")
+                Log.i(TAG, "[PARSE][CSQTT] Lua OK: peer=${LogRedactor.safePeer(decoded.peer)}")
                 return JSONObject().apply {
                     put("protocol", "CSQTT")
                     put("peer", decoded.peer)
@@ -1193,6 +1345,9 @@ class Backend(private val context: Context) {
     }
 
     private fun vpnConnect(body: String): Pair<Int, String> {
+        // A new connection attempt starts with an empty log (the file itself is
+        // truncated when the core starts).
+        logs.clear()
         val settings = loadSettings()
         val sel = readSelectedConfig()
         val protocol = sel?.optString("protocol", PROTO_CSQTT) ?: PROTO_CSQTT
@@ -1208,7 +1363,8 @@ class Backend(private val context: Context) {
             if (peer.isEmpty()) return 400 to jsonErr("no server in PaperFlux config")
 
             val args = buildPaperFluxArgs(sel, settings)
-            addLog("[VPN] PaperFlux core args: ${args.joinToString(" ")}")
+            // Never join argv here: it carries profile/relay tokens and URLs.
+            addLog("[VPN] PaperFlux core starting: args=${args.size}")
 
             val started = cm.startCore(
                 protocol = protocol,

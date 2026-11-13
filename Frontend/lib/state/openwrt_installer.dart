@@ -21,10 +21,14 @@ class OpenWrtInstallResult {
 }
 
 class OpenWrtInstaller {
-  static const backendUrl =
-      'https://github.com/Endlad2/LaLune/releases/latest/download/lalune-openwrt-backend';
-  static const ramipsBackendUrl =
-      'https://github.com/Endlad2/LaLune/releases/latest/download/lalune-openwrt-backend-ramips';
+  /// Каталог релиза; конкретный файл (`lalune-openwrt-backend[-<abi>]`)
+  /// скрипт выбирает на роутере по DISTRIB_ARCH.
+  static const backendBaseUrl =
+      'https://github.com/mikhail384/LaLune/releases/latest/download';
+
+  /// Готовый скрипт установки (используется и в тестах).
+  static String installScript() =>
+      _installScript.replaceAll('__BACKEND_BASE__', backendBaseUrl);
 
   static const _algorithms = SSHAlgorithms(
     kex: [
@@ -86,9 +90,7 @@ class OpenWrtInstaller {
       await client.authenticated;
 
       onProgress?.call('Установка backend и зависимостей...');
-      final script = _installScript
-          .replaceAll('__BACKEND_URL__', backendUrl)
-          .replaceAll('__RAMIPS_BACKEND_URL__', ramipsBackendUrl);
+      final script = installScript();
       final result = await client.runWithResult(script);
       final stdout = utf8.decode(result.stdout, allowMalformed: true);
       final stderr = utf8.decode(result.stderr, allowMalformed: true);
@@ -144,8 +146,8 @@ class OpenWrtInstaller {
   static const _installScript = r'''
 set -eu
 
-BACKEND_URL="__BACKEND_URL__"
-RAMIPS_BACKEND_URL="__RAMIPS_BACKEND_URL__"
+BACKEND_BASE="__BACKEND_BASE__"
+BACKEND_URL=""
 INSTALL_DIR="$HOME/la-lune"
 DATA_DIR="$HOME/.la-lune"
 BACKEND_PATH="$INSTALL_DIR/lalune-openwrt-backend"
@@ -155,23 +157,46 @@ LOG_FILE="$DATA_DIR/LaLuneManager.log"
 log() { printf '[lalune-install] %s\n' "$*"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# Сборка backend выбирается по архитектуре пакетов OpenWrt (DISTRIB_ARCH):
+# один статический musl-бинарник на архитектуру, а не на SoC.
+lalune_abi() {
+  case "${1:-}" in
+    aarch64_*) echo aarch64 ;;
+    x86_64) echo x86_64 ;;
+    i386_pentium-mmx) return 1 ;;
+    i386_*) echo i386 ;;
+    mipsel_mips32|mips_mips32) return 1 ;;
+    mipsel_*) echo ramips ;;
+    mips_*) echo mips ;;
+    arm_cortex-a5*|arm_cortex-a7*|arm_cortex-a8*|arm_cortex-a9*|arm_cortex-a15*|arm_cortex-a17*|arm_cortex-a53*|arm_cortex-a72*|arm_neoverse*) echo armv7 ;;
+    arm_*) echo armv5 ;;
+    *) return 1 ;;
+  esac
+}
+
+unset DISTRIB_TARGET DISTRIB_ARCH
+[ -r /etc/openwrt_release ] && . /etc/openwrt_release
 arch="$(uname -m 2>/dev/null || true)"
-case "$arch" in
-  aarch64|arm64) ;;
-  mips|mipsel)
-    unset DISTRIB_TARGET DISTRIB_ARCH
-    [ -r /etc/openwrt_release ] && . /etc/openwrt_release
-    if [ "${DISTRIB_TARGET:-}" != ramips/mt7621 ] || [ "${DISTRIB_ARCH:-}" != mipsel_24kc ]; then
-      echo "Need OpenWrt ramips/mt7621 (mipsel_24kc), found: ${DISTRIB_TARGET:-?} (${DISTRIB_ARCH:-?})" >&2
-      exit 21
-    fi
-    BACKEND_URL="$RAMIPS_BACKEND_URL"
-    ;;
-  *)
-    echo "Unsupported router architecture: $arch (need ARM64 or ramips/mt7621)" >&2
-    exit 21
-    ;;
+abi=""
+[ -n "${DISTRIB_ARCH:-}" ] && abi="$(lalune_abi "$DISTRIB_ARCH" || true)"
+if [ -z "$abi" ]; then
+  case "$arch" in
+    aarch64|arm64) abi=aarch64 ;;
+    x86_64) abi=x86_64 ;;
+    i386|i486|i586|i686) abi=i386 ;;
+    armv7*|armv8l) abi=armv7 ;;
+    armv5*|armv6*) abi=armv5 ;;
+  esac
+fi
+if [ -z "$abi" ]; then
+  echo "Unsupported router architecture: uname=$arch, OpenWrt=${DISTRIB_TARGET:-?} (${DISTRIB_ARCH:-?}). Supported: aarch64, x86_64, i386 (SSE2), mips/mipsel, arm." >&2
+  exit 21
+fi
+case "$abi" in
+  aarch64) BACKEND_URL="$BACKEND_BASE/lalune-openwrt-backend" ;;
+  *) BACKEND_URL="$BACKEND_BASE/lalune-openwrt-backend-$abi" ;;
 esac
+log "router: ${DISTRIB_TARGET:-?} (${DISTRIB_ARCH:-$arch}) -> build $abi"
 
 if have id && [ "$(id -u 2>/dev/null || echo 1)" != "0" ]; then
   echo 'OpenWRT backend must be installed as root' >&2
@@ -180,15 +205,27 @@ fi
 
 mkdir -p "$INSTALL_DIR" "$DATA_DIR"
 
+PKG_LOG="${TMPDIR:-/tmp}/lalune-pkg.log"
+PKG_UPDATED=0
+
+# Ставит пакеты и сохраняет вывод менеджера в $PKG_LOG, чтобы при ошибке было видно причину
+# (нет интернета/DNS, пакета нет в фиде, конфликт ip-tiny и т.д.).
 install_packages() {
   if have apk; then
-    apk add "$@" >/dev/null 2>&1
+    if [ "$PKG_UPDATED" = 0 ]; then apk update >"$PKG_LOG" 2>&1 || true; PKG_UPDATED=1; fi
+    apk add "$@" >>"$PKG_LOG" 2>&1
   elif have opkg; then
-    opkg update >/dev/null 2>&1 || true
-    opkg install "$@" >/dev/null 2>&1
+    if [ "$PKG_UPDATED" = 0 ]; then opkg update >"$PKG_LOG" 2>&1 || true; PKG_UPDATED=1; fi
+    opkg install "$@" >>"$PKG_LOG" 2>&1
   else
+    echo 'no package manager (apk/opkg)' >"$PKG_LOG"
     return 1
   fi
+}
+
+pkg_error_tail() {
+  [ -s "$PKG_LOG" ] && tail -n 6 "$PKG_LOG" | sed 's/^/  pkg: /' >&2
+  return 0
 }
 
 ensure_downloader() {
@@ -231,15 +268,31 @@ ensure_downloader || {
 
 # Для iptables/fwmark policy routing нужен полный iproute2 на обеих архитектурах.
 have_route_ip() {
-  have ip && ip -N -4 rule show >/dev/null 2>&1
+  have ip && { ip -N -4 rule show >/dev/null 2>&1 || ip -4 rule show >/dev/null 2>&1; }
 }
 
 if ! have_route_ip; then
   log 'ip utility missing; trying to install ip-full'
-  install_packages ip-full || true
+  if ! install_packages ip-full; then
+    # ip-tiny/busybox-ip конфликтуют с ip-full: убираем и пробуем снова.
+    if have opkg && opkg list-installed 2>/dev/null | grep -q '^ip-tiny '; then
+      log 'removing ip-tiny (conflicts with ip-full)'
+      opkg remove ip-tiny >>"$PKG_LOG" 2>&1 || true
+    fi
+    install_packages ip-full || true
+  fi
 fi
 if ! have_route_ip; then
-  echo 'A compatible ip utility is required for VPN routes (ip-full)' >&2
+  {
+    echo 'A compatible ip utility is required for VPN routes (ip-full)'
+    echo 'Не удалось установить ip-full: проверьте, что роутер выходит в интернет и DNS работает'
+    echo '(на роутере: opkg update && opkg install ip-full), затем повторите установку.'
+  } >&2
+  {
+    echo "ip: $(command -v ip 2>/dev/null || echo 'не найден')"
+    ip -4 rule show 2>&1 | head -n 2 | sed 's/^/  ip: /'
+  } >&2
+  pkg_error_tail
   exit 24
 fi
 
@@ -248,9 +301,21 @@ if ! have iptables && ! have iptables-nft; then
   install_packages iptables-nft || install_packages iptables || true
 fi
 if ! have iptables && ! have iptables-nft; then
-  echo 'iptables-nft is required for VPN mangle/MARK and NAT/MASQUERADE' >&2
-  exit 27
+  if have nft; then
+    # OpenWrt 25.x на маленьких роутерах: только nftables. Бэкенд умеет работать без iptables.
+    log 'iptables not available; will use native nftables for marking/NAT'
+  else
+    echo 'Neither iptables-nft nor nft is available: VPN marking/NAT is impossible' >&2
+    pkg_error_tail
+    exit 27
+  fi
 fi
+
+# NAT для клиентов LAN: без xt_MASQUERADE iptables пишет "Extension MASQUERADE
+# revision 0 not supported". Модули ядра ставим по возможности, не фатально.
+for pkg in kmod-ipt-nat kmod-nft-nat kmod-nft-compat iptables-mod-nat-extra iptables-mod-extra kmod-ipt-extra; do
+  install_packages "$pkg" >/dev/null 2>&1 || true
+done
 
 if [ ! -c /dev/net/tun ]; then
   log '/dev/net/tun missing; trying to install/load kmod-tun'

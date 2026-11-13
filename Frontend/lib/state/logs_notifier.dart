@@ -22,9 +22,14 @@ import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../api/api_client.dart';
 import 'providers.dart';
 import 'settings_notifier.dart';
+
+const _maxLogLines = 150;
+
+/// Сколько последних строк (включая ядро) хранить для короткого лога: он
+/// сворачивает шум, поэтому окно должно быть заметно больше 150 строк.
+const _maxAllLines = 1200;
 
 /// Отдельный провайдер: true, если пользователь включил показ логов ядра.
 final _showCoreLogsProvider = Provider<bool>((ref) {
@@ -32,13 +37,23 @@ final _showCoreLogsProvider = Provider<bool>((ref) {
 });
 
 class LogsState {
+  /// Строки для подробного вида (как раньше: без ядра, если выключено, ≤150).
   final List<String> lines;
+
+  /// Все строки (backend + ядро, ≤1200) — источник короткого лога.
+  final List<String> allLines;
   final bool loading;
 
-  const LogsState({this.lines = const [], this.loading = false});
+  const LogsState(
+      {this.lines = const [], this.allLines = const [], this.loading = false});
 
-  LogsState copyWith({List<String>? lines, bool? loading}) =>
-      LogsState(lines: lines ?? this.lines, loading: loading ?? this.loading);
+  LogsState copyWith(
+          {List<String>? lines, List<String>? allLines, bool? loading}) =>
+      LogsState(
+        lines: lines ?? this.lines,
+        allLines: allLines ?? this.allLines,
+        loading: loading ?? this.loading,
+      );
 }
 
 class LogsNotifier extends StateNotifier<LogsState> {
@@ -52,18 +67,23 @@ class LogsNotifier extends StateNotifier<LogsState> {
   ProviderSubscription<bool>? _showCoreLogsSub;
   int _refreshGeneration = 0;
 
-  LogsNotifier(this._ref) : super(const LogsState()) {
-    _refresh();
-    _poll = Timer.periodic(const Duration(seconds: 3), (_) => _refresh());
-    _startWebSocket();
+  /// Опрос и WebSocket работают только пока открыта вкладка «Логи»: в фоне они
+  /// зря грузили слабые телефоны (каждые 3 с — до 1200 строк).
+  bool _active = false;
+  final List<String> _buffer = [];
+  Timer? _flush;
 
+  LogsNotifier(this._ref) : super(const LogsState()) {
     // При смене baseUrl — переподключаем WebSocket и перечитываем.
     final api = _ref.read(apiClientProvider);
     _baseUrlSub = api.baseUrlChanges.listen((_) {
       _stopWebSocket();
-      state = state.copyWith(lines: const []);
-      _startWebSocket();
-      _refresh();
+      _buffer.clear();
+      state = state.copyWith(lines: const [], allLines: const []);
+      if (_active) {
+        _startWebSocket();
+        _refresh();
+      }
     });
 
     // При смене showCoreLogs — перечитываем с нужным source.
@@ -71,11 +91,45 @@ class LogsNotifier extends StateNotifier<LogsState> {
       _showCoreLogsProvider,
       (prev, next) {
         if (prev != next) {
-          state = state.copyWith(lines: const []);
-          _refresh();
+          // Переключатель влияет только на подробный вид: пересобираем его.
+          _apply(state.allLines);
         }
       },
     );
+  }
+
+  /// Включает загрузку логов (вызывается, когда вкладка «Логи» на экране).
+  void activate() {
+    if (_active) return;
+    _active = true;
+    _refresh();
+    _poll = Timer.periodic(const Duration(seconds: 3), (_) => _refresh());
+    _startWebSocket();
+  }
+
+  /// Останавливает фоновую загрузку (вкладка закрыта).
+  void deactivate() {
+    if (!_active) return;
+    _active = false;
+    _poll?.cancel();
+    _poll = null;
+    _flush?.cancel();
+    _flush = null;
+    _buffer.clear();
+    _stopWebSocket();
+  }
+
+  /// Новые строки накапливаем и применяем не чаще раза в 300 мс: во время
+  /// подключения ядро пишет сотни строк в секунду.
+  void _enqueue(String line) {
+    _buffer.add(line);
+    _flush ??= Timer(const Duration(milliseconds: 300), () {
+      _flush = null;
+      if (!mounted || _buffer.isEmpty) return;
+      final merged = [...state.allLines, ..._buffer];
+      _buffer.clear();
+      _apply(merged);
+    });
   }
 
   /// Актуальное значение на каждый запрос.
@@ -105,15 +159,18 @@ class LogsNotifier extends StateNotifier<LogsState> {
             if (message['type'] == 'snapshot') {
               final rawLines = (message['lines'] as List? ?? const [])
                   .map((line) => line.toString())
-                  .where((line) => line.isNotEmpty && (_showCoreLogs || !_isCoreLog(line)))
+                  .where((line) => line.isNotEmpty)
                   .toList();
-              state = state.copyWith(lines: rawLines);
+              _buffer.clear();
+              _apply(rawLines);
             } else if (message['type'] == 'log') {
               final line = message['line'] as String? ?? '';
-              if (line.isEmpty || (!_showCoreLogs && _isCoreLog(line))) return;
-              if (state.lines.isNotEmpty && state.lines.last == line) return;
-              final next = [...state.lines, line];
-              state = state.copyWith(lines: next);
+              if (line.isEmpty) return;
+              final last = _buffer.isNotEmpty
+                  ? _buffer.last
+                  : (state.allLines.isNotEmpty ? state.allLines.last : null);
+              if (last == line) return;
+              _enqueue(line);
             }
           } catch (_) {
             // Ignore malformed messages and keep the connection alive.
@@ -164,28 +221,44 @@ class LogsNotifier extends StateNotifier<LogsState> {
     final api = _ref.read(apiClientProvider);
     // Read the current toggle for each request. Ignore older responses that
     // finish after a newer request (common when the toggle changes mid-flight).
-    final source = _showCoreLogs ? 'all' : 'backend';
     try {
-      final list = await api.getJsonList('/logs', query: {
-        'source': source,
+      // Всегда читаем все строки: короткий лог строится из них, а подробный
+      // вид отфильтровывает ядро по настройке в _apply().
+      final list = await api.getJsonList('/logs/tail', query: {
+        'lines': '$_maxAllLines',
+        'source': 'all',
       });
       if (generation != _refreshGeneration) return;
-      final fetched = list.map((e) => e.toString()).toList();
-      state = state.copyWith(lines: fetched);
+      _apply(list.map((e) => e.toString()).toList());
     } catch (_) {}
   }
+
+  /// Раскладывает полный список по двум представлениям.
+  void _apply(List<String> all) {
+    final allTail = all.length > _maxAllLines
+        ? all.sublist(all.length - _maxAllLines)
+        : all;
+    final shown =
+        _showCoreLogs ? allTail : allTail.where((l) => !_isCoreLog(l)).toList();
+    state = state.copyWith(lines: _tail(shown), allLines: allTail);
+  }
+
+  List<String> _tail(List<String> lines) => lines.length > _maxLogLines
+      ? lines.sublist(lines.length - _maxLogLines)
+      : lines;
 
   Future<void> clear() async {
     final api = _ref.read(apiClientProvider);
     try {
       await api.deleteJson('/logs');
-      state = state.copyWith(lines: []);
+      state = state.copyWith(lines: [], allLines: []);
     } catch (_) {}
   }
 
   @override
   void dispose() {
     _poll?.cancel();
+    _flush?.cancel();
     _stopWebSocket();
     _baseUrlSub?.cancel();
     _showCoreLogsSub?.close();

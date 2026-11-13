@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
-import 'dart:convert';
-
 class RouterInfo {
   final String ip;
   final String hostname;

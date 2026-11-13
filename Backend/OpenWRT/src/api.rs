@@ -228,6 +228,7 @@ fn config_from_body(body: ConfigCreateBody) -> anyhow::Result<ConfigItem> {
     let core = Core::parse(body.protocol.as_deref().unwrap_or("CSQTT"))
         .ok_or_else(|| anyhow::anyhow!("Неизвестный протокол профиля"))?;
     let mut config = if let Some(link) = body.link {
+        let (link, core) = crate::config::normalize_for_core(&link, core);
         parse_for_core(&link, core)?
     } else {
         ConfigItem {
@@ -265,7 +266,8 @@ async fn configs_parse(Json(body): Json<ParseBody>) -> impl IntoResponse {
         let Some(core) = Core::parse(&protocol) else {
             return err(400, "Неизвестный протокол профиля");
         };
-        parse_for_core(&body.link, core)
+        let (link, core) = crate::config::normalize_for_core(&body.link, core);
+        parse_for_core(&link, core)
     } else {
         parse_link(&body.link)
     };

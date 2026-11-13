@@ -24,16 +24,6 @@
 --   function on_disconnect()— вызывается при отключении
 --   function on_log(line)   — вызывается на каждую новую строку лога
 
-local tick_counter = 0
-
 function on_load()
     smarttunnel.log("[SMART-TUNNEL] Загружен")
-end
-
-function on_tick()
-    tick_counter = tick_counter + 1
-    if tick_counter >= 10 then
-        tick_counter = 0
-        smarttunnel.log("[SMART-TUNNEL] Еще не реализовано")
-    end
 end

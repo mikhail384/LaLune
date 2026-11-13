@@ -7,6 +7,7 @@ class InputRow extends StatelessWidget {
   final TextEditingController controller;
   final TextInputType? keyboardType;
   final bool readOnly;
+  final bool obscureText;
   final int labelWidth;
   final ValueChanged<String>? onChanged;
 
@@ -16,6 +17,7 @@ class InputRow extends StatelessWidget {
     required this.controller,
     this.keyboardType,
     this.readOnly = false,
+    this.obscureText = false,
     this.labelWidth = 130,
     this.onChanged,
   });
@@ -36,6 +38,7 @@ class InputRow extends StatelessWidget {
               controller: controller,
               keyboardType: keyboardType,
               readOnly: readOnly,
+              obscureText: obscureText,
               style: const TextStyle(fontSize: 13.5),
               onChanged: onChanged,
             ),

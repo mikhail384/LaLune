@@ -17,7 +17,7 @@ final class CoreManager {
     private let LATEST_CSQTT_URL =
         "https://raw.githubusercontent.com/Endlad2/csqtt-core/refs/heads/main/LATEST"
     private let LATEST_CSQTTR_URL =
-        "https://raw.githubusercontent.com/Endlad2/csqttr-core/refs/heads/release-2.5.2/LATEST"
+        "https://raw.githubusercontent.com/Endlad2/csqttr-core/refs/heads/main/LATEST"
     private let CSQTTR_URL_TEMPLATE =
         "https://github.com/Endlad2/csqttr-core/releases/download/%@/%@"
     private let LATEST_PAPERFLUX_URL =

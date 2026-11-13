@@ -16,7 +16,7 @@ use crate::events::{Event, EventBus};
 pub const LATEST_CSQTT_URL: &str =
     "https://raw.githubusercontent.com/Endlad2/csqtt-core/refs/heads/main/LATEST";
 pub const LATEST_CSQTTR_URL: &str =
-    "https://raw.githubusercontent.com/Endlad2/csqttr-core/refs/heads/release-2.5.2/LATEST";
+    "https://raw.githubusercontent.com/Endlad2/csqttr-core/refs/heads/main/LATEST";
 pub const CSQTTR_URL_TEMPLATE: &str =
     "https://github.com/Endlad2/csqttr-core/releases/download/{VER}/{FILE}";
 pub const LATEST_PAPERFLUX_URL: &str =
@@ -41,7 +41,10 @@ pub fn csqtt_asset_name() -> &'static str {
     { "client-windows-x86_64.exe" }
     #[cfg(target_os = "linux")]
     { "client-linux-x86_64" }
-    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    // Apple Silicon запускает x86_64-сборку через Rosetta 2.
+    #[cfg(target_os = "macos")]
+    { "client-macos-x86_64" }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     { "client-unknown" }
 }
 
@@ -79,7 +82,9 @@ pub fn paperflux_asset_name() -> &'static str {
     { "paperflux-windows-amd64.exe" }
     #[cfg(target_os = "linux")]
     { "paperflux-linux-amd64" }
-    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    { "paperflux-darwin-amd64" }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     { "paperflux-unknown" }
 }
 
