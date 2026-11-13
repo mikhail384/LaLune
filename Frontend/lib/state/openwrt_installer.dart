@@ -169,22 +169,29 @@ class OpenWrtInstaller {
         // На OpenWrt (Dropbear) обычно нет SFTP-подсистемы, поэтому льём файл
         // через обычный exec-канал: `cat > файл`.
         final target = '$dir/lalune-openwrt-backend';
-        final upload = await client.execute('cat > "$target.part"');
-        const chunk = 32 * 1024;
+        // Роутеры с 64 МБ ОЗУ не переживают один длинный поток в 20 МБ: буфер записи на флеш
+        // раздувает память и Dropbear обрывает соединение. Поэтому льём порциями по 256 КБ,
+        // каждая — отдельным коротким exec с `cat >>`, и периодически делаем sync.
+        await client.run('rm -f "$target.part"');
+        const chunk = 256 * 1024;
         var sent = 0;
+        var chunkIndex = 0;
         for (var offset = 0; offset < bytes.length; offset += chunk) {
           final end = offset + chunk < bytes.length ? offset + chunk : bytes.length;
-          upload.stdin.add(Uint8List.sublistView(bytes, offset, end));
+          final piece = Uint8List.sublistView(bytes, offset, end);
+          final session = await client.execute('cat >> "$target.part"');
+          session.stdin.add(piece);
+          await session.stdin.close();
+          await session.done;
           sent = end;
-          if ((offset ~/ chunk) % 64 == 0) {
+          chunkIndex++;
+          if (chunkIndex % 8 == 0) {
+            await client.run('sync');
             onProgress?.call(
                 'Передача backend на роутер: ${(sent * 100 ~/ bytes.length)}%');
-            await Future<void>.delayed(Duration.zero);
           }
         }
-        await upload.stdin.close();
-        await upload.done;
-        final size = utf8
+        await client.run('sync');        final size = utf8
             .decode(await client.run('wc -c < "$target.part"'), allowMalformed: true)
             .trim();
         if (size != '${bytes.length}') {
