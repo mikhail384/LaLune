@@ -111,6 +111,7 @@ class OpenWrtInstaller {
     void Function(String message)? onProgress,
   }) async {
     SSHClient? client;
+    var stage = 'подключение к SSH';
     try {
       onProgress?.call('Подключение к SSH $host:22...');
       final socket = await SSHSocket.connect(
@@ -128,6 +129,7 @@ class OpenWrtInstaller {
       );
       await client.authenticated;
 
+      stage = 'выполнение скрипта установки';
       onProgress?.call('Установка backend и зависимостей...');
       final script = installScript();
       var result = await client.runWithResult(script);
@@ -160,6 +162,7 @@ class OpenWrtInstaller {
             log: combined,
           );
         }
+        stage = 'подготовка роутера к загрузке';
         final home = utf8
             .decode((await client.run(r'echo "$HOME"')), allowMalformed: true)
             .trim();
@@ -187,6 +190,7 @@ class OpenWrtInstaller {
           // флеш раздувает память. Льём порциями по 128 КБ, каждая — отдельным коротким
           // exec с `cat >>`, и периодически делаем sync и сбрасываем кэш.
           await client.run('rm -f "$target.part"');
+          stage = 'передача файла';
           const chunk = 128 * 1024;
           var sent = 0;
           var chunkIndex = 0;
@@ -199,6 +203,7 @@ class OpenWrtInstaller {
             await session.done;
             sent = end;
             chunkIndex++;
+            stage = 'передача файла (${sent * 100 ~/ bytes.length}%)';
             if (chunkIndex % 8 == 0) {
               await client.run(
                   'sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null; true');
@@ -221,6 +226,7 @@ class OpenWrtInstaller {
           }
           await client.run('mv -f "$target.part" "$target"');
         }
+        stage = 'запуск backend после загрузки';
         onProgress?.call('Установка backend и зависимостей...');
         result = await client.runWithResult('LALUNE_PREUPLOADED=1\n$script');
         stdout = utf8.decode(result.stdout, allowMalformed: true);
@@ -265,7 +271,7 @@ class OpenWrtInstaller {
     } catch (e) {
       return OpenWrtInstallResult(
         ok: false,
-        message: 'Не удалось установить OpenWRT backend: $e',
+        message: 'Не удалось установить OpenWRT backend на шаге «$stage»: $e',
       );
     } finally {
       if (client != null) {
