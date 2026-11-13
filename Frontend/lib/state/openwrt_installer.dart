@@ -29,6 +29,21 @@ class OpenWrtInstaller {
   static const backendBaseUrl =
       'https://github.com/mikhail384/LaLune/releases/latest/download';
 
+  /// Dropbear отвергает слишком длинную exec-команду ("String too long"), а скрипт установки
+  /// больше этого лимита. Поэтому сначала кладём его на роутер файлом, потом запускаем коротко.
+  static Future<SSHRunResult> _runScript(
+    SSHClient client,
+    String script, {
+    bool preuploaded = false,
+  }) async {
+    final upload = await client.execute('cat > /tmp/lalune-install.sh');
+    upload.stdin.add(Uint8List.fromList(utf8.encode(script)));
+    await upload.stdin.close();
+    await upload.done;
+    final prefix = preuploaded ? 'LALUNE_PREUPLOADED=1 ' : '';
+    return client.runWithResult('${prefix}sh /tmp/lalune-install.sh');
+  }
+
   /// Код выхода скрипта: роутер не смог скачать backend, нужна загрузка с телефона.
   static const needUploadExitCode = 28;
 
@@ -132,7 +147,7 @@ class OpenWrtInstaller {
       stage = 'выполнение скрипта установки';
       onProgress?.call('Установка backend и зависимостей...');
       final script = installScript();
-      var result = await client.runWithResult(script);
+      var result = await _runScript(client, script);
       var stdout = utf8.decode(result.stdout, allowMalformed: true);
       var stderr = utf8.decode(result.stderr, allowMalformed: true);
       var combined =
@@ -228,7 +243,7 @@ class OpenWrtInstaller {
         }
         stage = 'запуск backend после загрузки';
         onProgress?.call('Установка backend и зависимостей...');
-        result = await client.runWithResult('LALUNE_PREUPLOADED=1\n$script');
+        result = await _runScript(client, script, preuploaded: true);
         stdout = utf8.decode(result.stdout, allowMalformed: true);
         stderr = utf8.decode(result.stderr, allowMalformed: true);
         combined = [combined, stdout.trim(), stderr.trim()]
