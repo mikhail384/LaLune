@@ -500,10 +500,43 @@ if have killall; then
   sleep 1
 fi
 
+# Автозапуск после перезагрузки роутера: служба procd (respawn при падении).
+if [ -f /etc/rc.common ] && [ -d /etc/init.d ]; then
+  log 'installing autostart service /etc/init.d/lalune'
+  cat > /etc/init.d/lalune <<LALUNE_INITD
+#!/bin/sh /etc/rc.common
+START=95
+STOP=10
+USE_PROCD=1
+
+start_service() {
+  mkdir -p "$DATA_DIR"
+  procd_open_instance
+  procd_set_param command "$BACKEND_PATH"
+  procd_set_param env HOME="$HOME" PATH="$COMPAT_BIN:/usr/sbin:/usr/bin:/sbin:/bin"
+  procd_set_param cwd "$INSTALL_DIR"
+  procd_set_param respawn 3600 5 0
+  procd_set_param stdout 1
+  procd_set_param stderr 1
+  procd_close_instance
+}
+LALUNE_INITD
+  chmod +x /etc/init.d/lalune
+  /etc/init.d/lalune enable >/dev/null 2>&1 || true
+  USE_PROCD_START=1
+fi
+
 log 'starting backend in background'
 cd "$INSTALL_DIR"
-PATH="$COMPAT_BIN:$PATH" nohup "$BACKEND_PATH" >>"$LOG_FILE" 2>&1 </dev/null &
-pid=$!
+if [ "${USE_PROCD_START:-0}" = 1 ]; then
+  /etc/init.d/lalune restart >/dev/null 2>&1 || /etc/init.d/lalune start >/dev/null 2>&1 || true
+  sleep 2
+  pid="$(pidof lalune-openwrt-backend 2>/dev/null | awk '{print $1}')"
+  [ -n "$pid" ] || pid=0
+else
+  PATH="$COMPAT_BIN:$PATH" nohup "$BACKEND_PATH" >>"$LOG_FILE" 2>&1 </dev/null &
+  pid=$!
+fi
 echo "$pid" > "$PID_FILE"
 sleep 1
 
