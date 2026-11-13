@@ -1,4 +1,4 @@
-﻿name: Build LaLune
+name: Build LaLune
 
 on:
   push:
@@ -173,6 +173,13 @@ jobs:
           lipo -create -output ../../dist-macos/lalune-backend \
             target/x86_64-apple-darwin/release/lalune-backend \
             target/aarch64-apple-darwin/release/lalune-backend
+
+      - name: Copy shared assets
+        run: |
+          set -euo pipefail
+          rm -rf Frontend/assets
+          mkdir -p Frontend/assets
+          cp -R Assets/. Frontend/assets/
 
       - name: Build Flutter app
         working-directory: Frontend
@@ -921,7 +928,6 @@ jobs:
           name: LaLune ${{ steps.version.outputs.tag }}
           make_latest: true
           files: |
-            release/assets/LaLune-macOS.zip
             release/assets/LaLune-Windows.zip
             release/assets/Backend-Windows.zip
             release/assets/Installer-Windows.zip
@@ -950,4 +956,10 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Attach macOS build (optional)
+        if: hashFiles('release/assets/LaLune-macOS.zip') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ steps.version.outputs.tag }}" release/assets/LaLune-macOS.zip --clobber
 
