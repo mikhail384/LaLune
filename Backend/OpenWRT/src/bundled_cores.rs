@@ -53,11 +53,17 @@ impl Core {
     }
 }
 
+/// Каталог, куда приложение заливает ядра для лёгкой сборки без вшитого архива.
+pub const LEAN_DIR: &str = "/usr/lib/lalune-run";
+
 pub fn available() -> bool {
     BUNDLE.is_some()
+        || Core::ALL
+            .iter()
+            .any(|core| Path::new(LEAN_DIR).join(core.filename()).is_file())
 }
 
-pub struct TemporaryCore(PathBuf);
+pub struct TemporaryCore(PathBuf, bool);
 
 impl TemporaryCore {
     pub fn path(&self) -> &Path {
@@ -67,21 +73,74 @@ impl TemporaryCore {
 
 impl Drop for TemporaryCore {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+        // Ядро, лежащее в постоянном кэше на флеше, не удаляем: оно переиспользуется.
+        if !self.1 {
+            let _ = std::fs::remove_file(&self.0);
+        }
     }
 }
 
+/// Каталог постоянного кэша ядра на флеше. Он общий с linux_core: оттуда ядро запускается
+/// без второй копии в /tmp (каталог читаемый всем, чтобы ядро под отдельным UID могло стартовать).
+fn persistent_dir() -> Option<PathBuf> {
+    Some(PathBuf::from("/usr/lib/lalune-run"))
+}
+/// На роутерах с малой ОЗУ `/tmp` — это tmpfs, то есть сама память. Ядро в 10+ МБ там
+/// съедало почти всё и приводило к OOM, поэтому при малой памяти кладём ядро на флеш
+/// (один раз) и переиспользуем.
+fn use_flash_cache() -> bool {
+    std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|text| {
+            text.lines()
+                .find(|l| l.starts_with("MemTotal:"))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|kb| kb.parse::<u64>().ok())
+        })
+        .is_some_and(|kb| kb < 192 * 1024)
+}
+
 pub async fn extract(core: Core) -> Result<Option<TemporaryCore>> {
-    let Some(bytes) = BUNDLE else { return Ok(None) };
+    let Some(bytes) = BUNDLE else {
+        // Лёгкая сборка: ядро уже лежит на флеше, запускаем прямо оттуда.
+        let path = Path::new(LEAN_DIR).join(core.filename());
+        return Ok(path.is_file().then(|| TemporaryCore(path, true)));
+    };
     tokio::task::spawn_blocking(move || {
+        if use_flash_cache() {
+            if let Some(dir) = persistent_dir() {
+                std::fs::create_dir_all(&dir)?;
+                let target = dir.join(core.filename());
+                let expected = {
+                    let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
+                        .context("Архив встроенных OpenWRT-ядер")?;
+                    let size = archive.by_name(core.filename())
+                        .context("Ядро отсутствует в архиве")?.size();
+                    size
+                };
+                if std::fs::metadata(&target).map(|m| m.len() == expected).unwrap_or(false) {
+                    return Ok(Some(TemporaryCore(target, true)));
+                }
+                // Пишем во временный файл рядом и переименовываем: недокачанного ядра не будет.
+                let part = dir.join(format!("{}.part", core.filename()));
+                let _ = std::fs::remove_file(&part);
+                let mut file = OpenOptions::new().write(true).create(true).truncate(true)
+                    .mode(0o755).open(&part)?;
+                copy_core(bytes, core, &mut file)?;
+                drop(file);
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&part, std::fs::Permissions::from_mode(0o755))?;
+                std::fs::rename(&part, &target)?;
+                return Ok(Some(TemporaryCore(target, true)));
+            }
+        }
         let path = std::env::temp_dir().join(format!("lalune-bundle-{}", uuid::Uuid::new_v4()));
         let mut file = OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path)?;
-        let temp = TemporaryCore(path);
+        let temp = TemporaryCore(path, false);
         copy_core(bytes, core, &mut file)?;
         Ok(Some(temp))
     }).await?
 }
-
 fn copy_core(bytes: &[u8], core: Core, output: &mut impl io::Write) -> Result<()> {
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).context("Архив встроенных OpenWRT-ядер")?;
     let entry = archive.by_name(core.filename()).context("Ядро отсутствует в архиве")?;

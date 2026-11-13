@@ -54,6 +54,63 @@ class OpenWrtInstaller {
     return client.runWithResult('${prefix}sh /tmp/lalune-install.sh');
   }
 
+  static Future<Uint8List?> _loadAsset(String path) async {
+    try {
+      final data = await rootBundle.load(path);
+      return data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Загружает файл на роутер порциями (`cat >>`) с sync и сбросом кэша: роутеры с 64 МБ ОЗУ
+  /// не переживают один длинный поток. Если файл нужного размера уже лежит — пропускает.
+  /// Возвращает текст ошибки или null при успехе.
+  static Future<String?> _pushFile(
+    SSHClient client,
+    Uint8List bytes,
+    String target,
+    String label,
+    void Function(String message)? onProgress,
+    void Function(String stage) setStage,
+  ) async {
+    final existing = utf8
+        .decode(await client.run('wc -c < "$target" 2>/dev/null || echo 0'),
+            allowMalformed: true)
+        .trim();
+    if (existing == '${bytes.length}') {
+      onProgress?.call('$label на роутере уже актуально, загрузка не нужна');
+      await client.run('chmod 755 "$target"');
+      return null;
+    }
+    await client.run('rm -f "$target.part"');
+    const chunk = 128 * 1024;
+    var chunkIndex = 0;
+    for (var offset = 0; offset < bytes.length; offset += chunk) {
+      final end = offset + chunk < bytes.length ? offset + chunk : bytes.length;
+      final session = await client.execute('cat >> "$target.part"');
+      session.stdin.add(Uint8List.sublistView(bytes, offset, end));
+      await session.stdin.close();
+      await session.done;
+      chunkIndex++;
+      final percent = end * 100 ~/ bytes.length;
+      setStage('передача: $label ($percent%)');
+      if (chunkIndex % 8 == 0) {
+        await client.run('sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null; true');
+        onProgress?.call('Передача на роутер: $label, $percent%');
+      }
+    }
+    await client.run('sync');
+    final size = utf8
+        .decode(await client.run('wc -c < "$target.part"'), allowMalformed: true)
+        .trim();
+    if (size != '${bytes.length}') {
+      return 'Файл ($label) передан не полностью ($size из ${bytes.length} байт). '
+          'Проверьте свободное место на роутере (df -h /overlay) и повторите.';
+    }
+    await client.run('chmod 755 "$target.part"; mv -f "$target.part" "$target"');
+    return null;
+  }
   /// Код выхода скрипта: роутер не смог скачать backend, нужна загрузка с телефона.
   static const needUploadExitCode = 28;
 
@@ -175,27 +232,17 @@ class OpenWrtInstaller {
       var combined =
           [stdout.trim(), stderr.trim()].where((s) => s.isNotEmpty).join('\n');
 
-      // Роутер не смог скачать backend (например, GitHub недоступен у провайдера):
-      // скачиваем на телефоне (или берём встроенную копию) и загружаем по SSH.
+      // Роутер не смог скачать backend (GitHub недоступен) или у него мало памяти: тогда
+      // загружаем файлы с телефона (из приложения) по SSH.
       if (result.exitCode == needUploadExitCode) {
         final abi = RegExp(r'LALUNE_NEED_UPLOAD abi=(\S+)')
             .firstMatch(stderr)
             ?.group(1);
+        final lean = stderr.contains('lean=1');
         if (abi == null) {
           return OpenWrtInstallResult(
             ok: false,
             message: 'Роутер не скачал backend, архитектура не определена',
-            log: combined,
-          );
-        }
-        onProgress?.call('Роутер не достучался до GitHub. Загружаю backend с телефона...');
-        final bytes = await _obtainBackend(abi, onProgress);
-        if (bytes == null) {
-          return OpenWrtInstallResult(
-            ok: false,
-            message:
-                'Роутер не может скачать backend, а телефон не смог получить файл для $abi. '
-                'Подключите телефон к сети, где доступен GitHub (VPN/другая сеть), и повторите.',
             log: combined,
           );
         }
@@ -204,66 +251,60 @@ class OpenWrtInstaller {
             .decode((await client.run(r'echo "$HOME"')), allowMalformed: true)
             .trim();
         final dir = (home.isEmpty ? '/root' : home) + '/la-lune';
-        onProgress?.call('Передача backend на роутер (${(bytes.length / 1048576).toStringAsFixed(1)} МБ)...');
         await client.run('mkdir -p "$dir"');
         final target = '$dir/lalune-openwrt-backend';
+        void setStage(String s) => stage = s;
 
-        // Освобождаем ОЗУ: на роутерах с 64 МБ запущенный backend + заливка 20 МБ
-        // приводят к тому, что Dropbear рвёт соединение.
-        await client.run('/etc/init.d/lalune stop >/dev/null 2>&1; '
-            'killall lalune-openwrt-backend >/dev/null 2>&1; '
-            'killall csqtt-client >/dev/null 2>&1; sleep 1; '
-            'echo 3 > /proc/sys/vm/drop_caches 2>/dev/null; true');
-
-        // Если на роутере уже лежит файл нужного размера (прошлая установка) — не льём заново.
-        final existing = utf8
-            .decode(await client.run('wc -c < "$target" 2>/dev/null || echo 0'),
-                allowMalformed: true)
-            .trim();
-        if (existing == '${bytes.length}') {
-          onProgress?.call('Файл backend на роутере уже актуален, загрузка не нужна');
-        } else {
-          // Роутеры с 64 МБ ОЗУ не переживают один длинный поток в 20 МБ: буфер записи на
-          // флеш раздувает память. Льём порциями по 128 КБ, каждая — отдельным коротким
-          // exec с `cat >>`, и периодически делаем sync и сбрасываем кэш.
-          await client.run('rm -f "$target.part"');
-          stage = 'передача файла';
-          const chunk = 128 * 1024;
-          var sent = 0;
-          var chunkIndex = 0;
-          for (var offset = 0; offset < bytes.length; offset += chunk) {
-            final end = offset + chunk < bytes.length ? offset + chunk : bytes.length;
-            final piece = Uint8List.sublistView(bytes, offset, end);
-            final session = await client.execute('cat >> "$target.part"');
-            session.stdin.add(piece);
-            await session.stdin.close();
-            await session.done;
-            sent = end;
-            chunkIndex++;
-            stage = 'передача файла (${sent * 100 ~/ bytes.length}%)';
-            if (chunkIndex % 8 == 0) {
-              await client.run(
-                  'sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null; true');
-              onProgress?.call(
-                  'Передача backend на роутер: ${(sent * 100 ~/ bytes.length)}%');
-            }
-          }
-          await client.run('sync');
-          final size = utf8
-              .decode(await client.run('wc -c < "$target.part"'),
-                  allowMalformed: true)
-              .trim();
-          if (size != '${bytes.length}') {
+        if (lean) {
+          // Лёгкая сборка для роутеров с малой памятью/флешем: backend без вшитых ядер
+          // (~6,5 МБ) + одно ядро (~10,6 МБ) отдельным файлом. Вместе с вшитыми ядрами
+          // (19,5 МБ) такой роутер не вмещает ни backend, ни распакованное ядро.
+          onProgress?.call('Роутер с малой памятью: загружаю лёгкую сборку...');
+          final leanBackend =
+              await _loadAsset('assets/openwrt/lalune-openwrt-backend-$abi-lean');
+          final leanCore = await _loadAsset('assets/openwrt/csqttr-client-$abi');
+          if (leanBackend == null || leanCore == null) {
             return OpenWrtInstallResult(
               ok: false,
-              message:
-                  'Файл передан не полностью ($size из ${bytes.length} байт). Повторите установку.',
+              message: 'Роутеру ($abi) не хватает памяти для полной сборки, а лёгкой '
+                  'сборки для него в приложении нет.',
               log: combined,
             );
           }
-          await client.run('mv -f "$target.part" "$target"');
-        }
-        stage = 'запуск backend после загрузки';
+          // Освобождаем флеш: старый полный backend занимает ~20 МБ из 23.
+          await client.run('rm -f "$target" "$target.part" '
+              '/usr/lib/lalune-run/*.part 2>/dev/null; '
+              'mkdir -p /usr/lib/lalune-run && chmod 755 /usr/lib/lalune-run; sync');
+          final coreError = await _pushFile(client, leanCore,
+              '/usr/lib/lalune-run/csqttr-client', 'ядро', onProgress, setStage);
+          if (coreError != null) {
+            return OpenWrtInstallResult(
+                ok: false, message: coreError, log: combined);
+          }
+          final backendError = await _pushFile(
+              client, leanBackend, target, 'backend', onProgress, setStage);
+          if (backendError != null) {
+            return OpenWrtInstallResult(
+                ok: false, message: backendError, log: combined);
+          }
+        } else {
+          onProgress?.call('Роутер не достучался до GitHub. Загружаю backend с телефона...');
+          final bytes = await _obtainBackend(abi, onProgress);
+          if (bytes == null) {
+            return OpenWrtInstallResult(
+              ok: false,
+              message:
+                  'Роутер не может скачать backend, а телефон не смог получить файл для $abi. '
+                  'Подключите телефон к сети, где доступен GitHub (VPN/другая сеть), и повторите.',
+              log: combined,
+            );
+          }
+          final error = await _pushFile(
+              client, bytes, target, 'backend', onProgress, setStage);
+          if (error != null) {
+            return OpenWrtInstallResult(ok: false, message: error, log: combined);
+          }
+        }        stage = 'запуск backend после загрузки';
         onProgress?.call('Установка backend и зависимостей...');
         result = await _runScript(client, script, preuploaded: true);
         stdout = utf8.decode(result.stdout, allowMalformed: true);
@@ -546,6 +587,16 @@ if [ ! -e /etc/ssl/certs/ca-certificates.crt ] && [ ! -e /etc/ssl/cert.pem ]; th
   install_packages ca-bundle ca-certificates || true
 fi
 
+# Роутеры с малой памятью (< 192 МБ): полная сборка (с вшитыми ядрами, ~20 МБ) не поместится,
+# ставим лёгкую — файлы заливает приложение с телефона.
+mem_kb="$(awk '/MemTotal/{print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+LEAN=0
+[ "${mem_kb:-0}" -gt 0 ] && [ "${mem_kb:-0}" -lt 196608 ] && LEAN=1
+if [ "${LALUNE_PREUPLOADED:-0}" != 1 ] && [ "$LEAN" = 1 ]; then
+  log 'low-memory router: need lean build uploaded from the phone'
+  echo "LALUNE_NEED_UPLOAD abi=$abi lean=1" >&2
+  exit 28
+fi
 if [ "${LALUNE_PREUPLOADED:-0}" = 1 ] && [ -s "$BACKEND_PATH" ]; then
   log 'using backend uploaded from the phone'
 else

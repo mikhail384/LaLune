@@ -394,7 +394,11 @@ jobs:
           name: Output-OpenWRT-Ramips
           path: |
             Backend/OpenWRT/output/lalune-openwrt-backend-ramips
+            Backend/OpenWRT/output/lalune-openwrt-backend-ramips-lean
             Backend/OpenWRT/output/lalune-openwrt-cores-ramips.zip
+            Backend/OpenWRT/output/csqtt-client-ramips
+            Backend/OpenWRT/output/csqttr-client-ramips
+            Backend/OpenWRT/output/csqtt-219-ramips
           if-no-files-found: error
           compression-level: 0
 
@@ -866,6 +870,8 @@ jobs:
           cp release/openwrt/lalune-openwrt-cores-aarch64.zip release/assets/
           cp release/openwrt-ramips/lalune-openwrt-backend-ramips release/assets/
           cp release/openwrt-ramips/lalune-openwrt-cores-ramips.zip release/assets/
+          cp release/openwrt-ramips/lalune-openwrt-backend-ramips-lean release/assets/
+          for core in csqtt-client csqttr-client csqtt-219; do cp "release/openwrt-ramips/$core-ramips" release/assets/; done
           for abi in x86_64 i386 armv7 armv5 mips; do
             cp "release/openwrt-multi/lalune-openwrt-backend-$abi" release/assets/
             cp "release/openwrt-multi/lalune-openwrt-cores-$abi.zip" release/assets/
@@ -937,6 +943,10 @@ jobs:
             release/assets/lalune-openwrt-cores-aarch64.zip
             release/assets/lalune-openwrt-backend-ramips
             release/assets/lalune-openwrt-cores-ramips.zip
+            release/assets/lalune-openwrt-backend-ramips-lean
+            release/assets/csqtt-client-ramips
+            release/assets/csqttr-client-ramips
+            release/assets/csqtt-219-ramips
             release/assets/lalune-openwrt-backend-x86_64
             release/assets/lalune-openwrt-cores-x86_64.zip
             release/assets/lalune-openwrt-backend-i386

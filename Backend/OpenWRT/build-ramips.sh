@@ -116,3 +116,19 @@ binary="$CARGO_TARGET_DIR/$rust_target/release/lalune-openwrt-backend"
 verify_mipsel "$binary"
 install -m 755 "$binary" output/lalune-openwrt-backend-ramips
 cp "$LALUNE_OPENWRT_CORES" output/lalune-openwrt-cores-ramips.zip
+
+# Лёгкая сборка для роутеров с малой флеш-памятью: без вшитых ядер (экономит ~13 МБ);
+# нужное ядро кладётся отдельным файлом в /usr/lib/lalune-run (его заливает приложение).
+(
+    unset LALUNE_OPENWRT_CORES
+    export LALUNE_OPENWRT_LEAN=1
+    export CARGO_TARGET_DIR="$cache/target-backend-lean"
+    cd "$backend_dir"
+    build --bin lalune-openwrt-backend
+    lean_binary="$CARGO_TARGET_DIR/$rust_target/release/lalune-openwrt-backend"
+    verify_mipsel "$lean_binary"
+    install -m 755 "$lean_binary" output/lalune-openwrt-backend-ramips-lean
+)
+for core in csqtt-client csqttr-client csqtt-219; do
+    install -m 755 "$work/$core" "output/$core-ramips"
+done

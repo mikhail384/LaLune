@@ -8,9 +8,27 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 
+/// Каталог на флеше (не tmpfs) для ядра на роутерах с малой ОЗУ; доступен всем для чтения/запуска.
+pub const FLASH_RUN_DIR: &str = "/usr/lib/lalune-run";
+
+/// true, если ОЗУ меньше 192 МБ: тогда /tmp (tmpfs) не должен хранить копии ядра.
+pub fn low_memory() -> bool {
+    fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|text| {
+            text.lines()
+                .find(|l| l.starts_with("MemTotal:"))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|kb| kb.parse::<u64>().ok())
+        })
+        .is_some_and(|kb| kb < 192 * 1024)
+}
+
 pub struct CoreUser {
     pub uid: u32,
     directory: PathBuf,
+    /// Ядро запускается прямо из флеш-каталога (без копии в /tmp).
+    exe_override: Option<PathBuf>,
     _lease: File,
 }
 
@@ -77,14 +95,22 @@ impl CoreUser {
             .context("Нет свободной UID для ядра LaLune")?;
         let directory = std::env::temp_dir().join(format!("lalune-core-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&directory)?;
+        let exe_override = if low_memory() && source.starts_with(FLASH_RUN_DIR) {
+            Some(source.to_path_buf())
+        } else {
+            None
+        };
         let user = Self {
             uid,
             directory,
+            exe_override,
             _lease: lease,
         };
         fs::set_permissions(&user.directory, fs::Permissions::from_mode(0o755))?;
-        fs::copy(source, user.executable()).context("Копирование ядра во временный каталог")?;
-        fs::set_permissions(user.executable(), fs::Permissions::from_mode(0o555))?;
+        if user.exe_override.is_none() {
+            fs::copy(source, user.executable()).context("Копирование ядра во временный каталог")?;
+            fs::set_permissions(user.executable(), fs::Permissions::from_mode(0o555))?;
+        }
         fs::create_dir(user.workdir())?;
         fs::set_permissions(user.workdir(), fs::Permissions::from_mode(0o700))?;
         std::os::unix::fs::chown(user.workdir(), Some(uid), Some(uid))?;
@@ -98,7 +124,10 @@ impl CoreUser {
     }
 
     pub fn executable(&self) -> PathBuf {
-        self.directory.join("core")
+        match &self.exe_override {
+            Some(path) => path.clone(),
+            None => self.directory.join("core"),
+        }
     }
     pub fn workdir(&self) -> PathBuf {
         self.directory.join("work")
