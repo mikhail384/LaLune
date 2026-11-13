@@ -556,7 +556,7 @@ mod tests {
 }
 
 /// Максимум воркеров на роутере с малой памятью.
-pub const LOW_MEMORY_MAX_WORKERS: i32 = 3;
+pub const LOW_MEMORY_MAX_WORKERS: i32 = 6;
 
 /// true, если на роутере меньше 192 МБ ОЗУ (по /proc/meminfo).
 pub fn low_memory() -> bool {

@@ -468,6 +468,9 @@ impl OpenWrtRouting {
     fn install_nft(&mut self, name: &str, wan: &str, uid: u32, dns: &str) -> Result<()> {
         let local = LOCAL_DESTINATIONS.join(", ");
         let set_mark = "meta mark set meta mark & 0xffff0000 | 0x1062";
+        // MSS = MTU туннеля - 40 (IPv4 + TCP): иначе большие пакеты клиентов LAN теряются в туннеле
+        // и соединения очень медленные.
+        let mss = TUN_MTU - 40;
         let script = format!(
             "table ip {NFT_MANGLE_TABLE} {{\n\
              \tchain output {{\n\
@@ -482,6 +485,11 @@ impl OpenWrtRouting {
              \t\tiifname \"{wan}\" return\n\
              \t\tip daddr {{ {local} }} return\n\
              \t\t{set_mark}\n\
+             \t}}\n\
+             \tchain forward {{\n\
+             \t\ttype filter hook forward priority mangle; policy accept;\n\
+             \t\toifname \"{name}\" tcp flags & (syn | rst) == syn tcp option maxseg size > {mss} tcp option maxseg size set {mss}\n\
+             \t\tiifname \"{name}\" tcp flags & (syn | rst) == syn tcp option maxseg size > {mss} tcp option maxseg size set {mss}\n\
              \t}}\n\
              }}\n"
         );
