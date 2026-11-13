@@ -40,6 +40,15 @@ class OpenWrtInstaller {
     upload.stdin.add(Uint8List.fromList(utf8.encode(script)));
     await upload.stdin.close();
     await upload.done;
+    // Убеждаемся, что скрипт дошёл целиком (иначе sh выполнит обрезанный файл молча).
+    final expected = utf8.encode(script).length;
+    final got = utf8
+        .decode(await client.run('wc -c < /tmp/lalune-install.sh'),
+            allowMalformed: true)
+        .trim();
+    if (got != '$expected') {
+      throw StateError('скрипт передан не полностью ($got из $expected байт)');
+    }
     final prefix = preuploaded ? 'LALUNE_PREUPLOADED=1 ' : '';
     return client.runWithResult('${prefix}sh /tmp/lalune-install.sh');
   }
@@ -252,10 +261,22 @@ class OpenWrtInstaller {
       }
 
       if (result.exitCode != 0 || !stdout.contains('LALUNE_INSTALL_OK')) {
+        // Диагностика: код выхода и последние сообщения ядра (OOM-killer и т. п.).
+        var extra = 'код выхода: ${result.exitCode}';
+        try {
+          final k = utf8
+              .decode(
+                  await client.run(
+                      'dmesg 2>/dev/null | grep -iE "killed process|out of memory" | tail -n 3; '
+                      'free 2>/dev/null | sed -n 2p'),
+                  allowMalformed: true)
+              .trim();
+          if (k.isNotEmpty) extra += '\n$k';
+        } catch (_) {}
         return OpenWrtInstallResult(
           ok: false,
           message: 'Установка по SSH завершилась с ошибкой',
-          log: combined,
+          log: [combined, extra].where((s) => s.isNotEmpty).join('\n'),
         );
       }
 

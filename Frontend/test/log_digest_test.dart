@@ -67,4 +67,12 @@ void main() {
     ];
     expect(digestLogs(raw).length, lessThanOrEqualTo(40));
   });
+
+  test('digest carries the time of the latest event', () {
+    final e = digestLogs(
+      ['[VPN] connecting using CSQTT 2.1.9', '[VPN] timeout'],
+      times: ['12:00:01', '12:00:09'],
+    );
+    expect(e.map((x) => x.time).toList(), ['12:00:01', '12:00:09']);
+  });
 }

@@ -17,12 +17,16 @@ class DigestEntry {
   final int count;
   final String value;
 
+  /// Время последнего события (ЧЧ:ММ:СС); пусто, если неизвестно.
+  final String time;
+
   const DigestEntry({
     required this.key,
     required this.level,
     required this.template,
     this.count = 1,
     this.value = '',
+    this.time = '',
   });
 
   String get text {
@@ -38,13 +42,15 @@ class DigestEntry {
   /// Показывать «×N» отдельно, если счётчик не встроен в текст.
   bool get showRepeat => count > 1 && !template.contains('{n}');
 
-  DigestEntry copyWith({int? count, String? value, DigestLevel? level}) =>
+  DigestEntry copyWith(
+          {int? count, String? value, DigestLevel? level, String? time}) =>
       DigestEntry(
         key: key,
         level: level ?? this.level,
         template: template,
         count: count ?? this.count,
         value: value ?? this.value,
+        time: time ?? this.time,
       );
 }
 
@@ -124,9 +130,12 @@ final RegExp _errorWord =
     RegExp(r'error|exception|ошибк|не удалось|failed', caseSensitive: false);
 
 /// Сворачивает сырые строки в короткий список (старые → новые).
-List<DigestEntry> digestLogs(List<String> raw, {int maxEntries = 40}) {
+List<DigestEntry> digestLogs(List<String> raw,
+    {int maxEntries = 40, List<String>? times}) {
   final out = <DigestEntry>[];
   DigestEntry? stats;
+
+  var currentTime = '';
 
   void emit(String key, DigestLevel level, String template, {String? capture}) {
     final idx = out.lastIndexWhere((e) => e.key == key);
@@ -137,6 +146,7 @@ List<DigestEntry> digestLogs(List<String> raw, {int maxEntries = 40}) {
         count: e.count + 1,
         value: capture ?? '${e.count + 1}',
         level: level,
+        time: currentTime,
       );
       return;
     }
@@ -145,13 +155,15 @@ List<DigestEntry> digestLogs(List<String> raw, {int maxEntries = 40}) {
       level: level,
       template: template,
       value: capture ?? '1',
+      time: currentTime,
     ));
   }
 
   outer:
-  for (final line in raw) {
-    final s = line.trim();
+  for (var index = 0; index < raw.length; index++) {
+    final s = raw[index].trim();
     if (s.isEmpty) continue;
+    currentTime = (times != null && index < times.length) ? times[index] : '';
 
     final st = _stats.firstMatch(s);
     if (st != null) {
@@ -159,6 +171,7 @@ List<DigestEntry> digestLogs(List<String> raw, {int maxEntries = 40}) {
         key: 'stats',
         level: DigestLevel.info,
         template: 'Сессий: ${st.group(1)}, трафик ядра: ${st.group(2)} МБ',
+        time: currentTime,
       );
       continue;
     }

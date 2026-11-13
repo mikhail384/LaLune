@@ -42,16 +42,32 @@ class LogsState {
 
   /// Все строки (backend + ядро, ≤1200) — источник короткого лога.
   final List<String> allLines;
+
+  /// Время появления строк (ЧЧ:ММ:СС), по индексам lines/llLines; пусто, если неизвестно.
+  final List<String> times;
+  final List<String> allTimes;
   final bool loading;
 
-  const LogsState(
-      {this.lines = const [], this.allLines = const [], this.loading = false});
+  const LogsState({
+    this.lines = const [],
+    this.allLines = const [],
+    this.times = const [],
+    this.allTimes = const [],
+    this.loading = false,
+  });
 
-  LogsState copyWith(
-          {List<String>? lines, List<String>? allLines, bool? loading}) =>
+  LogsState copyWith({
+    List<String>? lines,
+    List<String>? allLines,
+    List<String>? times,
+    List<String>? allTimes,
+    bool? loading,
+  }) =>
       LogsState(
         lines: lines ?? this.lines,
         allLines: allLines ?? this.allLines,
+        times: times ?? this.times,
+        allTimes: allTimes ?? this.allTimes,
         loading: loading ?? this.loading,
       );
 }
@@ -70,6 +86,10 @@ class LogsNotifier extends StateNotifier<LogsState> {
   /// Опрос и WebSocket работают только пока открыта вкладка «Логи»: в фоне они
   /// зря грузили слабые телефоны (каждые 3 с — до 1200 строк).
   bool _active = false;
+
+  /// Строки, которые появились, пока вкладка была закрыта, получают пустое время:
+  /// мы не знаем, когда они были записаны. Штамп ставим только живым строкам.
+  bool _stamp = false;
   final List<String> _buffer = [];
   Timer? _flush;
 
@@ -79,7 +99,9 @@ class LogsNotifier extends StateNotifier<LogsState> {
     _baseUrlSub = api.baseUrlChanges.listen((_) {
       _stopWebSocket();
       _buffer.clear();
-      state = state.copyWith(lines: const [], allLines: const []);
+      state = state.copyWith(
+          lines: const [], allLines: const [], times: const [], allTimes: const []);
+      _stamp = false;
       if (_active) {
         _startWebSocket();
         _refresh();
@@ -102,6 +124,7 @@ class LogsNotifier extends StateNotifier<LogsState> {
   void activate() {
     if (_active) return;
     _active = true;
+    _stamp = false;
     _refresh();
     _poll = Timer.periodic(const Duration(seconds: 3), (_) => _refresh());
     _startWebSocket();
@@ -238,20 +261,65 @@ class LogsNotifier extends StateNotifier<LogsState> {
     final allTail = all.length > _maxAllLines
         ? all.sublist(all.length - _maxAllLines)
         : all;
-    final shown =
-        _showCoreLogs ? allTail : allTail.where((l) => !_isCoreLog(l)).toList();
-    state = state.copyWith(lines: _tail(shown), allLines: allTail);
+    final allTimes = _alignTimes(allTail);
+    final showCore = _showCoreLogs;
+    var shownIdx = <int>[
+      for (var i = 0; i < allTail.length; i++)
+        if (showCore || !_isCoreLog(allTail[i])) i,
+    ];
+    if (shownIdx.length > _maxLogLines) {
+      shownIdx = shownIdx.sublist(shownIdx.length - _maxLogLines);
+    }
+    state = state.copyWith(
+      lines: [for (final i in shownIdx) allTail[i]],
+      times: [for (final i in shownIdx) allTimes[i]],
+      allLines: allTail,
+      allTimes: allTimes,
+    );
+    if (allTail.isNotEmpty) _stamp = true;
   }
 
-  List<String> _tail(List<String> lines) => lines.length > _maxLogLines
-      ? lines.sublist(lines.length - _maxLogLines)
-      : lines;
+  /// Сопоставляет новый список строк со старым: известные строки сохраняют время,
+  /// новые получают текущее (если уже можно ставить штамп).
+  List<String> _alignTimes(List<String> next) {
+    final prev = state.allLines;
+    final prevTimes = state.allTimes;
+    final now = DateTime.now();
+    String two(int v) => v.toString().padLeft(2, '0');
+    final stamp =
+        _stamp ? '${two(now.hour)}:${two(now.minute)}:${two(now.second)}' : '';
+    var offset = 0;
+    var overlap = 0;
+    if (prev.isNotEmpty && next.isNotEmpty && prevTimes.length == prev.length) {
+      for (var k = 0; k < prev.length; k++) {
+        if (prev[k] != next[0]) continue;
+        final m = prev.length - k;
+        if (m > next.length) continue;
+        var same = true;
+        for (var i = 1; i < m; i++) {
+          if (prev[k + i] != next[i]) {
+            same = false;
+            break;
+          }
+        }
+        if (same) {
+          offset = k;
+          overlap = m;
+          break;
+        }
+      }
+    }
+    return [
+      for (var i = 0; i < next.length; i++)
+        i < overlap ? prevTimes[offset + i] : stamp,
+    ];
+  }
 
   Future<void> clear() async {
     final api = _ref.read(apiClientProvider);
     try {
       await api.deleteJson('/logs');
-      state = state.copyWith(lines: [], allLines: []);
+      state = state.copyWith(lines: [], allLines: [], times: [], allTimes: []);
     } catch (_) {}
   }
 

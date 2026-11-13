@@ -30,10 +30,10 @@ class _LogsPageState extends ConsumerState<LogsPage> {
   List<String>? _digestSource;
   List<DigestEntry> _digestCache = const [];
 
-  List<DigestEntry> _digestOf(List<String> all) {
+  List<DigestEntry> _digestOf(List<String> all, List<String> times) {
     if (!identical(all, _digestSource)) {
       _digestSource = all;
-      _digestCache = digestLogs(all);
+      _digestCache = digestLogs(all, times: times);
     }
     return _digestCache;
   }
@@ -61,9 +61,15 @@ class _LogsPageState extends ConsumerState<LogsPage> {
     final recentLines = logs.lines.length > _maxVisibleLogs
         ? logs.lines.sublist(logs.lines.length - _maxVisibleLogs)
         : logs.lines;
+    final recentTimes = logs.times.length == logs.lines.length
+        ? (logs.times.length > _maxVisibleLogs
+            ? logs.times.sublist(logs.times.length - _maxVisibleLogs)
+            : logs.times)
+        : List<String>.filled(recentLines.length, '');
     final visibleLines = recentLines.reversed.toList(growable: false);
+    final visibleTimes = recentTimes.reversed.toList(growable: false);
     final stats = _LogStats.fromLines(recentLines);
-    final digest = _digestOf(logs.allLines);
+    final digest = _digestOf(logs.allLines, logs.allTimes);
     final shortWarn = digest.where((e) => e.level == DigestLevel.warn).length;
     final shortErr = digest.where((e) => e.level == DigestLevel.error).length;
 
@@ -92,11 +98,19 @@ class _LogsPageState extends ConsumerState<LogsPage> {
                         : () async {
                             await Clipboard.setData(ClipboardData(
                                 text: _detailed
-                                    ? logs.lines.join('\n')
+                                    ? [
+                                    for (var i = 0; i < logs.lines.length; i++)
+                                      (i < logs.times.length && logs.times[i].isNotEmpty
+                                              ? '[${logs.times[i]}] '
+                                              : '') +
+                                          logs.lines[i],
+                                  ].join('\n')
                                     : digest.map((e) {
                                         final rep =
                                             e.showRepeat ? ' ×${e.count}' : '';
-                                        return '${_levelMark(e.level)} ${e.text}$rep';
+                                        final at =
+                                            e.time.isEmpty ? '' : '${e.time} ';
+                                        return '$at${_levelMark(e.level)} ${e.text}$rep';
                                       }).join('\n')));
                             if (context.mounted) {
                               ScaffoldMessenger.of(context).showSnackBar(
@@ -223,6 +237,7 @@ class _LogsPageState extends ConsumerState<LogsPage> {
                                       key: ValueKey(
                                           '${index}_${visibleLines[index].hashCode}'),
                                       line: visibleLines[index],
+                                      time: visibleTimes[index],
                                     ),
                                   ),
                                 ),
@@ -303,6 +318,18 @@ class _ShortLog extends StatelessWidget {
                             BoxDecoration(color: color, shape: BoxShape.circle),
                       ),
                     ),
+                    if (e.time.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2, right: 8),
+                        child: Text(
+                          e.time,
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            color: Colors.white.withOpacity(0.45),
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                          ),
+                        ),
+                      ),
                     Expanded(
                       child: Text(
                         e.showRepeat ? '${e.text}  ×${e.count}' : e.text,
@@ -325,7 +352,8 @@ class _ShortLog extends StatelessWidget {
 
 class _LogLine extends StatefulWidget {
   final String line;
-  const _LogLine({super.key, required this.line});
+  final String time;
+  const _LogLine({super.key, required this.line, this.time = ''});
 
   @override
   State<_LogLine> createState() => _LogLineState();
@@ -359,9 +387,9 @@ class _LogLineState extends State<_LogLine> {
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               _SeverityChip(severity: severity),
-              if (parsed.time.isNotEmpty)
+              if (parsed.time.isNotEmpty || widget.time.isNotEmpty)
                 Text(
-                  parsed.time,
+                  parsed.time.isNotEmpty ? parsed.time : widget.time,
                   style: TextStyle(
                     fontSize: 10,
                     color: Colors.white.withOpacity(0.55),
