@@ -72,6 +72,7 @@ flutter:
   # Сюда build.py копирует корневой Assets/.
   assets:
     - assets/
+    - assets/openwrt/
 
   fonts:
     - family: Nunito

@@ -517,6 +517,10 @@ def main() -> int:
             status("INFO", f"packaging fresh frontend for installer: {frontend_zip}")
             zip_dir(frontend_dir, frontend_zip)
             status("OK", f"Frontend.zip ({frontend_zip.stat().st_size // 1024} KB)")
+            # Свежий бэкенд встраиваем в установщик локально (без скачивания из релиза).
+            backend_zip_local = INSTALLER / "Backend-Windows.zip"
+            zip_file(backend_bin, backend_zip_local, arcname="LaLuneManager.exe")
+            status("OK", f"Backend-Windows.zip ({backend_zip_local.stat().st_size // 1024} KB)")
             installer_exe = build_installer()
             if installer_exe:
                 status("INFO", f"installer exe: {installer_exe}")

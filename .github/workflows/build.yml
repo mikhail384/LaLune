@@ -1,4 +1,4 @@
-name: Build LaLune
+﻿name: Build LaLune
 
 on:
   push:
@@ -123,7 +123,7 @@ jobs:
             clang cmake ninja-build pkg-config \
             libgtk-3-dev liblzma-dev \
             libstdc++-12-dev
-      - name: Install Pillow (для make_icons.py)
+      - name: Install Pillow (РґР»СЏ make_icons.py)
         run: python -m pip install --upgrade pip Pillow
 
       - name: Generate icons
@@ -139,13 +139,13 @@ jobs:
           if-no-files-found: error
 
   # ============================================================
-  #  Desktop macOS (универсальный бэкенд + Flutter .app)
-  #  Не блокирует релиз: собирается с continue-on-error.
+  #  Desktop macOS (СѓРЅРёРІРµСЂСЃР°Р»СЊРЅС‹Р№ Р±СЌРєРµРЅРґ + Flutter .app)
+  #  РќРµ Р±Р»РѕРєРёСЂСѓРµС‚ СЂРµР»РёР·: СЃРѕР±РёСЂР°РµС‚СЃСЏ СЃ continue-on-error.
   # ============================================================
   build-desktop-macos:
     name: Desktop macOS
     needs: prepare-version
-    runs-on: macos-14
+    runs-on: macos-latest
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -260,10 +260,10 @@ jobs:
           Write-Host "WindowsSDKVersion: $env:WindowsSDKVersion"
           where.exe cl.exe
           where.exe link.exe
-      - name: Install Pillow (для make_icons.py)
+      - name: Install Pillow (РґР»СЏ make_icons.py)
         run: python -m pip install --upgrade pip Pillow
 
-      - name: Generate icons (PNG→ICO + foreground)
+      - name: Generate icons (PNGв†’ICO + foreground)
         run: python make_icons.py
 
       - name: Flutter doctor (diagnostics)
@@ -519,8 +519,8 @@ jobs:
           echo "NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
 
       # ============================================================
-      #  csqtt-link: собрать как бинарник для Android (все ABI)
-      #  и положить в jniLibs/<abi>/libcsqtt-link.so
+      #  csqtt-link: СЃРѕР±СЂР°С‚СЊ РєР°Рє Р±РёРЅР°СЂРЅРёРє РґР»СЏ Android (РІСЃРµ ABI)
+      #  Рё РїРѕР»РѕР¶РёС‚СЊ РІ jniLibs/<abi>/libcsqtt-link.so
       # ============================================================
       - name: Build csqtt-link for Android (all ABIs)
         shell: bash
@@ -655,7 +655,7 @@ jobs:
           cp Core/SmartTunnel.lua   Frontend/android/app/src/main/assets/SmartTunnel.lua
           cp Core/csqtt_decode.lua  Frontend/android/app/src/main/assets/csqtt_decode.lua
 
-      - name: Install Pillow (для make_icons.py)
+      - name: Install Pillow (РґР»СЏ make_icons.py)
         run: python -m pip install --upgrade pip Pillow
 
       - name: Generate icons (foreground + ico)
@@ -907,8 +907,8 @@ jobs:
             fi
             SHORT_SHA="$(git rev-parse --short=7 HEAD)"
             VERSION="${STABLE}-${SHORT_SHA}"
-            # Не prerelease: установщики берут файлы по /releases/latest/download/,
-            # а GitHub не считает prerelease "latest" — автоустановка тогда получала бы 404.
+            # РќРµ prerelease: СѓСЃС‚Р°РЅРѕРІС‰РёРєРё Р±РµСЂСѓС‚ С„Р°Р№Р»С‹ РїРѕ /releases/latest/download/,
+            # Р° GitHub РЅРµ СЃС‡РёС‚Р°РµС‚ prerelease "latest" вЂ” Р°РІС‚РѕСѓСЃС‚Р°РЅРѕРІРєР° С‚РѕРіРґР° РїРѕР»СѓС‡Р°Р»Р° Р±С‹ 404.
             PRERELEASE=false
           fi
           echo "tag=$VERSION" >> "$GITHUB_OUTPUT"

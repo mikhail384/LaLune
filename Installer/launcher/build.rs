@@ -137,7 +137,17 @@ fn main() -> Result<()> {
         println!("cargo:warning=Frontend.zip not found next to build.rs; downloading latest LaLune-Windows.zip");
         download(&client, URL_LALUNE_ZIP, &embedded_frontend)?;
     }
-    download(&client, URL_BACKEND_ZIP, &out.join("Backend-Windows.zip"))?;
+    // Локальный Backend-Windows.zip (его кладёт build.py) важнее скачивания: в новом репозитории
+    // релиза ещё нет, и ссылка /releases/latest/download/ отвечает 404.
+    let backend_zip = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Backend-Windows.zip");
+    println!("cargo:rerun-if-changed={}", backend_zip.display());
+    if backend_zip.is_file() {
+        println!("cargo:warning=using local Backend-Windows.zip: {}", backend_zip.display());
+        fs::copy(&backend_zip, out.join("Backend-Windows.zip"))
+            .with_context(|| format!("copy local Backend-Windows.zip from {}", backend_zip.display()))?;
+    } else {
+        download(&client, URL_BACKEND_ZIP, &out.join("Backend-Windows.zip"))?;
+    }
     download(&client, URL_CSQTT_EXE, &out.join("client-windows-x86_64.exe"))?;
     download(&client, URL_CSQTT_219_EXE, &out.join("csqtt-219.exe"))?;
     fs::write(out.join("LATEST.CSQTT-2.1.9"), CSQTT_219_VERSION)?;

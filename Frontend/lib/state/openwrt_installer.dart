@@ -3,8 +3,11 @@
 // Установка LaLune backend на OpenWRT по SSH.
 
 import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:dartssh2/dartssh2.dart';
+import 'package:flutter/services.dart' show rootBundle;
 
 import '../api/api_client.dart';
 
@@ -25,6 +28,42 @@ class OpenWrtInstaller {
   /// скрипт выбирает на роутере по DISTRIB_ARCH.
   static const backendBaseUrl =
       'https://github.com/mikhail384/LaLune/releases/latest/download';
+
+  /// Код выхода скрипта: роутер не смог скачать backend, нужна загрузка с телефона.
+  static const needUploadExitCode = 28;
+
+  /// Backend для [abi]: сначала скачиваем на телефоне, иначе берём встроенную копию.
+  static Future<Uint8List?> _obtainBackend(
+    String abi,
+    void Function(String message)? onProgress,
+  ) async {
+    final name =
+        abi == 'aarch64' ? 'lalune-openwrt-backend' : 'lalune-openwrt-backend-$abi';
+    try {
+      final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
+      try {
+        final request = await client.getUrl(Uri.parse('$backendBaseUrl/$name'));
+        final response = await request.close().timeout(const Duration(seconds: 60));
+        if (response.statusCode == 200) {
+          final builder = BytesBuilder(copy: false);
+          await for (final chunk in response.timeout(const Duration(seconds: 60))) {
+            builder.add(chunk);
+          }
+          final data = builder.takeBytes();
+          if (data.length > 1000000) return data;
+        }
+      } finally {
+        client.close(force: true);
+      }
+    } catch (_) {}
+    try {
+      onProgress?.call('GitHub недоступен с телефона, беру встроенную копию...');
+      final data = await rootBundle.load('assets/openwrt/$name');
+      return data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+    } catch (_) {
+      return null;
+    }
+  }
 
   /// Готовый скрипт установки (используется и в тестах).
   static String installScript() =>
@@ -91,11 +130,59 @@ class OpenWrtInstaller {
 
       onProgress?.call('Установка backend и зависимостей...');
       final script = installScript();
-      final result = await client.runWithResult(script);
-      final stdout = utf8.decode(result.stdout, allowMalformed: true);
-      final stderr = utf8.decode(result.stderr, allowMalformed: true);
-      final combined =
+      var result = await client.runWithResult(script);
+      var stdout = utf8.decode(result.stdout, allowMalformed: true);
+      var stderr = utf8.decode(result.stderr, allowMalformed: true);
+      var combined =
           [stdout.trim(), stderr.trim()].where((s) => s.isNotEmpty).join('\n');
+
+      // Роутер не смог скачать backend (например, GitHub недоступен у провайдера):
+      // скачиваем на телефоне (или берём встроенную копию) и загружаем по SSH.
+      if (result.exitCode == needUploadExitCode) {
+        final abi = RegExp(r'LALUNE_NEED_UPLOAD abi=(\S+)')
+            .firstMatch(stderr)
+            ?.group(1);
+        if (abi == null) {
+          return OpenWrtInstallResult(
+            ok: false,
+            message: 'Роутер не скачал backend, архитектура не определена',
+            log: combined,
+          );
+        }
+        onProgress?.call('Роутер не достучался до GitHub. Загружаю backend с телефона...');
+        final bytes = await _obtainBackend(abi, onProgress);
+        if (bytes == null) {
+          return OpenWrtInstallResult(
+            ok: false,
+            message:
+                'Роутер не может скачать backend, а телефон не смог получить файл для $abi. '
+                'Подключите телефон к сети, где доступен GitHub (VPN/другая сеть), и повторите.',
+            log: combined,
+          );
+        }
+        final home = utf8
+            .decode((await client.run(r'echo "$HOME"')), allowMalformed: true)
+            .trim();
+        final dir = (home.isEmpty ? '/root' : home) + '/la-lune';
+        onProgress?.call('Передача backend на роутер (${(bytes.length / 1048576).toStringAsFixed(1)} МБ)...');
+        await client.run('mkdir -p "$dir"');
+        final sftp = await client.sftp();
+        final remote = await sftp.open(
+          '$dir/lalune-openwrt-backend',
+          mode: SftpFileOpenMode.create |
+              SftpFileOpenMode.write |
+              SftpFileOpenMode.truncate,
+        );
+        await remote.writeBytes(bytes);
+        await remote.close();
+        onProgress?.call('Установка backend и зависимостей...');
+        result = await client.runWithResult('LALUNE_PREUPLOADED=1\n$script');
+        stdout = utf8.decode(result.stdout, allowMalformed: true);
+        stderr = utf8.decode(result.stderr, allowMalformed: true);
+        combined = [combined, stdout.trim(), stderr.trim()]
+            .where((s) => s.isNotEmpty)
+            .join('\n');
+      }
 
       if (result.exitCode != 0 || !stdout.contains('LALUNE_INSTALL_OK')) {
         return OpenWrtInstallResult(
@@ -357,8 +444,15 @@ if [ ! -e /etc/ssl/certs/ca-certificates.crt ] && [ ! -e /etc/ssl/cert.pem ]; th
   install_packages ca-bundle ca-certificates || true
 fi
 
-log 'downloading LaLune OpenWRT backend'
-download "$BACKEND_URL" "$BACKEND_PATH"
+if [ "${LALUNE_PREUPLOADED:-0}" = 1 ] && [ -s "$BACKEND_PATH" ]; then
+  log 'using backend uploaded from the phone'
+else
+  log 'downloading LaLune OpenWRT backend'
+  if ! download "$BACKEND_URL" "$BACKEND_PATH"; then
+    echo "LALUNE_NEED_UPLOAD abi=$abi" >&2
+    exit 28
+  fi
+fi
 chmod +x "$BACKEND_PATH"
 
 log 'backend contains bundled CSQTT / CSQTTR / CSQTT 2.1.9 cores'
