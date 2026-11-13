@@ -153,6 +153,17 @@ class OpenWrtInstaller {
       );
       await client.authenticated;
 
+      // Освобождаем ОЗУ до запуска скрипта: запущенный старый backend с ядром (до 30 воркеров)
+      // съедает почти всю память, и OOM-killer убивает уже сам скрипт установки.
+      stage = 'остановка старого backend';
+      onProgress?.call('Освобождаю память на роутере...');
+      try {
+        await client.run('/etc/init.d/lalune stop >/dev/null 2>&1; '
+            'killall lalune-openwrt-backend >/dev/null 2>&1; '
+            'killall csqtt-client csqttr-client >/dev/null 2>&1; sleep 2; '
+            'echo 3 > /proc/sys/vm/drop_caches 2>/dev/null; true');
+      } catch (_) {}
+
       stage = 'выполнение скрипта установки';
       onProgress?.call('Установка backend и зависимостей...');
       final script = installScript();
