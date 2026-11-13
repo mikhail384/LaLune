@@ -26,7 +26,7 @@ foreach ($p in "$tools\gh\bin", "$tools\git\cmd") { if (Test-Path $p) { $env:Pat
 Ensure-Tool git 'Git.Git'
 Ensure-Tool gh  'GitHub.cli'
 
-gh auth status 2>$null | Out-Null
+$null = & { $ErrorActionPreference = 'Continue'; gh auth status 2>&1 }
 if ($LASTEXITCODE -ne 0) {
   Write-Host 'Вход в GitHub: откроется браузер, введите показанный код.'
   gh auth login --hostname github.com --git-protocol https --web
@@ -49,10 +49,10 @@ if (-not (Test-Path .git)) { git init -b main | Out-Null }
 git config user.name  $login
 git config user.email "$id+$login@users.noreply.github.com"
 git add -A
-git commit -m "LaLune: initial import" 2>$null | Out-Null
+$null = & { $ErrorActionPreference = 'Continue'; git commit -m "LaLune: initial import" 2>&1 }
 
 $vis = if ($Private) { '--private' } else { '--public' }
-gh repo view $target 2>$null | Out-Null
+$null = & { $ErrorActionPreference = 'Continue'; gh repo view $target 2>&1 }
 if ($LASTEXITCODE -ne 0) {
   gh repo create $target $vis --source . --remote origin --push
 } else {
