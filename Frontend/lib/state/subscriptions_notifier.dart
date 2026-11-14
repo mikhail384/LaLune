@@ -294,7 +294,8 @@ class SubscriptionsNotifier extends StateNotifier<SubscriptionsState> {
     }
   }
 
-  bool _isTransition(String s) => s == 'connecting' || s == 'checking';
+  bool _isTransition(String s) =>
+      s == 'connecting' || s == 'checking' || s == 'disconnecting';
 
   /// Добавляет израсходованный трафик подписке (открыто для тестов).
   void addTraffic(String subId, int bytes) {
