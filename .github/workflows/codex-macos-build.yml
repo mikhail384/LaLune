@@ -60,3 +60,29 @@ jobs:
             Output/LaLune-macOS-Test.dmg
             Output/LaLune-macOS-Test.sha256
           if-no-files-found: error
+      - name: Smoke test on macOS runner
+        run: |
+          set -euo pipefail
+          APP="$PWD/Frontend/build/macos/Build/Products/Release/lalune.app"
+          sudo "$APP/Contents/Resources/lalune-backend" > /tmp/lalune-backend-smoke.log 2>&1 &
+          BACKEND_PID=$!
+          trap 'sudo kill "$BACKEND_PID" 2>/dev/null || true' EXIT
+          READY=0
+          for i in $(seq 1 20); do
+            if curl -fsS --max-time 2 http://127.0.0.1:1062/ping > /tmp/lalune-ping.json; then READY=1; break; fi
+            sleep 1
+          done
+          test "$READY" = 1
+          open "$APP"
+          sleep 10
+          pgrep -f "$APP/Contents/MacOS/" >/dev/null
+          screencapture -x /tmp/lalune-screen.png || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: LaLune-macOS-smoke
+          path: |
+            /tmp/lalune-backend-smoke.log
+            /tmp/lalune-ping.json
+            /tmp/lalune-screen.png
+          if-no-files-found: warn

@@ -396,6 +396,7 @@ class _AddButtonState extends State<_AddButton> {
       child: Semantics(
         label: 'Добавить конфигурацию',
         button: true,
+        container: true,
         child: GestureDetector(
           onTap: widget.onTap,
           behavior: HitTestBehavior.opaque,
