@@ -39,23 +39,14 @@ def dns_snapshot():
         "Select-Object InterfaceAlias,ServerAddresses | ConvertTo-Json -Compress -Depth 4")
 
 
-secret = os.environ.get('LALUNE_WINDOWS_TEST_LINK', '')
-if not secret:
-    raise SystemExit('Missing private test profile')
-initial_dns = dns_snapshot()
-try:
-    config = api('/configs', {'name': 'Temporary CSQTTR test',
-                              'protocol': 'CSQTTR', 'link': secret})
-    if not config.get('id'):
-        raise RuntimeError('test profile import failed')
-    print('Windows test profile imported', flush=True)
-    api('/vpn/connect', {'configId': config['id']})
+def exercise(config_id, label):
+    api('/vpn/connect', {'configId': config_id})
     wait_for(lambda: api('/vpn/status').get('connected'))
-    print('Windows backend reports connected', flush=True)
+    print('Windows backend reports connected:', label, flush=True)
     wait_for(lambda: powershell("if (Get-NetIPAddress -InterfaceAlias 'CSQTT' "
         "-AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object AddressState -eq Preferred) "
         "{ 'ready' }") == 'ready', timeout=30)
-    print('Windows Wintun address ready', flush=True)
+    print('Windows Wintun address ready:', label, flush=True)
     route = powershell("Find-NetRoute -RemoteIPAddress '1.1.1.1' | "
                        "Select-Object -ExpandProperty InterfaceAlias -ErrorAction SilentlyContinue")
     if 'CSQTT' not in route.splitlines():
@@ -70,7 +61,24 @@ try:
     if not (after.get('rxBytes', 0) > before.get('rxBytes', 0) and
             after.get('txBytes', 0) > before.get('txBytes', 0)):
         raise RuntimeError('Wintun traffic counters did not increase')
-    print('Windows CSQTTR: connected, Wintun route, HTTPS 200, RX/TX increased', flush=True)
+    print('Windows CSQTTR:', label, 'Wintun route, HTTPS 200, RX/TX increased', flush=True)
+    api('/vpn/disconnect', {})
+    wait_for(lambda: not api('/vpn/status').get('connected'), timeout=15)
+
+
+secret = os.environ.get('LALUNE_WINDOWS_TEST_LINK', '')
+if not secret:
+    raise SystemExit('Missing private test profile')
+initial_dns = dns_snapshot()
+try:
+    config = api('/configs', {'name': 'Temporary CSQTTR test',
+                              'protocol': 'CSQTTR', 'link': secret})
+    if not config.get('id'):
+        raise RuntimeError('test profile import failed')
+    print('Windows test profile imported', flush=True)
+    exercise(config['id'], 'initial')
+    time.sleep(3)
+    exercise(config['id'], 'reconnect')
 except Exception as error:
     print('Windows CSQTTR test failed:', type(error).__name__, flush=True)
     allowed = {'connection timeout', 'test profile import failed',
