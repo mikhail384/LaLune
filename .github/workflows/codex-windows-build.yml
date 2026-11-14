@@ -82,3 +82,13 @@ jobs:
             Frontend/build/windows/x64/runner/Release/
             Backend/Desktop/target/release/lalune-backend.exe
           if-no-files-found: error
+      - name: Exercise Wintun with a local synthetic core
+        shell: pwsh
+        run: |
+          rustc Backend/tests/echo_core.rs -O -o "$env:RUNNER_TEMP/lalune-echo-core.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python Backend/tests/windows_tun.py `
+            Backend/Desktop/target/release/lalune-backend.exe `
+            "$env:RUNNER_TEMP/lalune-echo-core.exe" `
+            Frontend/build/windows/x64/runner/Release/wintun.dll
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
