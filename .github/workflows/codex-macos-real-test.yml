@@ -1,12 +1,18 @@
 name: LaLune macOS private connection test
+run-name: LaLune macOS private test ${{ inputs.test_id }}
 
 on:
+  push:
+    branches: [codex/lalune-improvements]
   workflow_dispatch:
     inputs:
       artifact_run_id:
         description: Successful macOS build run ID
         required: true
         default: '43601991029'
+      test_id:
+        description: Unique test identifier
+        required: true
 
 permissions:
   contents: read
@@ -14,6 +20,7 @@ permissions:
 
 jobs:
   real-connection:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     timeout-minutes: 15
     steps:

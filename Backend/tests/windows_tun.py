@@ -63,7 +63,9 @@ with tempfile.TemporaryDirectory(prefix='lalune-windows-tun-') as temporary:
                 'peer': '192.0.2.1:46000', 'password': 'local-test', 'hashes': 'local-test'})
             api('/vpn/connect', {'configId': config['id']})
             wait_for(lambda: api('/vpn/status')['connected'])
-            wait_for(lambda: powershell("if (Get-NetIPAddress -InterfaceAlias 'CSQTT' -AddressFamily IPv4 -IPAddress '10.66.67.2' -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }", False).returncode == 0)
+            # A newly configured address may be Tentative while Windows runs
+            # duplicate-address detection; binding to it is not yet possible.
+            wait_for(lambda: powershell("if (Get-NetIPAddress -InterfaceAlias 'CSQTT' -AddressFamily IPv4 -IPAddress '10.66.67.2' -ErrorAction SilentlyContinue | Where-Object AddressState -eq Preferred) { exit 0 } else { exit 1 }", False).returncode == 0)
             powershell("New-NetRoute -DestinationPrefix '198.18.0.1/32' -InterfaceAlias 'CSQTT' -NextHop '0.0.0.0' -PolicyStore ActiveStore -ErrorAction Stop | Out-Null")
             route = True
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
