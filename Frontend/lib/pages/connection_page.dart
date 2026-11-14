@@ -393,10 +393,13 @@ class _AddButtonState extends State<_AddButton> {
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: widget.onTap,
-        behavior: HitTestBehavior.opaque,
-        child: AnimatedScale(
+      child: Semantics(
+        label: 'Добавить конфигурацию',
+        button: true,
+        child: GestureDetector(
+          onTap: widget.onTap,
+          behavior: HitTestBehavior.opaque,
+          child: AnimatedScale(
           scale: _hover ? 0.92 : 1.0,
           duration: const Duration(milliseconds: 160),
           curve: Curves.easeOut,
@@ -421,6 +424,7 @@ class _AddButtonState extends State<_AddButton> {
               ],
             ),
             child: const Icon(Icons.add, size: 24, color: Colors.white),
+          ),
           ),
         ),
       ),

@@ -479,7 +479,7 @@ class Backend(private val context: Context) {
                 path == "/vpn/status" && method == "GET" -> 200 to jsonOk(
                     "state" to vpnState,
                     "connected" to vpnConnected, "uptimeSec" to 0,
-                    "configId" to 0, "message" to vpnMessage, "since" to "",
+                    "configId" to LaLuneVpnService.snapshotConfigId, "message" to vpnMessage, "since" to "",
                     "socks5Port" to socks5Port
                 )
                 path == "/vpn/reconnect" && method == "POST" -> {
@@ -1215,7 +1215,7 @@ class Backend(private val context: Context) {
                             hashesStr.append(hashesArr.getString(i))
                         }
                     }
-                    Log.i(TAG, "[PARSE][CSQTT] csqtt-link OK: host=$host port=$port hashes=${hashesStr.length}")
+                    Log.i(TAG, "[PARSE][CSQTT] csqtt-link OK")
                     return JSONObject().apply {
                         put("protocol", "CSQTT")
                         put("peer", peer)
@@ -1350,6 +1350,11 @@ class Backend(private val context: Context) {
         logs.clear()
         val settings = loadSettings()
         val sel = readSelectedConfig()
+        val requestedId = try { JSONObject(body).optLong("configId", 0) } catch (_: Exception) { 0 }
+        val selectedId = sel?.optLong("id", 0) ?: 0
+        if (requestedId != 0L && requestedId != selectedId) {
+            return 400 to jsonErr("Выбранная конфигурация изменилась; выберите её снова")
+        }
         val protocol = sel?.optString("protocol", PROTO_CSQTT) ?: PROTO_CSQTT
         val cm = coreManager ?: return 500 to jsonErr("coreManager not ready")
 
@@ -1373,6 +1378,7 @@ class Backend(private val context: Context) {
             )
             if (!started) return 500 to jsonErr("paperflux core start failed")
 
+            LaLuneVpnService.snapshotConfigId = selectedId
             markVpnConnecting()
             mainHandler.post {
                 val act = activity
@@ -1406,6 +1412,7 @@ class Backend(private val context: Context) {
 
         if (settings.optBoolean("shareVpn", false)) startSocks5()
 
+        LaLuneVpnService.snapshotConfigId = selectedId
         markVpnConnecting()
         mainHandler.post {
             val act = activity

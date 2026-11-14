@@ -44,6 +44,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.RandomAccessFile
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.DatagramPacket
@@ -89,6 +90,7 @@ class LaLuneVpnService : VpnService() {
         val tunRxBytes = java.util.concurrent.atomic.AtomicLong(0)
 
         @Volatile var snapshotConnected: Boolean = false
+        @Volatile var snapshotConfigId: Long = 0
         @Volatile var snapshotState: String = "disconnected"
         @Volatile var snapshotMessage: String = ""
 
@@ -240,12 +242,25 @@ class LaLuneVpnService : VpnService() {
 
             if (logsFile.exists()) {
                 try {
-                    val content = logsFile.readText()
-                    if (content.length.toLong() < lastOffset) lastOffset = 0L
-                    if (content.length.toLong() > lastOffset) {
-                        val newPart = content.substring(lastOffset.toInt())
-                        lastOffset = content.length.toLong()
-                        for (line in newPart.lines()) {
+                    RandomAccessFile(logsFile, "r").use { file ->
+                        if (file.length() < lastOffset) lastOffset = 0L
+                        file.seek(lastOffset)
+                        while (file.filePointer < file.length()) {
+                            val lineStart = file.filePointer
+                            val latin1 = file.readLine() ?: break
+                            val lineEnd = file.filePointer
+                            // Leave a partially written final line for the next poll.
+                            if (lineEnd == file.length() && lineEnd > lineStart) {
+                                file.seek(lineEnd - 1)
+                                val complete = file.read() == '\n'.code
+                                file.seek(lineEnd)
+                                if (!complete) {
+                                    file.seek(lineStart)
+                                    break
+                                }
+                            }
+                            lastOffset = lineEnd
+                            val line = String(latin1.toByteArray(Charsets.ISO_8859_1), Charsets.UTF_8)
                             if (line.isBlank()) continue
 
                             coreManager.parseTunconf(line)?.let { (ip, dns) ->
@@ -561,6 +576,7 @@ class LaLuneVpnService : VpnService() {
         stopFlow()
         scope.cancel()
         snapshotConnected = false
+        snapshotConfigId = 0
         snapshotState = "disconnected"
         snapshotMessage = ""
         super.onDestroy()

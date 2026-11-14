@@ -28,7 +28,7 @@ import java.security.MessageDigest
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
-import java.util.concurrent.TimeUnit
+import android.os.SystemClock
 
 object CsqttLink {
     private const val TAG = "LaLune-CsqttLink"
@@ -242,9 +242,21 @@ object CsqttLink {
             tOut.start()
             tErr.start()
 
-            val finished = proc.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+            // Process.waitFor(timeout, TimeUnit) is unavailable on Android 7.
+            // Poll exitValue using a monotonic clock so minSdk 24 remains valid.
+            val deadline = SystemClock.elapsedRealtime() + timeoutMs
+            var finished = false
+            while (SystemClock.elapsedRealtime() < deadline) {
+                try {
+                    proc.exitValue()
+                    finished = true
+                    break
+                } catch (_: IllegalThreadStateException) {
+                    Thread.sleep(20)
+                }
+            }
             if (!finished) {
-                proc.destroyForcibly()
+                proc.destroy()
                 Log.w(TAG, "native process timeout after ${timeoutMs}ms")
                 return null
             }
@@ -258,7 +270,7 @@ object CsqttLink {
                 stderr = stderr.toString().trim(),
             )
         } catch (e: Exception) {
-            Log.w(TAG, "runNative failed: ${e.message}", e)
+            Log.w(TAG, "runNative failed: ${e.javaClass.simpleName}")
             null
         }
     }

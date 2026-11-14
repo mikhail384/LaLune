@@ -1,0 +1,62 @@
+name: LaLune macOS test build
+
+on:
+  push:
+    branches: [codex/lalune-improvements]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.5'
+          channel: stable
+          cache: true
+      - name: Build universal backend
+        working-directory: Backend/Desktop
+        run: |
+          set -euo pipefail
+          cargo build --release --locked --target x86_64-apple-darwin
+          cargo build --release --locked --target aarch64-apple-darwin
+          mkdir -p ../../dist-macos
+          lipo -create -output ../../dist-macos/lalune-backend \
+            target/x86_64-apple-darwin/release/lalune-backend \
+            target/aarch64-apple-darwin/release/lalune-backend
+      - name: Build application
+        run: |
+          set -euo pipefail
+          mkdir -p Frontend/assets
+          cp -R Assets/. Frontend/assets/
+          cd Frontend
+          flutter pub get
+          flutter build macos --release --no-tree-shake-icons
+      - name: Package test DMG
+        run: |
+          set -euo pipefail
+          APP="Frontend/build/macos/Build/Products/Release/lalune.app"
+          test -d "$APP"
+          cp dist-macos/lalune-backend "$APP/Contents/Resources/lalune-backend"
+          chmod +x "$APP/Contents/Resources/lalune-backend"
+          codesign --force --deep --sign - "$APP"
+          mkdir -p Output/dmg
+          cp -R "$APP" Output/dmg/
+          ln -s /Applications Output/dmg/Applications
+          hdiutil create -volname LaLune -srcfolder Output/dmg -format UDZO Output/LaLune-macOS-Test.dmg
+          shasum -a 256 Output/LaLune-macOS-Test.dmg > Output/LaLune-macOS-Test.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LaLune-macOS-test
+          path: |
+            Output/LaLune-macOS-Test.dmg
+            Output/LaLune-macOS-Test.sha256
+          if-no-files-found: error
