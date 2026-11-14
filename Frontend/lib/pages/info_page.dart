@@ -237,7 +237,8 @@ class _InfoPageState extends ConsumerState<InfoPage> {
               _block('Авторы', [
                 _kv('CSQTT', 'amurcanov'),
                 _kv('LaLune', '@Endlad7373'),
-                _linkRow('Канал проекта', 't.me/endlad_new', _channelUrl),
+                _linkRow('Telegram-канал проекта', 't.me/endlad_new', _channelUrl,
+                    icon: Icons.telegram),
               ]),
               const SizedBox(height: 18),
 
@@ -317,7 +318,7 @@ class _InfoPageState extends ConsumerState<InfoPage> {
     }
   }
 
-  Widget _linkRow(String k, String label, String url) {
+  Widget _linkRow(String k, String label, String url, {IconData? icon}) {
     return InkWell(
       onTap: () => _openUrl(url),
       borderRadius: BorderRadius.circular(6),
@@ -325,6 +326,10 @@ class _InfoPageState extends ConsumerState<InfoPage> {
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: Row(
           children: [
+              if (icon != null) ...[
+                Icon(icon, size: 19, color: const Color(0xFF6C8CFF)),
+                const SizedBox(width: 8),
+              ],
             Expanded(
               child: Text(k,
                   style: TextStyle(color: Colors.white.withOpacity(0.65))),
