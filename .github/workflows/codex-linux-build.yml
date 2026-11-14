@@ -1,0 +1,71 @@
+name: LaLune Linux GUI checks
+
+on:
+  push:
+    branches: [codex/lalune-improvements]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.5'
+          channel: stable
+          cache: true
+      - name: Install Linux build and display dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev xvfb xdotool
+      - name: Build backend and client
+        run: |
+          set -euo pipefail
+          cargo build --manifest-path Backend/Desktop/Cargo.toml --release --locked
+          mkdir -p Frontend/assets
+          cp -R Assets/. Frontend/assets/
+          cd Frontend
+          flutter pub get
+          flutter build linux --release --no-tree-shake-icons
+      - name: Start Linux client in a virtual display
+        run: |
+          set -euo pipefail
+          APP="$PWD/Frontend/build/linux/x64/release/bundle/lalune"
+          TEST_HOME="$RUNNER_TEMP/lalune-linux-home"
+          mkdir -p "$TEST_HOME/.la-lune"
+          cp Backend/Desktop/target/release/lalune-backend "$TEST_HOME/.la-lune/LaLuneManager"
+          export HOME="$TEST_HOME"
+          "$TEST_HOME/.la-lune/LaLuneManager" > "$RUNNER_TEMP/lalune-linux-backend.log" 2>&1 &
+          BACKEND_PID=$!
+          echo "$BACKEND_PID" > "$TEST_HOME/.la-lune/LaLuneManager.pid"
+          trap 'kill "$BACKEND_PID" 2>/dev/null || true' EXIT
+          READY=0
+          for i in $(seq 1 30); do
+            if curl -fsS --max-time 2 http://127.0.0.1:1062/ping > /tmp/lalune-linux-ping.json; then READY=1; break; fi
+            sleep 1
+          done
+          test "$READY" = 1
+          xvfb-run -a sh -c '
+            "$1" > "$2/lalune-linux-ui.log" 2>&1 &
+            UI_PID=$!
+            trap "kill $UI_PID 2>/dev/null || true" EXIT
+            for i in $(seq 1 30); do
+              if xdotool search --onlyvisible --name LaLune >/dev/null 2>&1; then exit 0; fi
+              kill -0 "$UI_PID" || exit 1
+              sleep 1
+            done
+            exit 1
+          ' sh "$APP" "$RUNNER_TEMP"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LaLune-Linux-test
+          path: |
+            Frontend/build/linux/x64/release/bundle/
+            Backend/Desktop/target/release/lalune-backend
+          if-no-files-found: error
