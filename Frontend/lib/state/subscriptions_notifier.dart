@@ -65,6 +65,7 @@ class SubscriptionsNotifier extends StateNotifier<SubscriptionsState> {
   final http.Client? _httpClient;
   Timer? _tracker;
   Timer? _saveDebounce;
+  Future<void> _saveQueue = Future<void>.value();
 
   /// Подписка, по конфигу которой запущено текущее подключение (null — нет).
   String? _activeSubId;
@@ -72,6 +73,7 @@ class SubscriptionsNotifier extends StateNotifier<SubscriptionsState> {
   int _lastTx = 0;
   int _connectionGeneration = 0;
   bool _tracking = false;
+  Completer<void>? _trackCompletion;
 
   SubscriptionsNotifier(this._ref, {http.Client? httpClient, bool autoLoad = true})
       : _httpClient = httpClient,
@@ -100,12 +102,17 @@ class SubscriptionsNotifier extends StateNotifier<SubscriptionsState> {
     }
   }
 
-  Future<void> _save() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(
-          _prefsKey, jsonEncode(state.items.map((s) => s.toJson()).toList()));
-    } catch (_) {}
+  Future<void> _save() {
+    // Capture before awaiting, and serialize writes so an older asynchronous
+    // save cannot overwrite a newer traffic snapshot.
+    final snapshot = jsonEncode(state.items.map((s) => s.toJson()).toList());
+    _saveQueue = _saveQueue.then((_) async {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(_prefsKey, snapshot);
+      } catch (_) {}
+    });
+    return _saveQueue;
   }
 
   void _saveSoon() {
@@ -264,13 +271,22 @@ class SubscriptionsNotifier extends StateNotifier<SubscriptionsState> {
     _connectionGeneration++;
   }
 
+  /// Best-effort final sample before the backend tears the tunnel down.
+  Future<void> flushTraffic() async {
+    final pending = _trackCompletion;
+    if (pending != null) await pending.future;
+    await _trackTraffic();
+  }
+
   Future<void> _trackTraffic() async {
     final subId = _activeSubId;
     if (subId == null || _tracking) return;
     final vpn = _ref.read(vpnProvider);
     if (vpn.connected) {
+      final completion = Completer<void>();
       try {
         _tracking = true;
+        _trackCompletion = completion;
         final generation = _connectionGeneration;
         final j = await _ref.read(apiClientProvider).getJson('/vpn/stats');
         if (!mounted || generation != _connectionGeneration) return;
@@ -283,6 +299,8 @@ class SubscriptionsNotifier extends StateNotifier<SubscriptionsState> {
         addDirectionalTraffic(subId, rxDelta, txDelta);
       } catch (_) {} finally {
         _tracking = false;
+        if (identical(_trackCompletion, completion)) _trackCompletion = null;
+        completion.complete();
       }
     } else if (!_isTransition(vpn.state)) {
       // отключились — следующее подключение начнёт новый учёт
@@ -357,6 +375,7 @@ class SubscriptionsNotifier extends StateNotifier<SubscriptionsState> {
   @override
   void dispose() {
     _tracker?.cancel();
+    if (_saveDebounce?.isActive ?? false) unawaited(_save());
     _saveDebounce?.cancel();
     super.dispose();
   }

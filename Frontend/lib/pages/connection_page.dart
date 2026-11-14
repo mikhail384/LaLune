@@ -38,6 +38,14 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
     if (vpn.connected ||
         vpn.state == 'connecting' ||
         vpn.state == 'checking') {
+      // The backend counters reset on the next connection. Take a bounded
+      // final sample before disconnecting so the last polling interval is not
+      // routinely lost; a slow/unavailable backend must not block shutdown.
+      try {
+        await ref.read(subscriptionsProvider.notifier)
+            .flushTraffic().timeout(const Duration(seconds: 1));
+      } catch (_) {}
+      if (!mounted) return;
       final ok = await ref.read(vpnProvider.notifier).disconnect();
       if (!mounted) return;
       Toast.show(

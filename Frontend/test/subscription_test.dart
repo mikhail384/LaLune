@@ -249,6 +249,22 @@ void main() {
       client.close();
     });
 
+    test('pending traffic is saved when the notifier is disposed', () async {
+      final c = ProviderContainer();
+      final n = c.read(provider.notifier);
+      await n.add(_dataUrl(_sample));
+      final id = c.read(provider).items.single.id;
+      n.addDirectionalTraffic(id, 17, 23);
+      c.dispose();
+      // Queued SharedPreferences writes run asynchronously after dispose.
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      final prefs = await SharedPreferences.getInstance();
+      final saved = jsonDecode(prefs.getString('lalune_subscriptions_v1')!) as List;
+      expect(saved.single['usedBytes'], 40);
+      expect(saved.single['receivedBytes'], 17);
+      expect(saved.single['sentBytes'], 23);
+    });
+
     test('managed backend ids are hidden and mapped to their owner', () async {
       final n = container.read(provider.notifier);
       await n.add(_dataUrl(_sample));

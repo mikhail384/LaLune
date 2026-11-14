@@ -33,13 +33,33 @@ jobs:
           targets: aarch64-apple-darwin
       - name: Build and smoke test native core
         working-directory: source/rust-client
+        env:
+          CORE_NAME: ${{ matrix.name }}
         run: |
           set -euo pipefail
+          # The CSQTTR abstract-socket FD receiver is Linux/Android-specific;
+          # desktop uses UDP transport and must use the existing fallback.
+          if [ "$CORE_NAME" = csqttr ]; then
+            python3 - <<'PY'
+          from pathlib import Path
+          p = Path('tun.rs')
+          s = p.read_text()
+          s = s.replace('#[cfg(unix)]', '#[cfg(any(target_os = "linux", target_os = "android"))]')
+          s = s.replace('#[cfg(not(unix))]', '#[cfg(not(any(target_os = "linux", target_os = "android")))]')
+          p.write_text(s)
+          PY
+          fi
           cargo build --release --locked --target aarch64-apple-darwin
           CORE="target/aarch64-apple-darwin/release/client"
           test -x "$CORE"
           file "$CORE"
-          "$CORE" --help > /tmp/core-help.txt
+          # Some upstream versions disable clap's help flag and exit 2 after
+          # printing usage. Either outcome proves the executable starts.
+          set +e
+          "$CORE" --help > /tmp/core-help.txt 2>&1
+          status=$?
+          set -e
+          test "$status" -eq 0 || { test "$status" -eq 2 && grep -q 'Usage:' /tmp/core-help.txt; }
           mkdir -p ../../out
           cp "$CORE" "../../out/${{ matrix.name }}-macos-arm64"
           shasum -a 256 "../../out/${{ matrix.name }}-macos-arm64" > "../../out/${{ matrix.name }}-macos-arm64.sha256"
