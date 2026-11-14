@@ -19,16 +19,13 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.net.IpPrefix
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
-import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -117,7 +114,6 @@ class LaLuneVpnService : VpnService() {
     @Volatile private var trafficMB: String = "0.00"
     @Volatile private var connectionState: String = "disconnected"
     @Volatile private var connectionMessage: String = ""
-    @Volatile private var screenInteractive: Boolean = true
     @Volatile private var rescanLogsRequested: Boolean = false
 
     private var vpnInterface: ParcelFileDescriptor? = null
@@ -134,39 +130,9 @@ class LaLuneVpnService : VpnService() {
     private var flowJob: Job? = null
     private val bridgeJobs = mutableListOf<Job>()
 
-    private val screenReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            when (intent?.action) {
-                Intent.ACTION_SCREEN_OFF -> {
-                    screenInteractive = false
-                    Log.i(TAG, "screen off: closing TUN only; core stays alive")
-                    scope.launch {
-                        teardownTunnelOnly("screen off")
-                        consecutiveActiveTicks = 0
-                        detectedTunIP = null
-                        detectedDNS = null
-                        rescanLogsRequested = true
-                        if (isRunning) publishState("connecting", false, "Подключение")
-                    }
-                }
-                Intent.ACTION_SCREEN_ON -> {
-                    screenInteractive = true
-                    Log.i(TAG, "screen on: re-reading TUN params and reconnecting")
-                    consecutiveActiveTicks = 0
-                    detectedTunIP = null
-                    detectedDNS = null
-                    rescanLogsRequested = true
-                    if (isRunning) publishState("connecting", false, "Подключение")
-                }
-            }
-        }
-    }
-
     override fun onCreate() {
         super.onCreate()
         coreManager = CoreManager(this)
-        screenInteractive = getSystemService(PowerManager::class.java)?.isInteractive ?: true
-        registerScreenReceiver()
         startForegroundCompat()
     }
 
@@ -180,19 +146,6 @@ class LaLuneVpnService : VpnService() {
             "STOP", ACTION_STOP -> stopFlow()
         }
         return START_STICKY
-    }
-
-    private fun registerScreenReceiver() {
-        val filter = IntentFilter().apply {
-            addAction(Intent.ACTION_SCREEN_OFF)
-            addAction(Intent.ACTION_SCREEN_ON)
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(screenReceiver, filter, Context.RECEIVER_EXPORTED)
-        } else {
-            @Suppress("UnspecifiedRegisterReceiverFlag")
-            registerReceiver(screenReceiver, filter)
-        }
     }
 
     private fun startFlow() {
@@ -226,11 +179,6 @@ class LaLuneVpnService : VpnService() {
         Log.d(TAG, "watching ${logsFile.absolutePath}")
 
         while (isRunning) {
-            if (!screenInteractive) {
-                delay(LOG_POLL_MS)
-                continue
-            }
-
             if (rescanLogsRequested) {
                 lastOffset = 0L
                 consecutiveActiveTicks = 0
@@ -300,7 +248,7 @@ class LaLuneVpnService : VpnService() {
                 val established = establishTun()
                 establishing = false
 
-                if (established && isRunning && screenInteractive) {
+                if (established && isRunning) {
                     publishState("connected", true, "Подключено")
                     Log.i(TAG, "TUN created after $REQUIRED_ACTIVE_TICKS active ticks")
                 } else if (isRunning) {
@@ -356,7 +304,7 @@ class LaLuneVpnService : VpnService() {
     }
 
     private suspend fun establishTun(): Boolean = tunnelMutex.withLock {
-        if (tunEstablished || !isRunning || !screenInteractive) return@withLock false
+        if (tunEstablished || !isRunning) return@withLock false
         Log.d(TAG, "establishTun")
 
         teardownTunnelOnlyLocked("before establish")
@@ -572,7 +520,6 @@ class LaLuneVpnService : VpnService() {
     }
 
     override fun onDestroy() {
-        try { unregisterReceiver(screenReceiver) } catch (_: Exception) {}
         stopFlow()
         scope.cancel()
         snapshotConnected = false

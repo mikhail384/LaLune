@@ -521,7 +521,7 @@ class CoreManager(private val context: Context) {
             "-n", "-listen", "--listen", "-obfs", "-fingerprint", "-client-ids",
             "-vk-auth-mode", "--vk-auth-mode", "-vk-hash-mode", "--vk-hash-mode",
             "-captcha-mode", "-turn-transport", "--transport", "--client-ip",
-            "--tcp-recovery", "--mode", "--socks5", "-peer", "--peer", "--turn", "--port"
+            "--tcp-recovery", "--mode", "--socks5"
         )
         var redactNext = false
         return args.mapIndexed { i, arg ->
