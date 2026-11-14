@@ -68,7 +68,10 @@ class SubscriptionsNotifier extends StateNotifier<SubscriptionsState> {
 
   /// Подписка, по конфигу которой запущено текущее подключение (null — нет).
   String? _activeSubId;
-  int _lastTotal = 0;
+  int _lastRx = 0;
+  int _lastTx = 0;
+  int _connectionGeneration = 0;
+  bool _tracking = false;
 
   SubscriptionsNotifier(this._ref, {http.Client? httpClient, bool autoLoad = true})
       : _httpClient = httpClient,
@@ -138,26 +141,60 @@ class SubscriptionsNotifier extends StateNotifier<SubscriptionsState> {
   Future<void> refreshAll({bool silent = false}) async {
     if (state.refreshing || state.items.isEmpty) return;
     state = state.copyWith(refreshing: true);
-    final updated = <Subscription>[];
-    for (final old in state.items) {
+    final initial = List<Subscription>.of(state.items);
+    for (final old in initial) {
       try {
         final text = await fetchSubscriptionText(old.source, client: _httpClient);
-        final fresh = parseLaLuneSub(text, source: old.source, previous: old);
+        if (!mounted) return;
+        // Traffic or configuration mappings may have changed while the request
+        // was in flight. Never overwrite those changes with the old snapshot.
+        final current = _byId(old.id);
+        if (current == null) continue;
+        var fresh = parseLaLuneSub(text, source: old.source, previous: current);
         // Конфиги, которых больше нет в подписке, убираем из backend.
-        final removed = old.backendIds.entries
-            .where((e) => !fresh.configs.any((c) => c.key == e.key));
+        final removed = current.backendIds.entries
+            .where((e) => !fresh.configs.any((c) => c.key == e.key)).toList();
+        final vpn = _ref.read(vpnProvider);
+        final activeId = vpn.connected || _isTransition(vpn.state)
+            ? vpn.configId
+            : null;
         for (final e in removed) {
-          await _deleteBackendConfig(e.value);
+          if (e.value == activeId ||
+              (activeId == 0 && (vpn.connected || _isTransition(vpn.state))) ||
+              (_activeSubId == current.id &&
+                  (vpn.connected || _isTransition(vpn.state)))) {
+            // Keep the backend profile hidden and associated with its owner
+            // until the active connection has stopped.
+            fresh = fresh.copyWith(backendIds: {...fresh.backendIds, e.key: e.value});
+            continue;
+          }
+          if (!await _deleteBackendConfig(e.value)) {
+            fresh = fresh.copyWith(backendIds: {...fresh.backendIds, e.key: e.value});
+          }
         }
-        updated.add(fresh);
+        if (!mounted) return;
+        final latest = _byId(old.id);
+        if (latest == null) continue;
+        final validKeys = fresh.configs.map((c) => c.key).toSet();
+        final mergedIds = {...fresh.backendIds};
+        for (final entry in latest.backendIds.entries) {
+          if (validKeys.contains(entry.key)) mergedIds[entry.key] = entry.value;
+        }
+        _replace(fresh.copyWith(usedBytes: latest.usedBytes,
+            receivedBytes: latest.receivedBytes, sentBytes: latest.sentBytes,
+            backendIds: mergedIds));
       } catch (e) {
         // сервер недоступен: оставляем прежние данные, показываем ошибку
-        updated.add(old.copyWith(
-            error: e is SubscriptionFormatException ? e.message : 'Нет связи с сервером подписки'));
+        if (!mounted) return;
+        final current = _byId(old.id);
+        if (current != null) {
+          _replace(current.copyWith(
+              error: e is SubscriptionFormatException ? e.message : 'Нет связи с сервером подписки'));
+        }
       }
     }
     if (!mounted) return;
-    state = state.copyWith(items: updated, refreshing: false);
+    state = state.copyWith(refreshing: false);
     await _save();
     // Список backend мог измениться (удалили устаревшие служебные конфиги).
     unawaited(_ref.read(configsProvider.notifier).reload());
@@ -205,8 +242,10 @@ class SubscriptionsNotifier extends StateNotifier<SubscriptionsState> {
       });
       final id = (resp['id'] as num?)?.toInt();
       if (id == null) return null;
-      final ids = {...sub.backendIds, config.key: id};
-      _replace(sub.copyWith(backendIds: ids));
+      final latest = _byId(sub.id);
+      if (latest == null) return null;
+      final ids = {...latest.backendIds, config.key: id};
+      _replace(latest.copyWith(backendIds: ids));
       await _save();
       await _ref.read(configsProvider.notifier).reload();
       return id;
@@ -220,26 +259,38 @@ class SubscriptionsNotifier extends StateNotifier<SubscriptionsState> {
   /// Вызывается при нажатии «Подключить»: учёт трафика пойдёт на эту подписку.
   void beginConnection(String? subId) {
     _activeSubId = subId;
-    _lastTotal = 0;
+    _lastRx = 0;
+    _lastTx = 0;
+    _connectionGeneration++;
   }
 
   Future<void> _trackTraffic() async {
     final subId = _activeSubId;
-    if (subId == null) return;
+    if (subId == null || _tracking) return;
     final vpn = _ref.read(vpnProvider);
     if (vpn.connected) {
       try {
+        _tracking = true;
+        final generation = _connectionGeneration;
         final j = await _ref.read(apiClientProvider).getJson('/vpn/stats');
-        final total = ((j['rxBytes'] as num?) ?? 0).toInt() +
-            ((j['txBytes'] as num?) ?? 0).toInt();
-        final delta = trafficDelta(_lastTotal, total);
-        _lastTotal = total;
-        if (delta > 0) addTraffic(subId, delta);
-      } catch (_) {}
+        if (!mounted || generation != _connectionGeneration) return;
+        final rx = ((j['rxBytes'] as num?) ?? 0).toInt();
+        final tx = ((j['txBytes'] as num?) ?? 0).toInt();
+        final rxDelta = trafficDelta(_lastRx, rx);
+        final txDelta = trafficDelta(_lastTx, tx);
+        _lastRx = rx;
+        _lastTx = tx;
+        addDirectionalTraffic(subId, rxDelta, txDelta);
+      } catch (_) {} finally {
+        _tracking = false;
+      }
     } else if (!_isTransition(vpn.state)) {
       // отключились — следующее подключение начнёт новый учёт
       _activeSubId = null;
-      _lastTotal = 0;
+      _lastRx = 0;
+      _lastTx = 0;
+      _connectionGeneration++;
+      unawaited(_pruneRetiredConfigs(subId));
     }
   }
 
@@ -250,6 +301,14 @@ class SubscriptionsNotifier extends StateNotifier<SubscriptionsState> {
     final sub = _byId(subId);
     if (sub == null || bytes <= 0) return;
     _replace(sub.copyWith(usedBytes: sub.usedBytes + bytes));
+    _saveSoon();
+  }
+
+  void addDirectionalTraffic(String subId, int rx, int tx) {
+    final sub = _byId(subId);
+    if (sub == null || rx < 0 || tx < 0 || rx + tx == 0) return;
+    _replace(sub.copyWith(usedBytes: sub.usedBytes + rx + tx,
+        receivedBytes: sub.receivedBytes + rx, sentBytes: sub.sentBytes + tx));
     _saveSoon();
   }
 
@@ -268,10 +327,30 @@ class SubscriptionsNotifier extends StateNotifier<SubscriptionsState> {
     );
   }
 
-  Future<void> _deleteBackendConfig(int id) async {
+  Future<void> _pruneRetiredConfigs(String subId) async {
+    final sub = _byId(subId);
+    if (sub == null) return;
+    final valid = sub.configs.map((c) => c.key).toSet();
+    for (final entry in sub.backendIds.entries.where((e) => !valid.contains(e.key))) {
+      if (_activeSubId == subId) return;
+      if (await _deleteBackendConfig(entry.value)) {
+        if (!mounted) return;
+        final latest = _byId(subId);
+        if (latest == null || latest.backendIds[entry.key] != entry.value) continue;
+        final ids = {...latest.backendIds}..remove(entry.key);
+        _replace(latest.copyWith(backendIds: ids));
+      }
+    }
+    if (mounted) await _save();
+  }
+
+  Future<bool> _deleteBackendConfig(int id) async {
     try {
       await _ref.read(apiClientProvider).deleteJson('/configs/$id');
-    } catch (_) {}
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   @override

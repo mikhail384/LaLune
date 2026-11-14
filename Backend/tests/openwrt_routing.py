@@ -46,6 +46,10 @@ def inside(binary, case):
     assert os.readlink('/proc/self/ns/net') != os.readlink('/proc/1/ns/net')
     assert os.readlink('/proc/self/ns/mnt') != os.readlink('/proc/1/ns/mnt')
     cmd('mount', '--make-rprivate', '/')
+    if os.environ.get('LALUNE_TEST_PRIVATE_PROC') == '1':
+        # Some containers bind-mount /proc/sys read-only. This mount is made
+        # only after entering the disposable private mount namespace.
+        cmd('mount', '-t', 'proc', 'proc', '/proc')
     real_iptables = shutil.which('iptables-nft') or shutil.which('iptables')
     assert real_iptables, 'Install iptables-nft and nftables'
     with tempfile.TemporaryDirectory(prefix='lalune-openwrt-routing-') as temporary:
@@ -74,6 +78,19 @@ def inside(binary, case):
                " print('fixture firewall failure',file=sys.stderr);sys.exit(42)\n" if case == 'firewall_failure' else '')
             + 'os.execv(' + repr(real_iptables) + ',[' + repr(real_iptables) + ']+sys.argv[1:])\n')
         wrapper.chmod(0o755)
+        if case == 'firewall_failure':
+            real_nft = shutil.which('nft')
+            assert real_nft
+            nft_wrapper = tools / 'nft'
+            nft_wrapper.write_text('#!/usr/bin/python3\nimport os,subprocess,sys\n'
+                'args=sys.argv[1:]\n'
+                'if args == ["-f", "-"]:\n'
+                ' data=sys.stdin.buffer.read()\n'
+                ' if b"table ip lalune_mangle" in data:\n'
+                '  print("fixture firewall failure",file=sys.stderr);sys.exit(42)\n'
+                ' sys.exit(subprocess.run([' + repr(real_nft) + ']+args,input=data).returncode)\n'
+                'os.execv(' + repr(real_nft) + ',[' + repr(real_nft) + ']+args)\n')
+            nft_wrapper.chmod(0o755)
         if case == 'fw4':
             cmd('nft', 'add', 'table', 'inet', 'fw4')
             cmd('nft', 'add', 'chain', 'inet', 'fw4', 'forward', '{ type filter hook forward priority 0; policy drop; }')

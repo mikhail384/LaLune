@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -189,13 +190,18 @@ void main() {
       // трафик учитывается только на подписку и копится
       n.addTraffic(s.items.single.id, 1000);
       n.addTraffic(s.items.single.id, 500);
-      expect(container.read(provider).items.single.usedBytes, 1500);
+      n.addDirectionalTraffic(s.items.single.id, 100, 50);
+      expect(container.read(provider).items.single.usedBytes, 1650);
+      expect(container.read(provider).items.single.receivedBytes, 100);
+      expect(container.read(provider).items.single.sentBytes, 50);
 
       // refresh по data: URL не ходит в сеть и сохраняет трафик
       await n.refreshAll();
       s = container.read(provider);
       expect(fetches, 0);
-      expect(s.items.single.usedBytes, 1500);
+      expect(s.items.single.usedBytes, 1650);
+      expect(Subscription.fromJson(s.items.single.toJson()).receivedBytes, 100);
+      expect(Subscription.fromJson(s.items.single.toJson()).sentBytes, 50);
       expect(s.refreshing, isFalse);
 
       // подписка по http(s): refresh реально обращается к серверу
@@ -217,6 +223,30 @@ void main() {
       payload = 'not json';
       expect(await n.add('https://x.test/bad'), isNotNull);
       expect(container.read(provider).items, isEmpty);
+    });
+
+    test('refresh preserves traffic and subscriptions added while fetching', () async {
+      final pending = Completer<http.Response>();
+      var requests = 0;
+      final client = MockClient((_) {
+        requests++;
+        return requests == 1 ? Future.value(_resp(_sample)) : pending.future;
+      });
+      final p = StateNotifierProvider<SubscriptionsNotifier, SubscriptionsState>(
+          (ref) => SubscriptionsNotifier(ref, httpClient: client, autoLoad: false));
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final n = c.read(p.notifier);
+      await n.add('https://x.test/sub');
+      final id = c.read(p).items.single.id;
+      final refresh = n.refreshAll();
+      n.addTraffic(id, 123);
+      await n.add(_dataUrl(_sample));
+      pending.complete(_resp(_sample));
+      await refresh;
+      expect(c.read(p).items, hasLength(2));
+      expect(c.read(p).items.firstWhere((s) => s.id == id).usedBytes, 123);
+      client.close();
     });
 
     test('managed backend ids are hidden and mapped to their owner', () async {

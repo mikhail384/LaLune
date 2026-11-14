@@ -184,8 +184,8 @@ class _SubGroup extends StatelessWidget {
     final ratio = limit == null ? 0.0 : (used / limit).clamp(0.0, 1.0);
     final nearLimit = limit != null && ratio >= 0.9;
     final trafficText = limit == null
-        ? 'Трафик: ${formatBytes(used)}${sub.traffic.isEmpty ? '' : ' · ${sub.traffic}'}'
-        : 'Трафик: ${formatBytes(used)} из ${formatBytes(limit)}';
+        ? 'Локальный расход: ${formatBytes(used)}${sub.traffic.isEmpty ? '' : ' · ${sub.traffic}'}'
+        : 'Локальный расход: ${formatBytes(used)} из ${formatBytes(limit)}';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -283,6 +283,14 @@ class _SubGroup extends StatelessWidget {
                             : Colors.white.withOpacity(0.5),
                       ),
                     ),
+                      if (sub.receivedBytes + sub.sentBytes > 0) ...[
+                        const SizedBox(height: 3),
+                        Text(
+                          'Получено: ${formatBytes(sub.receivedBytes)} · Отправлено: ${formatBytes(sub.sentBytes)}'
+                          '${sub.usedBytes > sub.receivedBytes + sub.sentBytes ? ' (часть истории без разбивки)' : ''}',
+                          style: TextStyle(fontSize: 10.5, color: Colors.white.withOpacity(0.5)),
+                        ),
+                      ],
                     if (limit != null) ...[
                       const SizedBox(height: 5),
                       ClipRRect(

@@ -200,6 +200,10 @@ class Subscription {
 
   /// Реально израсходованный трафик по конфигам этой подписки (байты).
   final int usedBytes;
+  /// Directional totals since directional accounting was introduced.
+  /// Older aggregate-only history remains included in usedBytes.
+  final int receivedBytes;
+  final int sentBytes;
 
   /// SubConfig.key → id конфига в backend (конфиг создаётся при выборе).
   final Map<String, int> backendIds;
@@ -214,6 +218,8 @@ class Subscription {
     this.updatedAt,
     this.error,
     this.usedBytes = 0,
+    this.receivedBytes = 0,
+    this.sentBytes = 0,
     this.backendIds = const {},
   });
 
@@ -229,6 +235,8 @@ class Subscription {
     String? error,
     bool clearError = false,
     int? usedBytes,
+    int? receivedBytes,
+    int? sentBytes,
     Map<String, int>? backendIds,
   }) =>
       Subscription(
@@ -241,6 +249,8 @@ class Subscription {
         updatedAt: updatedAt ?? this.updatedAt,
         error: clearError ? null : (error ?? this.error),
         usedBytes: usedBytes ?? this.usedBytes,
+        receivedBytes: receivedBytes ?? this.receivedBytes,
+        sentBytes: sentBytes ?? this.sentBytes,
         backendIds: backendIds ?? this.backendIds,
       );
 
@@ -253,6 +263,8 @@ class Subscription {
         'configs': configs.map((c) => c.toJson()).toList(),
         'updatedAt': updatedAt?.toIso8601String(),
         'usedBytes': usedBytes,
+        'receivedBytes': receivedBytes,
+        'sentBytes': sentBytes,
         'backendIds': backendIds,
       };
 
@@ -268,6 +280,8 @@ class Subscription {
             .toList(),
         updatedAt: DateTime.tryParse((j['updatedAt'] ?? '') as String),
         usedBytes: (j['usedBytes'] as num?)?.toInt() ?? 0,
+        receivedBytes: (j['receivedBytes'] as num?)?.toInt() ?? 0,
+        sentBytes: (j['sentBytes'] as num?)?.toInt() ?? 0,
         backendIds: ((j['backendIds'] as Map?) ?? const {}).map(
           (k, v) => MapEntry(k.toString(), (v as num).toInt()),
         ),
@@ -337,6 +351,8 @@ Subscription parseLaLuneSub(
     configs: configs,
     updatedAt: DateTime.now().toUtc(),
     usedBytes: previous?.usedBytes ?? 0,
+    receivedBytes: previous?.receivedBytes ?? 0,
+    sentBytes: previous?.sentBytes ?? 0,
     // id backend-конфигов сохраняем только для тех, что остались в подписке
     backendIds: {
       for (final c in configs)

@@ -70,12 +70,12 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
         }
       }
     }
-    // Трафик считаем на подписку только если подключается её конфиг.
-    ref.read(subscriptionsProvider.notifier).beginConnection(owner?.id);
-
     // Новое подключение — новый лог: стираем старые записи в момент нажатия.
     await ref.read(logsProvider.notifier).clear();
     if (!mounted) return;
+    // Keep the tracker hand-off next to the synchronous transition to
+    // connecting; otherwise a timer can observe the old disconnected state.
+    ref.read(subscriptionsProvider.notifier).beginConnection(owner?.id);
     final ok = await ref.read(vpnProvider.notifier).connect(sel.id);
     if (!mounted) return;
     if (ok) {
