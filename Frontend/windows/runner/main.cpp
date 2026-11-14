@@ -14,6 +14,7 @@
 #include <winhttp.h>
 
 #include <cstdio>
+#include <initializer_list>
 #include <string>
 
 #include "flutter_window.h"
@@ -115,6 +116,27 @@ static bool file_exists(const std::wstring& path) {
   return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
 }
 
+// A portable bundle may carry the backend and signed Wintun DLL next to the
+// runner. Install only missing files; never overwrite an existing installation.
+static void install_bundled_backend() {
+  wchar_t exePath[MAX_PATH];
+  DWORD n = GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+  if (n == 0 || n >= MAX_PATH || appdata_dir().empty()) return;
+  std::wstring folder(exePath, n);
+  size_t slash = folder.find_last_of(L"\\/");
+  if (slash == std::wstring::npos) return;
+  folder.resize(slash);
+  CreateDirectoryW(manager_dir().c_str(), nullptr);
+  for (const wchar_t* name : {L"LaLuneManager.exe", L"wintun.dll"}) {
+    std::wstring source = folder + L"\\" + name;
+    std::wstring target = manager_dir() + L"\\" + name;
+    if (file_exists(source) && !file_exists(target) &&
+        !CopyFileW(source.c_str(), target.c_str(), TRUE)) {
+      OutputDebugStringW(L"[LaLune] failed to install bundled backend file\n");
+    }
+  }
+}
+
 // ============================================================
 //  Backend: старт / стоп
 // ============================================================
@@ -142,6 +164,7 @@ static bool backend_alive() {
 }
 
 static void start_backend() {
+  install_bundled_backend();
   std::wstring mgr = manager_exe();
 
   if (!file_exists(mgr)) {

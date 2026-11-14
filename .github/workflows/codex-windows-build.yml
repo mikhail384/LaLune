@@ -55,9 +55,26 @@ jobs:
             }
             if (-not $ready) { throw 'Windows backend did not answer /ping' }
             if ($ping.os -ne 'windows') { throw 'Unexpected backend OS' }
+            $fixture = @{name='Local fixture'; protocol='CSQTTR'; peer='192.0.2.1:46000'; password='local-test'; hashes='local-test'} | ConvertTo-Json
+            $config = Invoke-RestMethod -Uri 'http://127.0.0.1:1062/configs' -Method Post -ContentType 'application/json' -Body $fixture
+            if (-not $config.id) { throw 'Could not import fixture configuration' }
+            $configs = @(Invoke-RestMethod -Uri 'http://127.0.0.1:1062/configs')
+            if (-not ($configs | Where-Object { $_.id -eq $config.id })) { throw 'Fixture configuration missing' }
           } finally {
             Stop-Process -Id $process.Id -ErrorAction SilentlyContinue
           }
+      - name: Package backend and official Wintun
+        shell: pwsh
+        run: |
+          $release = 'Frontend/build/windows/x64/runner/Release'
+          $archive = Join-Path $env:RUNNER_TEMP 'wintun-0.14.1.zip'
+          Invoke-WebRequest -Uri 'https://www.wintun.net/builds/wintun-0.14.1.zip' -OutFile $archive -TimeoutSec 90
+          $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne '07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51') { throw 'Wintun archive checksum mismatch' }
+          Expand-Archive $archive -DestinationPath (Join-Path $env:RUNNER_TEMP 'wintun')
+          Copy-Item Backend/Desktop/target/release/lalune-backend.exe "$release/LaLuneManager.exe"
+          Copy-Item (Join-Path $env:RUNNER_TEMP 'wintun/wintun/bin/amd64/wintun.dll') "$release/wintun.dll"
+          Copy-Item (Join-Path $env:RUNNER_TEMP 'wintun/wintun/LICENSE.txt') "$release/WINTUN-LICENSE.txt"
       - uses: actions/upload-artifact@v4
         with:
           name: LaLune-Windows-test
