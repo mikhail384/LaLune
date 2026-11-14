@@ -48,11 +48,14 @@ try:
                               'protocol': 'CSQTTR', 'link': secret})
     if not config.get('id'):
         raise RuntimeError('test profile import failed')
+    print('Windows test profile imported', flush=True)
     api('/vpn/connect', {'configId': config['id']})
     wait_for(lambda: api('/vpn/status').get('connected'))
+    print('Windows backend reports connected', flush=True)
     wait_for(lambda: powershell("if (Get-NetIPAddress -InterfaceAlias 'CSQTT' "
         "-AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object AddressState -eq Preferred) "
         "{ 'ready' }") == 'ready', timeout=30)
+    print('Windows Wintun address ready', flush=True)
     route = powershell("Find-NetRoute -RemoteIPAddress '1.1.1.1' | "
                        "Select-Object -ExpandProperty InterfaceAlias -ErrorAction SilentlyContinue")
     if 'CSQTT' not in route.splitlines():
@@ -70,6 +73,18 @@ try:
     print('Windows CSQTTR: connected, Wintun route, HTTPS 200, RX/TX increased', flush=True)
 except Exception as error:
     print('Windows CSQTTR test failed:', type(error).__name__, flush=True)
+    allowed = {'connection timeout', 'test profile import failed',
+               'test route does not use Wintun', 'HTTPS data test failed',
+               'Wintun traffic counters did not increase'}
+    if type(error) is RuntimeError and str(error) in allowed:
+        print('Windows test stage:', str(error), flush=True)
+    try:
+        print('Windows backend state:', api('/vpn/status').get('state'), flush=True)
+        logs = json.dumps(api('/logs'), ensure_ascii=False).lower()
+        print('Windows diagnostic markers:', {word: word in logs for word in
+            ('getconf', 'dtls', 'timeout', 'wintun', 'tun start failed')}, flush=True)
+    except Exception:
+        pass
     raise SystemExit(1)
 finally:
     try:
