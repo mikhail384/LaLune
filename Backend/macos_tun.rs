@@ -300,20 +300,33 @@ impl Session {
         let handle = tokio::spawn(async move {
             let (mut reader, mut writer) = tokio::io::split(dev);
             let _routes = routes; // Drop откатывает маршруты и DNS
-            let mut outgoing = vec![0u8; 65535];
-            let mut incoming = vec![0u8; 65535];
+            // Darwin utun always prepends a four-byte network-order address
+            // family. The CSQTT UDP transport exchanges raw IP packets.
+            let mut outgoing = vec![0u8; 65539];
+            let mut incoming = vec![0u8; 65539];
             let result: Result<()> = async {
                 loop {
                     tokio::select! {
                         result = reader.read(&mut outgoing) => {
                             let n = result?;
                             if n == 0 { bail!("TUN закрыт"); }
-                            if socket.send(&outgoing[..n]).await? != n { bail!("Неполная отправка пакета ядру"); }
-                            tx.fetch_add(n as u64, Ordering::Relaxed);
+                            if n <= 4 { continue; }
+                            let family = u32::from_be_bytes(outgoing[..4].try_into().unwrap());
+                            if family != libc::AF_INET as u32 && family != libc::AF_INET6 as u32 { continue; }
+                            let packet = &outgoing[4..n];
+                            if socket.send(packet).await? != packet.len() { bail!("Неполная отправка пакета ядру"); }
+                            tx.fetch_add(packet.len() as u64, Ordering::Relaxed);
                         }
-                        result = socket.recv(&mut incoming) => {
+                        result = socket.recv(&mut incoming[4..]) => {
                             let n = result?;
-                            if writer.write(&incoming[..n]).await? != n { bail!("Неполная запись пакета в TUN"); }
+                            if n == 0 { continue; }
+                            let family = match incoming[4] >> 4 {
+                                4 => libc::AF_INET as u32,
+                                6 => libc::AF_INET6 as u32,
+                                _ => continue,
+                            };
+                            incoming[..4].copy_from_slice(&family.to_be_bytes());
+                            if writer.write(&incoming[..n + 4]).await? != n + 4 { bail!("Неполная запись пакета в TUN"); }
                             rx.fetch_add(n as u64, Ordering::Relaxed);
                         }
                     }

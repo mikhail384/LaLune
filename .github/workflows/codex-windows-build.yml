@@ -1,0 +1,67 @@
+name: LaLune Windows VM checks
+
+on:
+  push:
+    branches: [codex/lalune-improvements]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.5'
+          channel: stable
+          cache: true
+      - name: Build and test desktop backend
+        working-directory: Backend/Desktop
+        run: |
+          cargo test --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --release --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build Windows application
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force Frontend/assets | Out-Null
+          Copy-Item Assets/* Frontend/assets -Recurse -Force
+          Push-Location Frontend
+          flutter pub get
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          flutter build windows --release --no-tree-shake-icons
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Pop-Location
+      - name: Check backend startup on Windows VM
+        shell: pwsh
+        run: |
+          $env:APPDATA = Join-Path $env:RUNNER_TEMP 'lalune-isolated-appdata'
+          New-Item -ItemType Directory -Force $env:APPDATA | Out-Null
+          $backend = (Resolve-Path Backend/Desktop/target/release/lalune-backend.exe).Path
+          $process = Start-Process -FilePath $backend -WindowStyle Hidden -PassThru
+          try {
+            $ready = $false
+            foreach ($attempt in 1..30) {
+              try {
+                $ping = Invoke-RestMethod -Uri 'http://127.0.0.1:1062/ping' -TimeoutSec 1
+                if ($ping.ok) { $ready = $true; break }
+              } catch { Start-Sleep -Seconds 1 }
+            }
+            if (-not $ready) { throw 'Windows backend did not answer /ping' }
+            if ($ping.os -ne 'windows') { throw 'Unexpected backend OS' }
+          } finally {
+            Stop-Process -Id $process.Id -ErrorAction SilentlyContinue
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LaLune-Windows-test
+          path: |
+            Frontend/build/windows/x64/runner/Release/
+            Backend/Desktop/target/release/lalune-backend.exe
+          if-no-files-found: error
