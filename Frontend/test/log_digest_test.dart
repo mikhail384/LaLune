@@ -35,7 +35,7 @@ void main() {
     ]);
   });
 
-  test('server stream limit and VK failures are collapsed with a counter', () {
+  test('rejected stream parameters and VK failures are collapsed with a counter', () {
     final raw = [
       for (var i = 0; i < 71; i++)
         '[CORE] [ВОРКЕР #$i] Нефатальная ошибка разбора TUNCONF: превышен лимит потоков, продолжаем ожидание',
@@ -45,7 +45,8 @@ void main() {
     final e = digestLogs(raw);
     expect(e.length, 2);
     expect(e[0].level, DigestLevel.error);
-    expect(e[0].text, contains('лимит потоков исчерпан (×71)'));
+    expect(e[0].text, contains('Сервер отклонил параметры потока (×71)'));
+    expect(e[0].text, isNot(contains('подождите')));
     expect(e[1].text, 'VK: нет связи (проверьте доступность VK) ×2');
   });
 

@@ -87,6 +87,7 @@ class LaLuneVpnService : VpnService() {
         val tunRxBytes = java.util.concurrent.atomic.AtomicLong(0)
 
         @Volatile var snapshotConnected: Boolean = false
+        @Volatile var snapshotActiveSessions: Int = 0
         @Volatile var snapshotConfigId: Long = 0
         @Volatile var snapshotState: String = "disconnected"
         @Volatile var snapshotMessage: String = ""
@@ -218,6 +219,7 @@ class LaLuneVpnService : VpnService() {
 
                             coreManager.parseStats(line)?.let { (active, traffic) ->
                                 activeSessions = active
+                                snapshotActiveSessions = active
                                 trafficMB = String.format("%.2f", traffic)
                                 updateNotification()
 
@@ -508,6 +510,7 @@ class LaLuneVpnService : VpnService() {
         vpnInterface = null
 
         activeSessions = 0
+        snapshotActiveSessions = 0
         consecutiveActiveTicks = 0
         trafficMB = "0.00"
         detectedTunIP = null

@@ -498,7 +498,7 @@ class Backend(private val context: Context) {
                     200 to jsonOk(
                         "rxBytes" to rx, "txBytes" to tx,
                         "rxRate" to rxRate, "txRate" to txRate,
-                        "activeSessions" to if (vpnConnected) 1 else 0,
+                        "activeSessions" to if (vpnConnected) LaLuneVpnService.snapshotActiveSessions else 0,
                         "socks5Port" to socks5Port
                     )
                 }

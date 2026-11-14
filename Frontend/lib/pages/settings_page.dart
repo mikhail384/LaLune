@@ -461,24 +461,17 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               Expanded(
                 child: Builder(builder: (context) {
                   final value = int.tryParse(_workersCtl.text.trim());
-                  final tooMany = value != null && value > 30;
                   return TextField(
                     controller: _workersCtl,
                     keyboardType: TextInputType.number,
                     style: const TextStyle(fontSize: 13.5),
                     decoration: InputDecoration(
                       hintText: '$kDefaultWorkers',
-                      helperText: tooMany
-                          ? 'Рекомендуется $kDefaultWorkers. Больше 30 может '
-                              'исчерпать лимит потоков сервера — подключение '
-                              'зависнет'
-                          : 'Рекомендуется $kDefaultWorkers · допустимо от '
-                              '$kMinWorkers до $kMaxWorkers',
+                      helperText: 'Рекомендуется $kDefaultWorkers · допустимо от '
+                          '$kMinWorkers до $kMaxWorkers. После сохранения '
+                          'переподключитесь; фактическое число согласуется с сервером.',
                       helperMaxLines: 3,
-                      helperStyle: TextStyle(
-                        fontSize: 10.5,
-                        color: tooMany ? const Color(0xFFFFB74D) : null,
-                      ),
+                      helperStyle: const TextStyle(fontSize: 10.5),
                       suffixIcon: value == kDefaultWorkers
                           ? null
                           : IconButton(
