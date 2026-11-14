@@ -1,0 +1,68 @@
+name: LaLune Windows private connection test
+run-name: LaLune Windows private test ${{ inputs.test_id }}
+
+on:
+  push:
+    branches: [codex/lalune-improvements]
+  workflow_dispatch:
+    inputs:
+      artifact_run_id:
+        description: Successful Windows build run ID
+        required: true
+        default: '43606277826'
+      test_id:
+        description: Unique test identifier
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  real-connection:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: LaLune-Windows-test
+          run-id: ${{ inputs.artifact_run_id }}
+          github-token: ${{ github.token }}
+          path: test-package
+      - name: Test a private CSQTTR profile and restore routing
+        shell: pwsh
+        env:
+          LALUNE_WINDOWS_TEST_LINK: ${{ secrets.LALUNE_WINDOWS_TEST_LINK }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:LALUNE_WINDOWS_TEST_LINK) { throw 'Missing private test profile' }
+          $env:APPDATA = Join-Path $env:RUNNER_TEMP 'lalune-windows-private-home'
+          $dir = Join-Path $env:APPDATA '.la-lune'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          $backend = Get-ChildItem test-package -Recurse -Filter LaLuneManager.exe | Select-Object -First 1
+          $wintun = Get-ChildItem test-package -Recurse -Filter wintun.dll | Select-Object -First 1
+          if (-not $backend -or -not $wintun) { throw 'Windows test package is incomplete' }
+          Copy-Item $wintun.FullName (Join-Path $dir 'wintun.dll')
+          $core = Join-Path $dir 'csqttr-core.exe'
+          Invoke-WebRequest -Uri 'https://github.com/Endlad2/csqttr-core/releases/download/2026.11.14.07.32/client-windows-x86_64.exe' -OutFile $core -TimeoutSec 120
+          if ((Get-FileHash $core -Algorithm SHA256).Hash.ToLowerInvariant() -ne '03125ebbfa1584050eec0ff298710bd7ca58281e2f837c976a5a1f29021c6ebe') { throw 'CSQTTR core checksum mismatch' }
+          $process = Start-Process -FilePath $backend.FullName -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput (Join-Path $env:RUNNER_TEMP 'lalune-private-stdout.log') `
+            -RedirectStandardError (Join-Path $env:RUNNER_TEMP 'lalune-private-stderr.log')
+          try {
+            $ready = $false
+            foreach ($attempt in 1..30) {
+              try {
+                $ping = Invoke-RestMethod -Uri 'http://127.0.0.1:1062/ping' -TimeoutSec 1
+                if ($ping.ok) { $ready = $true; break }
+              } catch { Start-Sleep -Seconds 1 }
+            }
+            if (-not $ready) { throw 'Windows backend did not answer /ping' }
+            python Backend/tests/windows_real.py
+            if ($LASTEXITCODE -ne 0) { throw 'Private Windows connection test failed' }
+          } finally {
+            try { Invoke-RestMethod -Uri 'http://127.0.0.1:1062/shutdown' -Method Post -TimeoutSec 2 | Out-Null } catch {}
+            Stop-Process -Id $process.Id -ErrorAction SilentlyContinue
+          }
