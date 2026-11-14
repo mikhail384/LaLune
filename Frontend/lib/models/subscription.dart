@@ -353,11 +353,22 @@ Future<String> fetchSubscriptionText(
   Duration timeout = const Duration(seconds: 15),
 }) async {
   final src = stripSubscriptionPrefix(input);
+  const maxBytes = 2 * 1024 * 1024;
   if (src.toLowerCase().startsWith('data:')) {
     try {
+      // Reject oversized encoded data before allocating the decoded payload.
+      if (src.length > maxBytes * 3 + 1024) {
+        throw const SubscriptionFormatException('Подписка слишком большая');
+      }
       final data = UriData.parse(src);
+      final bytes = data.contentAsBytes();
+      if (bytes.length > maxBytes) {
+        throw const SubscriptionFormatException('Подписка слишком большая');
+      }
       // contentAsString() падает на не-ASCII без charset: декодируем сами в UTF-8.
-      return _maybeBase64(utf8.decode(data.contentAsBytes(), allowMalformed: true));
+      return _maybeBase64(utf8.decode(bytes, allowMalformed: true));
+    } on SubscriptionFormatException {
+      rethrow;
     } catch (_) {
       throw const SubscriptionFormatException('Некорректный data:-URL подписки');
     }
@@ -371,17 +382,25 @@ Future<String> fetchSubscriptionText(
   }
   final c = client ?? http.Client();
   try {
-    final resp = await c.get(uri, headers: const {
+    final request = http.Request('GET', uri)..headers.addAll(const {
       'Accept': 'application/json, text/plain, */*',
       'User-Agent': 'LaLune',
-    }).timeout(timeout);
+    });
+    final resp = await c.send(request).timeout(timeout);
     if (resp.statusCode != 200) {
       throw SubscriptionFormatException('Сервер подписки ответил ${resp.statusCode}');
     }
-    if (resp.bodyBytes.length > 2 * 1024 * 1024) {
+    if (resp.contentLength != null && resp.contentLength! > maxBytes) {
       throw const SubscriptionFormatException('Подписка слишком большая');
     }
-    return _maybeBase64(utf8.decode(resp.bodyBytes, allowMalformed: true));
+    final bytes = <int>[];
+    await for (final chunk in resp.stream.timeout(timeout)) {
+      if (bytes.length + chunk.length > maxBytes) {
+        throw const SubscriptionFormatException('Подписка слишком большая');
+      }
+      bytes.addAll(chunk);
+    }
+    return _maybeBase64(utf8.decode(bytes, allowMalformed: true));
   } on SubscriptionFormatException {
     rethrow;
   } catch (e) {

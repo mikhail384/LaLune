@@ -249,16 +249,15 @@ enum NatMode {
     IptMasquerade,
     Nft,
     IptSnat,
-    /// No NAT available: only the router's own traffic goes through the tunnel.
+    /// No NAT implementation was available.
     None,
 }
 
 const NFT_NAT_TABLE: &str = "lalune_nat";
 const NFT_MANGLE_TABLE: &str = "lalune_mangle";
 
-/// Installs NAT for traffic leaving through the TUN. Never fails: the router's
-/// own traffic does not need NAT, so a missing kernel module only disables
-/// forwarding of LAN clients (reported in the log with the package to install).
+/// Tries available NAT implementations; callers must reject a missing NAT
+/// before activating packet selection for LAN clients.
 fn install_nat(name: &str, iptables_nat: bool, events: &EventBus) -> NatMode {
     // 1. classic iptables MASQUERADE (needs xt_MASQUERADE / kmod-ipt-nat)
     if iptables_nat {
@@ -289,8 +288,7 @@ fn install_nat(name: &str, iptables_nat: bool, events: &EventBus) -> NatMode {
     }
 
     events.emit(Event::log(
-        "[ROUTE] WARNING: NAT недоступен (нет xt_MASQUERADE/nft_masq в ядре). \
-         Трафик самого роутера идёт через VPN, клиенты LAN — нет. \
+        "[ROUTE] NAT недоступен (нет xt_MASQUERADE/nft_masq в ядре). \
          Установите kmod-ipt-nat и kmod-nft-nat (opkg/apk install) для полной работы",
     ));
     NatMode::None
@@ -421,6 +419,7 @@ impl OpenWrtRouting {
         routing.nat = install_nat(name, routing.nat_chain, &routing.events);
         routing.nat_chain_used = matches!(routing.nat, NatMode::IptMasquerade | NatMode::IptSnat);
         routing.nft_nat = matches!(routing.nat, NatMode::Nft);
+        require_nat(routing.nat)?;
 
         // Table 10620 contains only the VPN default. The core UID has a higher
         // priority rule to main, so its transport can never recurse into lalune0.
@@ -504,6 +503,7 @@ impl OpenWrtRouting {
 
         self.nat = install_nat(name, false, &self.events);
         self.nft_nat = matches!(self.nat, NatMode::Nft);
+        require_nat(self.nat)?;
 
         self.nft_mangle = true; // даже при ошибке Drop удалит возможные остатки
         run_nft_script(&script).context("Не удалось создать nft-таблицу разметки LaLune")?;
@@ -777,10 +777,17 @@ fn cleanup_stale_chains(name: &str, events: &EventBus) {
         try_iptables(&["-t", table, "-F", chain]);
         try_iptables(&["-t", table, "-X", chain]);
     }
-    try_ip(&["-4", "rule", "del", "priority", MARK_RULE_PRIORITY]);
-    try_ip(&["-4", "rule", "del", "priority", UID_RULE_PRIORITY]);
-    try_ip(&["-4", "route", "flush", "table", ROUTE_TABLE]);
+    // Do not remove policy rules by priority or flush a table here: their
+    // ownership cannot be established from the existence of our chains.
+    // ensure_route_slots_free reports collisions without touching them.
     try_nft(&["delete", "table", "ip", NFT_NAT_TABLE]);
+}
+
+fn require_nat(mode: NatMode) -> Result<()> {
+    if matches!(mode, NatMode::None) {
+        bail!("NAT недоступен: установите совместимые с ядром kmod-nft-nat или kmod-ipt-nat; маршрутизация не включена");
+    }
+    Ok(())
 }
 
 fn ensure_route_slots_free() -> Result<()> {
@@ -890,6 +897,14 @@ pub fn extract_ipv4_addrs(line: &str) -> Vec<String> {
 #[cfg(test)]
 mod routing_tests {
     use super::*;
+
+    #[test]
+    fn missing_nat_is_a_startup_error() {
+        assert!(require_nat(NatMode::None).is_err());
+        for mode in [NatMode::IptMasquerade, NatMode::Nft, NatMode::IptSnat] {
+            assert!(require_nat(mode).is_ok());
+        }
+    }
 
     fn isolated_network() {
         assert_eq!(unsafe { libc::geteuid() }, 0);

@@ -113,6 +113,19 @@ void main() {
   });
 
   group('fetchSubscriptionText', () {
+    test('rejects oversized data and HTTP responses', () async {
+      final oversized = 'a' * (2 * 1024 * 1024 + 1);
+      await expectLater(
+        fetchSubscriptionText('data:text/plain,$oversized'),
+        throwsA(isA<SubscriptionFormatException>()),
+      );
+      final client = MockClient((_) async => _resp(oversized));
+      await expectLater(
+        fetchSubscriptionText('https://x.test/large', client: client),
+        throwsA(isA<SubscriptionFormatException>()),
+      );
+      client.close();
+    });
     test('decodes data: URLs (base64 and plain)', () async {
       expect(
           jsonDecode(await fetchSubscriptionText(_dataUrl(_sample)))['hoster'],
