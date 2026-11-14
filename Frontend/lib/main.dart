@@ -26,6 +26,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'api/api_client.dart';
 import 'backend_watchdog.dart';
+import 'frame_metrics.dart';
 import 'pages/connection_page.dart';
 import 'pages/info_page.dart';
 import 'pages/logs_page.dart';
@@ -37,6 +38,7 @@ import 'widgets/router_banner.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  startFrameMetrics();
   await ApiClient.initializeLocalPort();
   runApp(const ProviderScope(child: LaLuneApp()));
 }
