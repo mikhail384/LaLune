@@ -18,7 +18,7 @@ jobs:
       - name: Install build and emulation tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential curl zstd zip unzip cmake jq qemu-user
+          sudo apt-get install -y --no-install-recommends build-essential curl zstd zip unzip cmake jq qemu-user iproute2 iptables nftables
       - name: Build ramips backend and cores
         working-directory: Backend/OpenWRT
         run: bash build-ramips.sh
@@ -43,6 +43,17 @@ jobs:
           curl -fsS http://127.0.0.1:1062/panel > "$TEST_HOME/panel.html"
           grep -Fq 'href="/panel/panel.css"' "$TEST_HOME/panel.html"
           grep -Fq 'src="/panel/panel.js"' "$TEST_HOME/panel.html"
+      - name: Exercise ramips routing in isolated namespaces
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/lalune-ramips-launch" <<EOF
+          #!/bin/sh
+          exec /usr/bin/qemu-mipsel -cpu 24Kc "$GITHUB_WORKSPACE/Backend/OpenWRT/output/lalune-openwrt-backend-ramips-lean" "\$@"
+          EOF
+          chmod 755 "$RUNNER_TEMP/lalune-ramips-launch"
+          for case in clean fw4 firewall_failure dns_failure; do
+            sudo python3 Backend/tests/openwrt_routing.py "$RUNNER_TEMP/lalune-ramips-launch" --case "$case"
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: LaLune-OpenWrt-ramips-test
