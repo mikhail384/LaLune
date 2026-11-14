@@ -726,7 +726,8 @@ async fn vpn_connect(
     }
 
     let args = core_manager::build_args(&config, &settings, vpn::CORE_LISTEN_PORT);
-    state.log(format!("[VPN] core args: {}", args.join(" ")));
+    // Arguments may contain passwords, VK hashes, tokens and profile URLs.
+    state.log(format!("[VPN] core starting ({} arguments)", args.len()));
 
     let core = match CoreProcess::spawn(
         &core_path,

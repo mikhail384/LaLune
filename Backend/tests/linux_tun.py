@@ -45,6 +45,7 @@ while True:
 
 CASES=['routes','packet','disconnect','cancel','setup_failure','dns_failure','dns_changed','core_exit','reconnect','group_conflict','table_alias','missing_kill','invalid_connect']
 DESKTOP_CASES=['paperflux_compat','csqttr_compat']
+LEGACY_CASES=['paperflux_compat']
 
 
 def cmd(*args, check=True):
@@ -86,8 +87,11 @@ def inside(binary, case):
         cmd('ip','addr','add','192.0.2.10/24','dev','wan0')
         cmd('ip','link','set','wan0','up')
         cmd('ip','route','add','default','via','192.0.2.1','dev','wan0')
-        if case=='table_alias' or case in DESKTOP_CASES:
-            alias_file=Path('/usr/share/iproute2/rt_tables')
+        if case=='table_alias' or case in LEGACY_CASES:
+            # Ubuntu commonly ships the override in /etc only; iproute2 uses
+            # that file in preference to its /usr/share default.
+            alias_file=Path('/etc/iproute2/rt_tables')
+            if not alias_file.exists(): alias_file=Path('/usr/share/iproute2/rt_tables')
             aliases=root/'rt_tables';aliases.write_text(alias_file.read_text()+'\n10620 preexisting\n')
             cmd('mount','--bind',str(aliases),str(alias_file))
             cmd('ip','route','add','198.51.100.0/24','via','192.0.2.1','dev','wan0','table','10620')
@@ -131,10 +135,13 @@ def inside(binary, case):
                 assert not api('/vpn/status')['connected'],'Cancelled watcher restarted TUN'
                 assert cmd('ip','link','show','csqtt0',check=False).returncode!=0
             elif case in ['setup_failure','dns_failure','table_alias']:
-                wait_for(lambda:'tun start failed' in (root/'backend.log').read_text())
+                wait_for(lambda:any(marker in (root/'backend.log').read_text()
+                                    for marker in ('tun start failed', 'tunnel start failed')))
                 assert not api('/vpn/status')['connected'],'Setup failure reported connected'
             else:
                 wait_for(lambda:api('/vpn/status')['connected'])
+                assert 'local-test' not in json.dumps(api('/logs'), ensure_ascii=False), \
+                    'Core arguments leaked the fixture password or hashes to logs'
                 link=cmd('ip','-details','link','show','dev','csqtt0').stdout
                 assert 'UP' in link,'csqtt0 exists but is not UP: '+link
                 tun_addr=cmd('ip','-4','addr','show','dev','csqtt0').stdout
@@ -149,7 +156,7 @@ def inside(binary, case):
                     assert api('/vpn/status')['connected'],'Invalid connect stopped the active VPN'
                     assert Path(f'/proc/{child}').exists(),'Invalid connect killed the active core'
                 identity=Path(f'/proc/{child}/status').read_text()
-                if case in DESKTOP_CASES:
+                if case in LEGACY_CASES:
                     assert '\nUid:\t0\t' in identity,'Legacy core identity changed'
                     logs=(app/'logs.log').read_text()
                     assert 'TEST_CORE_CWD='+os.getcwd()+'\n' in logs,'Legacy core cwd changed'
@@ -159,7 +166,7 @@ def inside(binary, case):
                     assert next(l for l in identity.splitlines() if l.startswith('Groups:')).strip()=='Groups:'
                 if case=='group_conflict':
                     assert next(l for l in identity.splitlines() if l.startswith('Gid:')).split()[1]!='61062','Core inherited an existing dormant group'
-                if case=='routes':
+                if case in ('routes', 'csqttr_compat'):
                     normal=cmd('ip','route','get','198.51.100.1','uid','0').stdout
                     assert 'dev csqtt0' in normal,normal
                     logs=app/'logs.log'
