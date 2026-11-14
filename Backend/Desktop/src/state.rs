@@ -52,7 +52,12 @@ pub struct AppState {
 pub fn app_dir() -> Result<PathBuf> {
     #[cfg(target_os = "windows")]
     {
-        let dir = dirs::data_dir()
+        // The Windows runner stores its backend in %APPDATA%; respect the
+        // same environment path here, including redirected roaming profiles.
+        let dir = std::env::var_os("APPDATA")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .or_else(dirs::data_dir)
             .ok_or_else(|| anyhow!("cannot resolve APPDATA"))?
             .join(".la-lune");
         Ok(dir)

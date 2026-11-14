@@ -92,3 +92,27 @@ jobs:
             "$env:RUNNER_TEMP/lalune-echo-core.exe" `
             Frontend/build/windows/x64/runner/Release/wintun.dll
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Launch packaged Windows application
+        shell: pwsh
+        run: |
+          $env:APPDATA = Join-Path $env:RUNNER_TEMP 'lalune-ui-appdata'
+          New-Item -ItemType Directory -Force $env:APPDATA | Out-Null
+          $release = 'Frontend/build/windows/x64/runner/Release'
+          $runner = Get-ChildItem "$release/*.exe" | Where-Object { $_.Name -ne 'LaLuneManager.exe' } | Select-Object -First 1
+          if (-not $runner) { throw 'Flutter runner missing' }
+          $process = Start-Process -FilePath $runner.FullName -WorkingDirectory $runner.DirectoryName -WindowStyle Hidden -PassThru
+          try {
+            $ready = $false
+            foreach ($attempt in 1..30) {
+              try {
+                $ping = Invoke-RestMethod -Uri 'http://127.0.0.1:1062/ping' -TimeoutSec 1
+                if ($ping.ok) { $ready = $true; break }
+              } catch { Start-Sleep -Seconds 1 }
+            }
+            $process.Refresh()
+            if ($process.HasExited -or -not $ready) { throw 'Windows application or bundled backend did not start' }
+            if (-not (Test-Path "$env:APPDATA/.la-lune/wintun.dll")) { throw 'Bundled Wintun was not installed' }
+          } finally {
+            try { Invoke-RestMethod -Uri 'http://127.0.0.1:1062/shutdown' -Method Post -TimeoutSec 2 | Out-Null } catch {}
+            Stop-Process -Id $process.Id -ErrorAction SilentlyContinue
+          }
