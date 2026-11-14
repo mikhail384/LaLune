@@ -163,15 +163,20 @@ impl Routes {
             .collect();
         if !servers.is_empty() {
             for service in network_services() {
-                let previous = run("networksetup", &["-getdnsservers", &service])
-                    .map(|t| {
-                        t.lines()
-                            .map(str::trim)
-                            .filter(|l| l.parse::<std::net::IpAddr>().is_ok())
-                            .map(String::from)
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
+                let previous = match run("networksetup", &["-getdnsservers", &service]) {
+                    Ok(t) => t.lines()
+                        .map(str::trim)
+                        .filter(|l| l.parse::<std::net::IpAddr>().is_ok())
+                        .map(String::from)
+                        .collect::<Vec<_>>(),
+                    Err(e) => {
+                        // Without a snapshot we cannot safely restore this service.
+                        r.events.emit(Event::error(format!(
+                            "не удалось сохранить DNS службы {service}: {e}"
+                        )));
+                        continue;
+                    }
+                };
                 let mut args = vec!["-setdnsservers", service.as_str()];
                 args.extend(servers.iter().map(String::as_str));
                 if run("networksetup", &args).is_ok() {

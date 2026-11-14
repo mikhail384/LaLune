@@ -9,7 +9,11 @@ permissions:
   contents: read
 
 jobs:
+  native-cores:
+    uses: ./.github/workflows/codex-macos-native-cores.yml
+
   build:
+    needs: native-cores
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
@@ -40,6 +44,14 @@ jobs:
           cd Frontend
           flutter pub get
           flutter build macos --release --no-tree-shake-icons
+      - uses: actions/download-artifact@v4
+        with:
+          name: csqtt-macos-arm64
+          path: dist-macos/cores/csqtt
+      - uses: actions/download-artifact@v4
+        with:
+          name: csqttr-macos-arm64
+          path: dist-macos/cores/csqttr
       - name: Package test DMG
         run: |
           set -euo pipefail
@@ -47,6 +59,9 @@ jobs:
           test -d "$APP"
           cp dist-macos/lalune-backend "$APP/Contents/Resources/lalune-backend"
           chmod +x "$APP/Contents/Resources/lalune-backend"
+          cp dist-macos/cores/csqtt/csqtt-macos-arm64 "$APP/Contents/Resources/csqtt-macos-arm64"
+          cp dist-macos/cores/csqttr/csqttr-macos-arm64 "$APP/Contents/Resources/csqttr-macos-arm64"
+          chmod +x "$APP/Contents/Resources/"*-macos-arm64
           codesign --force --deep --sign - "$APP"
           mkdir -p Output/dmg
           cp -R "$APP" Output/dmg/
@@ -86,3 +101,8 @@ jobs:
             /tmp/lalune-ping.json
             /tmp/lalune-screen.png
           if-no-files-found: warn
+      - name: Exercise macOS utun with local synthetic core
+        run: |
+          set -euo pipefail
+          sudo "$(command -v python3)" Backend/tests/macos_tun.py \
+            "$PWD/Frontend/build/macos/Build/Products/Release/lalune.app/Contents/Resources/lalune-backend"

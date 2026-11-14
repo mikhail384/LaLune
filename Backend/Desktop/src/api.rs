@@ -590,6 +590,24 @@ async fn vpn_connect(
     state.log(format!("[VPN] connecting to {} ({})", config.name, kind.id()));
 
     let core_path = state::core_path_for(&state.app_dir, &config.protocol);
+    // On Apple Silicon, use the signed core bundled with this application when
+    // the user has not installed a separate core. Keep 2.1.9 on its own path.
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    let core_path = if !core_path.exists()
+        && !config.protocol.trim().eq_ignore_ascii_case("CSQTT 2.1.9")
+    {
+        let filename = match kind {
+            ProtocolKind::Csqtt => Some("csqtt-macos-arm64"),
+            ProtocolKind::Csqttr => Some("csqttr-macos-arm64"),
+            ProtocolKind::PaperFlux => None,
+        };
+        filename
+            .and_then(|name| std::env::current_exe().ok()?.parent().map(|p| p.join(name)))
+            .filter(|path| path.is_file())
+            .unwrap_or(core_path)
+    } else {
+        core_path
+    };
 
     if !core_path.exists() {
         state.log(format!("[VPN] {} core not found, downloading...", kind.id()));
