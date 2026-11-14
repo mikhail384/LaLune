@@ -1,0 +1,53 @@
+name: LaLune OpenWrt ramips checks
+
+on:
+  push:
+    branches: [codex/lalune-improvements]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ramips:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build and emulation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential curl zstd zip unzip cmake jq qemu-user
+      - name: Build ramips backend and cores
+        working-directory: Backend/OpenWRT
+        run: bash build-ramips.sh
+      - name: Run ramips backend under QEMU
+        working-directory: Backend/OpenWRT
+        run: |
+          set -euo pipefail
+          TEST_HOME=$(mktemp -d)
+          qemu-mipsel -cpu 24Kc -E HOME="$TEST_HOME" output/lalune-openwrt-backend-ramips >"$TEST_HOME/backend.log" 2>&1 &
+          BACKEND_PID=$!
+          trap 'kill "$BACKEND_PID" 2>/dev/null || true; wait "$BACKEND_PID" 2>/dev/null || true' EXIT
+          READY=0
+          for i in $(seq 1 30); do
+            if curl -fsS --max-time 2 http://127.0.0.1:1062/ping > "$TEST_HOME/ping.json"; then READY=1; break; fi
+            kill -0 "$BACKEND_PID"
+            sleep 1
+          done
+          test "$READY" = 1
+          jq -e '.ok and .platform == "openwrt" and .arch == "mips"' "$TEST_HOME/ping.json"
+          curl -fsS http://127.0.0.1:1062/core/protocols | jq -e \
+            'all(.[]; .bundled == true) and (map(.id) | sort == ["CSQTT", "CSQTT 2.1.9", "CSQTTR"])'
+          curl -fsS http://127.0.0.1:1062/panel > "$TEST_HOME/panel.html"
+          grep -Fq 'href="/panel/panel.css"' "$TEST_HOME/panel.html"
+          grep -Fq 'src="/panel/panel.js"' "$TEST_HOME/panel.html"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LaLune-OpenWrt-ramips-test
+          path: |
+            Backend/OpenWRT/output/lalune-openwrt-backend-ramips
+            Backend/OpenWRT/output/lalune-openwrt-backend-ramips-lean
+            Backend/OpenWRT/output/lalune-openwrt-cores-ramips.zip
+          if-no-files-found: error
