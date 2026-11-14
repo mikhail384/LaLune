@@ -51,18 +51,38 @@ class _AddConfigDialog extends StatefulWidget {
   State<_AddConfigDialog> createState() => _AddConfigDialogState();
 }
 
-class _AddConfigDialogState extends State<_AddConfigDialog> {
+class _AddConfigDialogState extends State<_AddConfigDialog>
+    with WidgetsBindingObserver {
   late final TextEditingController _linkController;
+  final _linkFocus = FocusNode();
+  final _linkKey = GlobalKey();
   String _protocol = 'CSQTT 2.1.9';
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _linkController = TextEditingController();
   }
 
   @override
+  void didChangeMetrics() {
+    // On landscape tablets the keyboard can shrink the dialog after the field
+    // receives focus. Reveal it again once the inset animation has settled.
+    if (!_linkFocus.hasFocus) return;
+    Future<void>.delayed(const Duration(milliseconds: 300), () {
+      final field = _linkKey.currentContext;
+      if (mounted && _linkFocus.hasFocus && field != null) {
+        Scrollable.ensureVisible(field, duration: const Duration(milliseconds: 180),
+            alignment: 1);
+      }
+    });
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _linkFocus.dispose();
     _linkController.dispose();
     super.dispose();
   }
@@ -82,6 +102,7 @@ class _AddConfigDialogState extends State<_AddConfigDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final keyboardVisible = MediaQuery.viewInsetsOf(context).bottom > 0;
     return AlertDialog(
       backgroundColor: const Color(0xFF0F1540),
       shape: RoundedRectangleBorder(
@@ -89,6 +110,15 @@ class _AddConfigDialogState extends State<_AddConfigDialog> {
         side: BorderSide(color: Colors.white.withOpacity(0.1)),
       ),
       title: const Text('Добавить профиль'),
+      titlePadding: keyboardVisible
+          ? const EdgeInsets.fromLTRB(24, 12, 24, 4)
+          : null,
+      contentPadding: keyboardVisible
+          ? const EdgeInsets.fromLTRB(24, 4, 24, 4)
+          : null,
+      actionsPadding: keyboardVisible
+          ? const EdgeInsets.fromLTRB(8, 0, 8, 4)
+          : null,
       content: SizedBox(
         width: 480,
         child: SingleChildScrollView(
@@ -153,8 +183,9 @@ class _AddConfigDialogState extends State<_AddConfigDialog> {
               ),
               const SizedBox(height: 6),
               TextField(
+                key: _linkKey,
                 controller: _linkController,
-                autofocus: true,
+                focusNode: _linkFocus,
                 keyboardType: TextInputType.url,
                 autocorrect: false,
                 enableSuggestions: false,
@@ -163,7 +194,7 @@ class _AddConfigDialogState extends State<_AddConfigDialog> {
                 textInputAction: TextInputAction.done,
                 onSubmitted: (_) => _save(),
                 maxLines: 4,
-                minLines: 2,
+                minLines: keyboardVisible ? 1 : 2,
                 style: const TextStyle(fontSize: 13),
                 decoration: InputDecoration(
                   hintText: _placeholderFor(_protocol),

@@ -111,8 +111,8 @@ fn network_services() -> Vec<String> {
 
 struct Routes {
     undo: Vec<Vec<String>>,
-    /// (service, прежние DNS; пусто = были автоматические)
-    dns: Vec<(String, Vec<String>)>,
+    /// (service, прежние DNS, установленные DNS; пусто = автоматические)
+    dns: Vec<(String, Vec<String>, Vec<String>)>,
     events: EventBus,
 }
 
@@ -180,7 +180,7 @@ impl Routes {
                 let mut args = vec!["-setdnsservers", service.as_str()];
                 args.extend(servers.iter().map(String::as_str));
                 if run("networksetup", &args).is_ok() {
-                    r.dns.push((service, previous));
+                    r.dns.push((service, previous, servers.clone()));
                 }
             }
         }
@@ -190,7 +190,25 @@ impl Routes {
 
 impl Drop for Routes {
     fn drop(&mut self) {
-        for (service, previous) in &self.dns {
+        for (service, previous, applied) in &self.dns {
+            let current = run("networksetup", &["-getdnsservers", service]);
+            let current = match current {
+                Ok(text) => text.lines().map(str::trim)
+                    .filter(|line| line.parse::<std::net::IpAddr>().is_ok())
+                    .map(String::from).collect::<Vec<_>>(),
+                Err(e) => {
+                    self.events.emit(Event::error(format!(
+                        "не удалось проверить DNS службы {service} перед восстановлением: {e}"
+                    )));
+                    continue;
+                }
+            };
+            if current != *applied {
+                self.events.emit(Event::log(format!(
+                    "[TUN] DNS службы {service} изменён извне; восстановление пропущено"
+                )));
+                continue;
+            }
             let mut args = vec!["-setdnsservers", service.as_str()];
             if previous.is_empty() {
                 args.push("Empty");
