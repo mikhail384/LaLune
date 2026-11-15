@@ -1,0 +1,54 @@
+name: LaLune Windows split routing
+on:
+  push:
+    branches: [codex/lalune-improvements]
+    paths:
+      - 'Backend/Desktop/**'
+      - 'Backend/tests/windows_tun.py'
+      - 'Backend/tests/echo_core.rs'
+      - '.github/workflows/codex-windows-split-test.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  split:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: Backend/Desktop
+      - name: Build and unit test backend
+        working-directory: Backend/Desktop
+        shell: pwsh
+        run: |
+          cargo test --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Prepare verified test dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $wintun = Join-Path $env:RUNNER_TEMP 'wintun.zip'
+          Invoke-WebRequest 'https://www.wintun.net/builds/wintun-0.14.1.zip' -OutFile $wintun -TimeoutSec 90
+          if ((Get-FileHash $wintun -Algorithm SHA256).Hash.ToLowerInvariant() -ne '07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51') { throw 'Wintun checksum mismatch' }
+          Expand-Archive $wintun -DestinationPath (Join-Path $env:RUNNER_TEMP 'wintun')
+          $sing = Join-Path $env:RUNNER_TEMP 'sing.zip'
+          Invoke-WebRequest 'https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-windows-amd64.zip' -OutFile $sing -TimeoutSec 120
+          if ((Get-FileHash $sing -Algorithm SHA256).Hash.ToLowerInvariant() -ne '99185d75d314a07dbba4a130c8ad986cbeb629a07927975636b341ca61f991df') { throw 'sing-box checksum mismatch' }
+          Expand-Archive $sing -DestinationPath (Join-Path $env:RUNNER_TEMP 'sing')
+          Copy-Item (Join-Path $env:RUNNER_TEMP 'sing/sing-box-1.14.4-windows-amd64/sing-box.exe') 'Backend/Desktop/target/debug/sing-box.exe'
+          Copy-Item (Join-Path $env:RUNNER_TEMP 'wintun/wintun/bin/amd64/wintun.dll') 'Backend/Desktop/target/debug/wintun.dll'
+          rustc Backend/tests/echo_core.rs -O -o "$env:RUNNER_TEMP/lalune-echo-core.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Test Wintun, process, DNS and domain routing
+        shell: pwsh
+        run: |
+          python Backend/tests/windows_tun.py `
+            Backend/Desktop/target/debug/lalune-backend.exe `
+            "$env:RUNNER_TEMP/lalune-echo-core.exe" `
+            Backend/Desktop/target/debug/wintun.dll
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
