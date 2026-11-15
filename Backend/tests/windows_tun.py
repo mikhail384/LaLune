@@ -5,6 +5,7 @@ Runs only in an elevated disposable Windows VM. Uses an isolated APPDATA,
 proxy mode and a temporary host route; no real VPN or credentials are used.
 """
 import json
+import http.client
 import os
 from pathlib import Path
 import shutil
@@ -123,6 +124,11 @@ with tempfile.TemporaryDirectory(prefix='lalune-windows-tun-') as temporary:
                 except socket.timeout:
                     got_echo = False
                 assert got_echo == expected_echo, f'{mode}: expected echo={expected_echo}, got {got_echo}'
+            if expected_echo:
+                connection = http.client.HTTPConnection('1.1.1.1', 23457, timeout=8)
+                connection.request('GET', '/', headers={'Host': 'process.lalune.test'})
+                assert connection.getresponse().read() == b'lalune-tunnel'
+                connection.close()
             api('/vpn/disconnect', {})
             wait_for(lambda: not api('/vpn/status')['connected'])
             wait_for(lambda: powershell("if (Get-NetRoute -InterfaceAlias 'LaLune-Routing' -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }", False).returncode == 0)
@@ -149,6 +155,11 @@ with tempfile.TemporaryDirectory(prefix='lalune-windows-tun-') as temporary:
                 except socket.timeout:
                     got_echo = False
                 assert got_echo == expected_echo, f'{mode}/domain: expected echo={expected_echo}, got {got_echo}'
+            if expected_echo:
+                connection = http.client.HTTPConnection('1.1.1.1', 23457, timeout=8)
+                connection.request('GET', '/', headers={'Host': 'selected.lalune.test'})
+                assert connection.getresponse().read() == b'lalune-tunnel'
+                connection.close()
             api('/vpn/disconnect', {})
             wait_for(lambda: not api('/vpn/status')['connected'])
             wait_for(lambda: powershell("if (Get-NetRoute -InterfaceAlias 'LaLune-Routing' -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }", False).returncode == 0)
