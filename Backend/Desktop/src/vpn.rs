@@ -635,6 +635,18 @@ fn start_tun_windows(
     } else {
         configure_proxy_adapter_windows(&tun_ip, &events);
         if runtime.windows_isolated_proxy.load(Ordering::Acquire) {
+            // Windows may keep the freshly configured address tentative while
+            // duplicate-address detection runs. A successful netsh call does
+            // not mean sockets can bind yet (WSAEADDRNOTAVAIL / 10049).
+            let mut ready = false;
+            for _ in 0..75 {
+                if std::net::UdpSocket::bind((tun_ip.as_str(), 0)).is_ok() {
+                    ready = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            if !ready { anyhow::bail!("Windows не завершила назначение адреса туннеля"); }
             let result = std::process::Command::new("netsh")
                 .args(["interface", "ipv4", "add", "route", "prefix=0.0.0.0/0", "interface=CSQTT", "nexthop=0.0.0.0", "metric=9000", "store=active"])
                 .output().context("Не удалось запустить netsh для изолированного туннеля")?;
