@@ -388,16 +388,20 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           child: Text(_busy ? 'Сохранение...' : 'Сохранить настройки')),
     ];
 
-    return ListView.builder(
-      key: const PageStorageKey('settings-page'),
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
-      itemCount: items.length,
-      itemBuilder: (context, index) => Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 520),
-          child: SizedBox(
-            width: double.infinity,
-            child: items[index](context),
+    // The settings cards do not overlap, so Flutter can reuse the same
+    // backdrop blur without changing the glass effect on individual cards.
+    return BackdropGroup(
+      child: ListView.builder(
+        key: const PageStorageKey('settings-page'),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+        itemCount: items.length,
+        itemBuilder: (context, index) => Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 520),
+            child: SizedBox(
+              width: double.infinity,
+              child: items[index](context),
+            ),
           ),
         ),
       ),

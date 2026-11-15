@@ -44,16 +44,13 @@ class NavBar extends StatelessWidget {
         }),
       ),
     );
-    // Keep the translucent surface but skip its costly blur pass on Android.
-    final content = Theme.of(context).platform == TargetPlatform.android
-        ? bar
-        : ClipRRect(
-            borderRadius: borderRadius,
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-              child: bar,
-            ),
-          );
+    final content = ClipRRect(
+      borderRadius: borderRadius,
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: bar,
+      ),
+    );
 
     return RepaintBoundary(
       child: Padding(
@@ -102,9 +99,8 @@ class _NavButtonState extends State<_NavButton> {
         ? Colors.transparent
         : (_hover ? Colors.white.withOpacity(0.22) : Colors.transparent);
 
-    final labelColor = active
-        ? activeColor
-        : Colors.white.withOpacity(_hover ? 0.95 : 0.55);
+    final labelColor =
+        active ? activeColor : Colors.white.withOpacity(_hover ? 0.95 : 0.55);
 
     final iconOpacity = active ? 1.0 : (_hover ? 1.0 : 0.85);
 
