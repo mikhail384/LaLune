@@ -87,7 +87,7 @@ pub struct VpnRuntime {
     #[cfg(target_os = "windows")]
     windows_isolated_route: AtomicBool,
     #[cfg(target_os = "windows")]
-    pub split_router: Mutex<Option<std::process::Child>>,
+    pub split_router: Mutex<Option<crate::split_routing::RouterChild>>,
     pub proxy_routes: Arc<Mutex<Vec<String>>>,
     pub physical_gateway: Arc<Mutex<String>>,
     pub phase: Arc<RwLock<String>>,

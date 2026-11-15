@@ -125,7 +125,34 @@ with tempfile.TemporaryDirectory(prefix='lalune-windows-tun-') as temporary:
                 assert got_echo == expected_echo, f'{mode}: expected echo={expected_echo}, got {got_echo}'
             api('/vpn/disconnect', {})
             wait_for(lambda: not api('/vpn/status')['connected'])
+            wait_for(lambda: powershell("if (Get-NetRoute -InterfaceAlias 'LaLune-Routing' -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }", False).returncode == 0)
+            assert powershell("if (Get-NetRoute -InterfaceAlias 'CSQTT' -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }", False).returncode == 0
             print(json.dumps({'mode': mode, 'process_udp': 'passed'}), flush=True)
+        for mode, expected_echo in [('whitelist', True), ('blacklist', False)]:
+            api('/settings', {'windowsSplitEnabled': True, 'windowsSplitMode': mode,
+                'windowsSplitPrograms': '', 'windowsSplitDomains': 'selected.lalune.test'}, method='PATCH')
+            api('/vpn/connect', {'configId': config['id']})
+            wait_for(lambda: api('/vpn/status')['connected'], timeout=45)
+            time.sleep(2)
+            query = (b'\x72\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00'
+                     b'\x08selected\x06lalune\x04test\x00\x00\x01\x00\x01')
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as dns:
+                dns.settimeout(8)
+                dns.sendto(query, ('172.29.252.2', 53))
+                response, _ = dns.recvfrom(512)
+                assert response[:2] == query[:2] and b'\x01\x01\x01\x01' in response
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.settimeout(4)
+                sock.sendto(b'lalune-split-domain-test', ('1.1.1.1', 23456))
+                try:
+                    got_echo = sock.recv(128) == b'lalune-split-domain-test'
+                except socket.timeout:
+                    got_echo = False
+                assert got_echo == expected_echo, f'{mode}/domain: expected echo={expected_echo}, got {got_echo}'
+            api('/vpn/disconnect', {})
+            wait_for(lambda: not api('/vpn/status')['connected'])
+            wait_for(lambda: powershell("if (Get-NetRoute -InterfaceAlias 'LaLune-Routing' -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }", False).returncode == 0)
+            print(json.dumps({'mode': mode, 'domain_dns_udp': 'passed'}), flush=True)
     finally:
         if interface_default:
             powershell("Remove-NetRoute -DestinationPrefix '0.0.0.0/0' -InterfaceAlias 'CSQTT' -NextHop '0.0.0.0' -PolicyStore ActiveStore -Confirm:$false -ErrorAction SilentlyContinue", False)

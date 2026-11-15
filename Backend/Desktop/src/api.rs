@@ -677,6 +677,9 @@ async fn vpn_connect(
         }
         let domains: Vec<String> = settings.windows_split_domains.lines().map(str::trim).filter(|v| !v.is_empty()).map(str::to_owned).collect();
         let programs: Vec<String> = settings.windows_split_programs.lines().map(str::trim).filter(|v| !v.is_empty()).map(str::to_owned).collect();
+        if programs.iter().any(|path| !std::path::Path::new(path).is_file()) {
+            return err(400, "Один из файлов приложений не найден");
+        }
         let mode = if settings.windows_split_mode == "whitelist" { crate::split_routing::Mode::Whitelist } else { crate::split_routing::Mode::Blacklist };
         let own = std::env::current_exe().unwrap_or_default();
         let engine = own.parent().unwrap_or(std::path::Path::new("")).join("sing-box.exe");
