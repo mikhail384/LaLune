@@ -170,13 +170,15 @@ with tempfile.TemporaryDirectory(prefix='lalune-windows-tun-') as temporary:
             'windowsSplitPrograms': str(Path(sys.executable).resolve()), 'windowsSplitDomains': ''}, method='PATCH')
         api('/vpn/connect', {'configId': config['id']})
         wait_for(lambda: api('/vpn/status')['connected'], timeout=45)
-        def router_pid():
-            result = powershell(f"(Get-CimInstance Win32_Process -Filter 'ParentProcessId={process.pid}' | Where-Object Name -eq 'sing-box.exe' | Select-Object -First 1 -ExpandProperty ProcessId)", False)
+        def child_pid(name):
+            result = powershell(f"(Get-CimInstance Win32_Process -Filter 'ParentProcessId={process.pid}' | Where-Object Name -eq '{name}' | Select-Object -First 1 -ExpandProperty ProcessId)", False)
             return int(result.stdout.strip()) if result.stdout.strip().isdigit() else None
-        pid = wait_for(router_pid)
+        router = wait_for(lambda: child_pid('sing-box.exe'))
+        core_pid = wait_for(lambda: child_pid('csqttr-core.exe'))
         process.kill()
         process.wait(timeout=10)
-        wait_for(lambda: powershell(f"if (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{ exit 1 }} else {{ exit 0 }}", False).returncode == 0)
+        for pid in (router, core_pid):
+            wait_for(lambda: powershell(f"if (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{ exit 1 }} else {{ exit 0 }}", False).returncode == 0)
         wait_for(lambda: powershell("if (Get-NetRoute -InterfaceAlias 'LaLune-Routing' -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }", False).returncode == 0)
         print(json.dumps({'backend_crash_cleanup': 'passed'}), flush=True)
     finally:
