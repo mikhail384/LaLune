@@ -5,8 +5,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:lalune/api/api_client.dart';
 import 'package:lalune/models/subscription.dart';
+import 'package:lalune/models/vpn_status.dart';
+import 'package:lalune/state/providers.dart';
 import 'package:lalune/state/subscriptions_notifier.dart';
+import 'package:lalune/state/vpn_notifier.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 const _sample = '''
@@ -28,6 +32,12 @@ http.Response _resp(String body, [int status = 200]) => http.Response.bytes(
 
 String _dataUrl(String json) =>
     'data:application/json;base64,${base64.encode(utf8.encode(json))}';
+
+class _TestVpnNotifier extends VpnNotifier {
+  _TestVpnNotifier(Ref ref) : super(ref);
+
+  void setStatus(VpnStatus next) => state = next;
+}
 
 void main() {
   group('parseLaLuneSub', () {
@@ -274,5 +284,99 @@ void main() {
       // имитируем материализованный конфиг
       expect(sub.backendIds, isEmpty);
     });
+  });
+
+  test('restores active subscription tracking without counting old bytes twice', () async {
+    final original = parseLaLuneSub(_sample, source: _dataUrl(_sample));
+    final saved = original.copyWith(
+      usedBytes: 400,
+      receivedBytes: 250,
+      sentBytes: 150,
+      backendIds: {original.configs.first.key: 42},
+    );
+    SharedPreferences.setMockInitialValues({
+      'lalune_subscriptions_v1': jsonEncode([saved.toJson()]),
+    });
+    var rx = 1000;
+    var tx = 600;
+    var failStats = true;
+    Completer<http.Response>? pendingStats;
+    final client = MockClient((request) async {
+      switch (request.url.path) {
+        case '/vpn/status':
+          return _resp('{"state":"connected","connected":true,"configId":42}');
+        case '/vpn/stats':
+          if (pendingStats != null) return pendingStats!.future;
+          if (failStats) return _resp('temporary failure', 503);
+          return _resp(jsonEncode({'rxBytes': rx, 'txBytes': tx}));
+        default:
+          return _resp('{}');
+      }
+    });
+    final api = ApiClient(httpClient: client);
+    final container = ProviderContainer(overrides: [
+      apiClientProvider.overrideWithValue(api),
+      vpnProvider.overrideWith((ref) => _TestVpnNotifier(ref)),
+    ]);
+    addTearDown(() { container.dispose(); client.close(); });
+    final notifier = container.read(subscriptionsProvider.notifier);
+    final vpn = container.read(vpnProvider.notifier) as _TestVpnNotifier;
+    vpn.setStatus(const VpnStatus(state: 'connected', connected: true, configId: 42));
+    for (var i = 0; i < 50 && container.read(subscriptionsProvider).items.isEmpty; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(container.read(subscriptionsProvider).items, hasLength(1));
+
+    await notifier.flushTraffic();
+    expect(container.read(subscriptionsProvider).items.single.usedBytes, 400);
+    failStats = false;
+    await notifier.flushTraffic();
+    expect(container.read(subscriptionsProvider).items.single.usedBytes, 400);
+    rx += 25;
+    tx += 10;
+    await notifier.flushTraffic();
+    final tracked = container.read(subscriptionsProvider).items.single;
+    expect(tracked.usedBytes, 435);
+    expect(tracked.receivedBytes, 275);
+    expect(tracked.sentBytes, 160);
+
+    // Switching to an ordinary configuration outside the UI must stop
+    // attribution, and switching back establishes a fresh baseline.
+    vpn.setStatus(const VpnStatus(state: 'connected', connected: true, configId: 99));
+    rx = 5000;
+    tx = 4000;
+    await notifier.flushTraffic();
+    expect(container.read(subscriptionsProvider).items.single.usedBytes, 435);
+    vpn.setStatus(const VpnStatus(state: 'connected', connected: true, configId: 42));
+    await notifier.flushTraffic();
+    rx += 2;
+    tx += 1;
+    await notifier.flushTraffic();
+    expect(container.read(subscriptionsProvider).items.single.usedBytes, 438);
+
+    // A sample requested for an already tracked connection can also arrive
+    // after another configuration becomes active.
+    pendingStats = Completer<http.Response>();
+    final activeSample = notifier.flushTraffic();
+    await Future<void>.delayed(Duration.zero);
+    vpn.setStatus(const VpnStatus(state: 'connected', connected: true, configId: 99));
+    pendingStats!.complete(_resp(jsonEncode({'rxBytes': 9000, 'txBytes': 8000})));
+    await activeSample;
+    pendingStats = null;
+    expect(container.read(subscriptionsProvider).items.single.usedBytes, 438);
+    vpn.setStatus(const VpnStatus(state: 'connected', connected: true, configId: 42));
+
+    // A delayed sample from the previous subscription must not attach its
+    // counters after the active connection has switched to an ordinary config.
+    notifier.beginConnection(null);
+    pendingStats = Completer<http.Response>();
+    final pendingSample = notifier.flushTraffic();
+    await Future<void>.delayed(Duration.zero);
+    vpn.setStatus(const VpnStatus(state: 'connected', connected: true, configId: 99));
+    pendingStats!.complete(_resp(jsonEncode({'rxBytes': 5000, 'txBytes': 4000})));
+    await pendingSample;
+    pendingStats = null;
+    await notifier.flushTraffic();
+    expect(container.read(subscriptionsProvider).items.single.usedBytes, 438);
   });
 }

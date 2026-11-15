@@ -69,6 +69,7 @@ class SubscriptionsNotifier extends StateNotifier<SubscriptionsState> {
 
   /// Подписка, по конфигу которой запущено текущее подключение (null — нет).
   String? _activeSubId;
+  int? _activeConfigId;
   int _lastRx = 0;
   int _lastTx = 0;
   int _connectionGeneration = 0;
@@ -264,8 +265,9 @@ class SubscriptionsNotifier extends StateNotifier<SubscriptionsState> {
   // ----------------------------------------------------------------- traffic
 
   /// Вызывается при нажатии «Подключить»: учёт трафика пойдёт на эту подписку.
-  void beginConnection(String? subId) {
+  void beginConnection(String? subId, {int? configId}) {
     _activeSubId = subId;
+    _activeConfigId = subId == null ? null : configId;
     _lastRx = 0;
     _lastTx = 0;
     _connectionGeneration++;
@@ -279,10 +281,38 @@ class SubscriptionsNotifier extends StateNotifier<SubscriptionsState> {
   }
 
   Future<void> _trackTraffic() async {
-    final subId = _activeSubId;
-    if (subId == null || _tracking) return;
+    if (_tracking) return;
+    if (_activeSubId == null &&
+        !state.items.any((subscription) => subscription.backendIds.isNotEmpty)) {
+      return;
+    }
     final vpn = _ref.read(vpnProvider);
+    var subId = _activeSubId;
     if (vpn.connected) {
+      if (subId != null && vpn.configId > 0 && _activeConfigId != null &&
+          _activeConfigId != vpn.configId) {
+        // A connection changed outside this UI. Never attribute its counters
+        // to the previous configuration, even within the same subscription.
+        _activeSubId = null;
+        _activeConfigId = null;
+        _lastRx = 0;
+        _lastTx = 0;
+        _connectionGeneration++;
+        subId = null;
+      }
+      // The VPN service can outlive the UI process. Recover ownership from
+      // the active backend config, but establish a baseline first: the
+      // cumulative tunnel counters may already have been recorded before the
+      // restart and must not be added twice.
+      final resuming = subId == null;
+      if (resuming) {
+        if (vpn.configId <= 0) return;
+        subId = state.ownerOf(vpn.configId)?.id;
+        if (subId == null) return;
+      }
+      final ownerId = subId;
+      if (ownerId == null) return;
+      final configId = vpn.configId;
       final completion = Completer<void>();
       try {
         _tracking = true;
@@ -290,21 +320,36 @@ class SubscriptionsNotifier extends StateNotifier<SubscriptionsState> {
         final generation = _connectionGeneration;
         final j = await _ref.read(apiClientProvider).getJson('/vpn/stats');
         if (!mounted || generation != _connectionGeneration) return;
+        final currentVpn = _ref.read(vpnProvider);
+        if (!currentVpn.connected ||
+            (configId > 0 && currentVpn.configId != configId)) return;
         final rx = ((j['rxBytes'] as num?) ?? 0).toInt();
         final tx = ((j['txBytes'] as num?) ?? 0).toInt();
+        if (resuming) {
+          if (_activeSubId != null || state.ownerOf(configId)?.id != ownerId ||
+              rx < 0 || tx < 0) {
+            return;
+          }
+          _activeSubId = ownerId;
+          _activeConfigId = configId;
+          _lastRx = rx;
+          _lastTx = tx;
+          return;
+        }
         final rxDelta = trafficDelta(_lastRx, rx);
         final txDelta = trafficDelta(_lastTx, tx);
         _lastRx = rx;
         _lastTx = tx;
-        addDirectionalTraffic(subId, rxDelta, txDelta);
+        addDirectionalTraffic(ownerId, rxDelta, txDelta);
       } catch (_) {} finally {
         _tracking = false;
         if (identical(_trackCompletion, completion)) _trackCompletion = null;
         completion.complete();
       }
-    } else if (!_isTransition(vpn.state)) {
+    } else if (subId != null && !_isTransition(vpn.state)) {
       // отключились — следующее подключение начнёт новый учёт
       _activeSubId = null;
+      _activeConfigId = null;
       _lastRx = 0;
       _lastTx = 0;
       _connectionGeneration++;

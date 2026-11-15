@@ -83,7 +83,7 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
     if (!mounted) return;
     // Keep the tracker hand-off next to the synchronous transition to
     // connecting; otherwise a timer can observe the old disconnected state.
-    ref.read(subscriptionsProvider.notifier).beginConnection(owner?.id);
+    ref.read(subscriptionsProvider.notifier).beginConnection(owner?.id, configId: sel.id);
     final ok = await ref.read(vpnProvider.notifier).connect(sel.id);
     if (!mounted) return;
     if (ok) {
