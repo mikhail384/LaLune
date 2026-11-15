@@ -7,7 +7,7 @@
 // Process.exec), copied into the app bundle, and invoked by the "Deploy" tab.
 //
 // It connects to a user-provided server over SSH and installs the selected
-// protocol core (CSQTT / FreeTurn / OlcRTC / OpenFlux / ToTS).
+// protocol core (CSQTT / FreeTurn / OlcRTC / ToTS).
 //
 // SSH is performed by shelling out to the operating system's OpenSSH client
 // (`ssh`), which is available on Windows 10+, Linux and macOS. This keeps the

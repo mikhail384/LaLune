@@ -71,9 +71,12 @@ class LaLuneVpnService : VpnService() {
         private const val NOTIFICATION_TICK_MS = 2_000L
 
         const val ACTION_STATUS = "com.lalune.lalune.VPN_STATUS"
+        const val ACTION_LOG = "com.lalune.lalune.VPN_LOG"
         const val EXTRA_CONNECTED = "connected"
         const val EXTRA_STATE = "state"
         const val EXTRA_MESSAGE = "message"
+        const val EXTRA_LOG_LINE = "line"
+        const val EXTRA_LOG_CORE = "core"
 
         /**
          * Process-wide snapshot of the last published VPN state. A freshly
@@ -109,6 +112,15 @@ class LaLuneVpnService : VpnService() {
             }
             ctx.sendBroadcast(i)
         }
+
+        fun notifyLog(ctx: Context, line: String, core: Boolean = false) {
+            val i = Intent(ACTION_LOG).apply {
+                setPackage(ctx.packageName)
+                putExtra(EXTRA_LOG_LINE, line)
+                putExtra(EXTRA_LOG_CORE, core)
+            }
+            ctx.sendBroadcast(i)
+        }
     }
 
     @Volatile private var detectedTunIP: String? = null
@@ -140,11 +152,13 @@ class LaLuneVpnService : VpnService() {
         super.onCreate()
         coreManager = CoreManager(this)
         startForegroundCompat()
+        notifyLog(this, "[VPN] service created")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             "START" -> if (!isRunning) {
+                notifyLog(this, "[VPN] START received; configId=$snapshotConfigId")
                 isRunning = true
                 publishState("connecting", false, "Подключение")
                 startFlow()
@@ -169,9 +183,11 @@ class LaLuneVpnService : VpnService() {
                 if (runtimeFile.exists()) JSONObject(runtimeFile.readText()) else null
             } catch (e: Exception) {
                 Log.e(TAG, "invalid ToTS runtime: ${e.message}")
+                notifyLog(this@LaLuneVpnService, "[VPN] invalid ToTS runtime: ${e.message.orEmpty()}")
                 null
             }
             if (totsRuntime != null) {
+                notifyLog(this@LaLuneVpnService, "[VPN] ToTS runtime loaded; creating TUN")
                 establishing = true
                 val established = establishTun()
                 establishing = false
@@ -455,12 +471,17 @@ class LaLuneVpnService : VpnService() {
                 vpnInterface = iface
                 totsTunFd = inherited
                 tunEstablished = true
+                notifyLog(this@LaLuneVpnService, "[VPN] TUN fd=${inherited.fd} ready; starting ToTS")
                 val started = coreManager.startCore(
                     protocol = CoreManager.PROTO_TOTS,
                     args = args,
-                    onLog = { line -> Log.i(TAG, line) },
+                    onLog = { line ->
+                        Log.i(TAG, line)
+                        notifyLog(this@LaLuneVpnService, line, core = true)
+                    },
                 )
                 if (!started) {
+                    notifyLog(this@LaLuneVpnService, "[VPN] ToTS process failed to start")
                     tunEstablished = false
                     try { inherited.close() } catch (_: Exception) {}
                     totsTunFd = null
@@ -469,6 +490,7 @@ class LaLuneVpnService : VpnService() {
                     return@withLock false
                 }
                 Log.i(TAG, "ToTS TUN up: IP=$tunIP MTU=$tunMtu fd=${inherited.fd}")
+                notifyLog(this@LaLuneVpnService, "[VPN] ToTS started; TUN up IP=$tunIP MTU=$tunMtu")
                 updateNotification()
                 return@withLock true
             }

@@ -75,6 +75,9 @@ flutter:
     - assets/
     - assets/openwrt/
 
+  shaders:
+    - shaders/glass_modal.frag
+
   fonts:
     - family: Nunito
       fonts:

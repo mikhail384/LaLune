@@ -70,13 +70,6 @@ class Links {
       repo: 'https://github.com/Endlad2/olcrtc-core',
     ),
     ProtocolInfo(
-      name: 'OpenFlux',
-      subtitle: 'Docs + MAX',
-      description:
-          'Пробрасывает трафик через облачные документы и мессенджер MAX.',
-      repo: 'https://github.com/Endlad2/OpenFlux-core',
-    ),
-    ProtocolInfo(
       name: 'ToTS',
       subtitle: 'ToTS relay',
       description: 'Экспериментальный протокол сообщества.',

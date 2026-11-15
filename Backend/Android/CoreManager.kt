@@ -387,7 +387,17 @@ class CoreManager(private val context: Context) {
                 onLog("[CORE] process exited")
             }.apply { isDaemon = true }.start()
 
-            true
+            try { Thread.sleep(140) } catch (_: InterruptedException) {}
+            val immediateExitCode = try { proc.exitValue() } catch (_: IllegalThreadStateException) { null }
+            if (immediateExitCode != null) {
+                isRunning = false
+                onLog("[CORE] process exited immediately (code=$immediateExitCode)")
+                coreProcess = null
+                false
+            } else {
+                onLog("[CORE] process started")
+                true
+            }
         } catch (e: Exception) {
             Log.e(TAG, "[CORE] start failed: ${e.message}", e)
             onLog("[CORE] start failed: ${e.message}")

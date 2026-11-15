@@ -125,6 +125,14 @@ class Backend(private val context: Context) {
 
     private val vpnStatusReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context?, intent: Intent?) {
+            if (intent?.action == LaLuneVpnService.ACTION_LOG) {
+                val line = intent.getStringExtra(LaLuneVpnService.EXTRA_LOG_LINE).orEmpty()
+                if (line.isNotBlank()) {
+                    if (intent.getBooleanExtra(LaLuneVpnService.EXTRA_LOG_CORE, false)) addCoreLog(line)
+                    else addLog(line)
+                }
+                return
+            }
             val connected = intent?.getBooleanExtra(
                 LaLuneVpnService.EXTRA_CONNECTED, false
             ) ?: false
@@ -205,7 +213,10 @@ class Backend(private val context: Context) {
     }
 
     private fun registerVpnReceiver() {
-        val filter = IntentFilter(LaLuneVpnService.ACTION_STATUS)
+        val filter = IntentFilter().apply {
+            addAction(LaLuneVpnService.ACTION_STATUS)
+            addAction(LaLuneVpnService.ACTION_LOG)
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             context.registerReceiver(vpnStatusReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
@@ -970,14 +981,6 @@ class Backend(private val context: Context) {
         put("vkAuthMode", "vkcalls")
         put("allowHashRedistribution", false)
         put("validateVkHashes", false)
-        put("pfTransport", "yandex")
-        put("pfUrl", "")
-        put("pfUrls", "")
-        put("pfVolgaUrl", "")
-        put("pfMode", "proxy")
-        put("pfSocks5", "127.0.0.1:1080")
-        put("pfTcpRecovery", "auto")
-        put("pfSession", false)
         put("pfClientIp", "10.10.10.2")
         put("pfAuthService", "")
         put("pfIpcSocket", "")
@@ -1366,13 +1369,17 @@ class Backend(private val context: Context) {
         // truncated when the core starts).
         logs.clear()
         val settings = loadSettings()
-        val sel = readSelectedConfig()
         val requestedId = try { JSONObject(body).optLong("configId", 0) } catch (_: Exception) { 0 }
-        val selectedId = sel?.optLong("id", 0) ?: 0
-        if (requestedId != 0L && requestedId != selectedId) {
-            return 400 to jsonErr("Выбранная конфигурация изменилась; выберите её снова")
-        }
-        val protocol = sel?.optString("protocol", PROTO_CSQTT) ?: PROTO_CSQTT
+        val sel = (if (requestedId != 0L) {
+            findConfig(requestedId)?.also { writeSelectedConfig(it) }
+                ?: return 404 to jsonErr("config not found")
+        } else {
+            readSelectedConfig()
+        }) ?: return 400 to jsonErr("no config selected")
+        val selectedId = sel.optLong("id", 0)
+        if (selectedId == 0L) return 400 to jsonErr("no config selected")
+        val protocol = sel.optString("protocol", PROTO_CSQTT)
+        addLog("[VPN] connect requested: configId=$selectedId protocol=$protocol")
         val cm = coreManager ?: return 500 to jsonErr("coreManager not ready")
 
         if (cm.getCorePath(protocol) == null) {
@@ -1381,12 +1388,13 @@ class Backend(private val context: Context) {
         }
 
         if (protocol.equals(PROTO_TOTS, ignoreCase = true)) {
-            val raw = sel?.optString("rawLink", "") ?: ""
+            val raw = sel.optString("rawLink", "")
             if (raw.isBlank()) return 400 to jsonErr("no ToTS config link")
             val runtime = try { buildTotsRuntime(raw, settings) }
             catch (e: Exception) { return 400 to jsonErr(e.message ?: "invalid ToTS config") }
             try { totsRuntimeFile.writeText(runtime.toString()) }
             catch (_: Exception) { return 500 to jsonErr("cannot prepare ToTS runtime") }
+            addLog("[VPN] ToTS runtime prepared; requesting Android VPN service")
 
             LaLuneVpnService.snapshotConfigId = selectedId
             markVpnConnecting()
@@ -1403,13 +1411,13 @@ class Backend(private val context: Context) {
             try { totsRuntimeFile.delete() } catch (_: Exception) {}
         }
 
-        val peer = sel?.optString("peer", "") ?: settings.optString("peer", "")
+        val peer = sel.optString("peer", settings.optString("peer", ""))
         if (peer.isNullOrEmpty()) return 400 to jsonErr("no config selected")
 
-        val password = sel?.optString("password", "") ?: settings.optString("password", "")
+        val password = sel.optString("password", settings.optString("password", ""))
 
         // Fallback: если в конфиге хешей нет — берём из settings.vkHashes.
-        val cfgHashes = sel?.optString("hashes", "") ?: ""
+        val cfgHashes = sel.optString("hashes", "")
         val hashes = if (cfgHashes.isNotEmpty()) cfgHashes
                      else settings.optString("vkHashes", "")
 
@@ -1603,10 +1611,22 @@ class Backend(private val context: Context) {
 
     private fun startVpnService() {
         val i = Intent(context, LaLuneVpnService::class.java).apply { action = "START" }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(i)
-        } else {
-            context.startService(i)
+        addLog("[VPN] starting LaLuneVpnService")
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(i)
+            } else {
+                context.startService(i)
+            }
+        } catch (e: Exception) {
+            addLog("[VPN] failed to start service: ${e.javaClass.simpleName}: ${e.message.orEmpty()}")
+            vpnConnected = false
+            vpnState = "error"
+            vpnMessage = "Не удалось запустить VPN-сервис"
+            emit(
+                "status",
+                JSONObject().put("connected", false).put("state", vpnState).put("message", vpnMessage)
+            )
         }
     }
 
