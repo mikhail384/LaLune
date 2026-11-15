@@ -69,6 +69,15 @@ void main() {
     expect(digestLogs(raw).length, lessThanOrEqualTo(40));
   });
 
+  test('tunnel startup errors retain the complete routing failure', () {
+    const detail = 'Настройка OpenWRT iptables/policy routing: '
+        'iptables -t nat -A LALUNE_NAT -j MASQUERADE: '
+        'RULE_APPEND failed: missing kernel module';
+    final entries = digestLogs(['[VPN] tun start failed: $detail']);
+    expect(entries.single.level, DigestLevel.error);
+    expect(entries.single.text, 'Ошибка запуска туннеля: $detail');
+  });
+
   test('digest carries the time of the latest event', () {
     final e = digestLogs(
       ['[VPN] connecting using CSQTT 2.1.9', '[VPN] timeout'],

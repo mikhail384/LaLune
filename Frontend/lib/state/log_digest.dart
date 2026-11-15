@@ -121,6 +121,11 @@ final List<_Rule> _rules = [
       useCapture: true),
   _Rule(RegExp(r'\[VPN\] timeout'), 'timeout', DigestLevel.error,
       'Подключение не удалось: сервер не отвечает'),
+  // Routing errors carry the failing command and OS response after the
+  // context prefix. Keep the complete chain for actionable diagnostics.
+  _Rule(RegExp(r'tun start failed:\s*(.+)', caseSensitive: false),
+      'tun-start-failed', DigestLevel.error, 'Ошибка запуска туннеля: {n}',
+      useCapture: true),
 ];
 
 final RegExp _stats =
