@@ -1,0 +1,104 @@
+--- a/lib/api/api_client.dart
++++ b/lib/api/api_client.dart
+@@ -23,7 +23,7 @@
+ class ApiClient {
+   static const String _defaultHost = '127.0.0.1';
+   static const int _defaultPort = 1062;
+-  static int _localPort = _defaultPort;
++  static int _localPort = kIsWeb ? Uri.base.port : _defaultPort;
+   static const Duration _timeout = Duration(seconds: 30);
+ 
+   /// Port of THIS app's local backend (1062 original, 1064 LaLune Test).
+--- a/lib/models/subscription.dart
++++ b/lib/models/subscription.dart
+@@ -317,9 +317,11 @@
+ 
+ /// Идентификатор подписки по источнику (без хешей-зависимостей).
+ String subscriptionIdFor(String source) {
+-  var h = 0xcbf29ce484222325 & 0x7fffffffffffffff;
++  final mask = (BigInt.one << 63) - BigInt.one;
++  final prime = BigInt.parse('100000001b3', radix: 16);
++  var h = BigInt.parse('cbf29ce484222325', radix: 16) & mask;
+   for (final unit in source.codeUnits) {
+-    h = ((h ^ unit) * 0x100000001b3) & 0x7fffffffffffffff;
++    h = ((h ^ BigInt.from(unit)) * prime) & mask;
+   }
+   return 's${h.toRadixString(36)}';
+ }
+--- a/lib/state/logs_notifier.dart
++++ b/lib/state/logs_notifier.dart
+@@ -20,6 +20,7 @@
+ import 'dart:convert';
+ import 'dart:io';
+ 
++import 'package:flutter/foundation.dart' show kIsWeb;
+ import 'package:flutter_riverpod/flutter_riverpod.dart';
+ 
+ import 'providers.dart';
+@@ -159,6 +160,7 @@
+   bool get _showCoreLogs => _ref.read(_showCoreLogsProvider);
+ 
+   void _startWebSocket() {
++    if (kIsWeb) return; // HTTP polling remains active on the web.
+     final generation = ++_wsGeneration;
+     final api = _ref.read(apiClientProvider);
+     final uri = Uri(
+--- a/lib/state/vpn_notifier.dart
++++ b/lib/state/vpn_notifier.dart
+@@ -1,3 +1,4 @@
++import 'package:flutter/foundation.dart' show kIsWeb;
+ // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+ 
+ import 'dart:async';
+@@ -46,6 +47,7 @@
+   }
+ 
+   void _startSse() {
++    if (kIsWeb) return; // Polling provides status on the web.
+     final api = _ref.read(apiClientProvider);
+     _sse = SseClient(
+       uriProvider: () => Uri(
+--- a/lib/theme/app_theme.dart
++++ b/lib/theme/app_theme.dart
+@@ -56,7 +56,7 @@
+       style: TextButton.styleFrom(foregroundColor: Colors.white70),
+     ),
+     // DialogThemeData — актуальное имя класса в Flutter 3.29+.
+-    dialogTheme: const DialogThemeData(
++    dialogTheme: const DialogTheme(
+       backgroundColor: kSurface,
+       shape: RoundedRectangleBorder(
+         borderRadius: BorderRadius.all(Radius.circular(16)),
+--- a/lib/widgets/glass_card.dart
++++ b/lib/widgets/glass_card.dart
+@@ -36,9 +36,7 @@
+     final filter = ImageFilter.blur(sigmaX: blur, sigmaY: blur);
+     final card = ClipRRect(
+       borderRadius: BorderRadius.circular(radius),
+-      child: BackdropGroup.of(context) == null
+-          ? BackdropFilter(filter: filter, child: surface)
+-          : BackdropFilter.grouped(filter: filter, child: surface),
++      child: BackdropFilter(filter: filter, child: surface),
+     );
+ 
+     if (onTap == null) return card;
+--- a/lib/pages/settings_page.dart
++++ b/lib/pages/settings_page.dart
+@@ -390,8 +390,7 @@
+ 
+     // The settings cards do not overlap, so Flutter can reuse the same
+     // backdrop blur without changing the glass effect on individual cards.
+-    return BackdropGroup(
+-      child: ListView.builder(
++    return ListView.builder(
+         key: const PageStorageKey('settings-page'),
+         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+         itemCount: items.length,
+@@ -404,7 +403,6 @@
+             ),
+           ),
+         ),
+-      ),
+     );
+   }
+ 
