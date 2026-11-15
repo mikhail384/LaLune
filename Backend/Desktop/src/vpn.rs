@@ -166,8 +166,8 @@ impl VpnRuntime {
         let phase = self.phase.read().clone();
         let message = self.phase_message.read().clone();
         VpnStatus {
-            state: if running && phase == "disconnected" { "connected".into() } else { phase },
-            connected: running,
+            connected: running && phase == "connected",
+            state: phase,
             uptime_sec: uptime,
             config_id,
             message,
@@ -953,7 +953,18 @@ pub fn extract_ipv4_addrs(line: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod route_ownership_tests {
-    use super::partition_bypass_routes;
+    use super::{partition_bypass_routes, VpnRuntime};
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn tunnel_is_not_reported_connected_before_routing_is_ready() {
+        let runtime = VpnRuntime::new();
+        runtime.set_phase("connecting", "");
+        runtime.running.store(true, Ordering::Release);
+        assert!(!runtime.status(1).connected);
+        runtime.set_phase("connected", "");
+        assert!(runtime.status(1).connected);
+    }
 
     #[test]
     fn only_successfully_added_routes_are_owned() {

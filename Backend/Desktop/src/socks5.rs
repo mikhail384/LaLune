@@ -119,7 +119,7 @@ pub fn start(state: Arc<AppState>, bind_all: bool) -> Result<u16> {
                     let st = state2.clone();
                     tokio::spawn(async move {
                         if let Err(e) = handle_client(client, peer, st.clone(), bind_all).await {
-                            st.log(format!("[PROXY] client {} error: {}", peer, e));
+                            st.log(format!("[PROXY] client {} error: {:#}", peer, e));
                         }
                     });
                 }
@@ -305,7 +305,7 @@ async fn handle_udp_associate(
     } else {
         Ipv4Addr::LOCALHOST
     };
-    let relay = UdpSocket::bind((relay_bind_ip, 0)).await?;
+    let relay = UdpSocket::bind((relay_bind_ip, 0)).await.context("SOCKS UDP listener")?;
     let relay_port = relay.local_addr()?.port();
 
     let advertised_ip = if bind_all {
@@ -326,8 +326,8 @@ async fn handle_udp_associate(
     .await?;
 
     let tunnel_ip = crate::vpn::tunnel_ipv4(&state.vpn)?;
-    let outbound = UdpSocket::bind((tunnel_ip, 0)).await?;
-    bind_tunnel_interface(&outbound, &state)?;
+    let outbound = UdpSocket::bind((tunnel_ip, 0)).await.context("SOCKS UDP tunnel address")?;
+    bind_tunnel_interface(&outbound, &state).context("SOCKS UDP tunnel interface")?;
     let mut client_udp: Option<SocketAddr> = None;
     let mut relay_buf = vec![0u8; 65535];
     let mut remote_buf = vec![0u8; 65535];
@@ -451,8 +451,8 @@ async fn resolve_a_via_tunnel(state: &Arc<AppState>, domain: &str) -> Result<Ipv
     crate::vpn::ensure_proxy_route(&state.vpn, IpAddr::V4(dns), &state.events)?;
 
     let tunnel_ip = crate::vpn::tunnel_ipv4(&state.vpn)?;
-    let socket = UdpSocket::bind((tunnel_ip, 0)).await?;
-    bind_tunnel_interface(&socket, state)?;
+    let socket = UdpSocket::bind((tunnel_ip, 0)).await.context("SOCKS DNS tunnel address")?;
+    bind_tunnel_interface(&socket, state).context("SOCKS DNS tunnel interface")?;
     let dns_addr = SocketAddr::new(IpAddr::V4(dns), 53);
 
     let id = SystemTime::now()
