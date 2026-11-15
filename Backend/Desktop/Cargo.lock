@@ -1162,6 +1162,7 @@ dependencies = [
  "flate2",
  "futures",
  "hostname",
+ "idna",
  "libc",
  "libloading",
  "log",

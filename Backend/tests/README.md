@@ -53,6 +53,20 @@ sudo unshare -n /path/to/test-binary --ignored --exact vpn::routing_tests::unrel
 
 ## Windows
 
+Экспериментальная маршрутизация доменов и приложений использует отдельный
+процесс sing-box 1.14.4 и SOCKS-туннель LaLune. Для работы требуется проверенный
+`sing-box.exe` рядом с бэкендом и установленный Wintun. Правила действуют на
+IPv4, совпадающие приложения и домены объединяются одним режимом списка;
+локальные адреса остаются прямыми. Определение домена зависит от доступных
+DNS-ответов и имени соединения: общий IP и зашифрованный DNS могут привести к
+неоднозначности. PaperFlux и IPv6 в этом режиме не поддерживаются.
+
+В одноразовой Windows VM `windows_tun.py` проверяет Wintun, белый и чёрный
+списки приложений/доменов, DNS, TCP, UDP, отключение и аварийное завершение.
+Тест работает с локальным синтетическим ядром, а не реальным VPN-сервером.
+`windows_split_engine.py path/to/sing-box.exe` отдельно проверяет восемь
+комбинаций правил на локальных HTTP-соединениях, не изменяя маршруты системы.
+
 ```powershell
 cargo test --manifest-path Backend/Desktop/Cargo.toml --locked
 cargo build --manifest-path Backend/Desktop/Cargo.toml --release --locked

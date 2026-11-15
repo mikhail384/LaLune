@@ -947,8 +947,12 @@ async fn vpn_connect(
                     #[cfg(target_os = "windows")]
                     if let Some((mode, domains, programs, internal)) = &split_data {
                         let port = *state2.socks5_port.read();
-                        let result = crate::split_routing::build_config(*mode, domains, programs, internal, port)
-                            .and_then(|config| crate::split_routing::start(&state2.vpn, &state2.app_dir, &config));
+                        let result = {
+                            let core = state2.core.lock();
+                            let handle = core.as_ref().and_then(|process| process.child.raw_handle()).map(|handle| handle as usize).unwrap_or(0);
+                            crate::split_routing::build_config(*mode, domains, programs, internal, port)
+                                .and_then(|config| crate::split_routing::start(&state2.vpn, &state2.app_dir, &config, handle))
+                        };
                         if let Err(e) = result {
                             state2.log(format!("[ROUTE] Не удалось включить маршрутизацию: {e:#}"));
                             finish_vpn(&state2).await;

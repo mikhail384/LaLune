@@ -9,7 +9,7 @@ fn overlaps_router_subnet(prefix: &str) -> bool {
     let Ok(address) = address.parse::<std::net::Ipv4Addr>() else { return false; };
     let Ok(bits) = bits.parse::<u32>() else { return false; };
     // Ignore catch-all/default VPN routes; inspect actual LAN/host routes.
-    if !(8..=32).contains(&bits) { return false; }
+    if !(2..=32).contains(&bits) { return false; }
     let common = bits.min(30);
     let mask = u32::MAX << (32 - common);
     (u32::from(address) & mask) == (u32::from(std::net::Ipv4Addr::new(172, 29, 252, 0)) & mask)
@@ -64,7 +64,7 @@ pub fn stop(runtime: &crate::vpn::VpnRuntime) {
 
 #[cfg(target_os = "windows")]
 pub fn start(runtime: &crate::vpn::VpnRuntime, directory: &std::path::Path,
-             config: &Value) -> Result<()> {
+             config: &Value, core_handle: usize) -> Result<()> {
     use sha2::{Digest, Sha256};
     use std::os::windows::process::CommandExt;
     use std::os::windows::io::AsRawHandle;
@@ -86,6 +86,11 @@ pub fn start(runtime: &crate::vpn::VpnRuntime, directory: &std::path::Path,
     let mut limits: ExtendedLimits = unsafe { std::mem::zeroed() };
     limits.basic.flags = 0x00002000; // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
     if unsafe { SetInformationJobObject(job, 9, &limits as *const _ as *const _, std::mem::size_of::<ExtendedLimits>() as u32) } == 0 {
+        let error = std::io::Error::last_os_error();
+        unsafe { CloseHandle(job); }
+        return Err(error.into());
+    }
+    if core_handle == 0 || unsafe { AssignProcessToJobObject(job, core_handle as *mut _) } == 0 {
         let error = std::io::Error::last_os_error();
         unsafe { CloseHandle(job); }
         return Err(error.into());
@@ -121,7 +126,8 @@ pub fn build_config(mode: Mode, domains: &[String], programs: &[String],
     if domains.len() > 1000 || programs.len() > 1000 { bail!("Слишком много правил маршрутизации"); }
     let mut normalized = Vec::new();
     for domain in domains {
-        let domain = domain.trim().trim_end_matches('.').to_ascii_lowercase();
+        let domain = idna::domain_to_ascii(domain.trim().trim_end_matches('.'))
+            .map_err(|_| anyhow::anyhow!("Некорректное доменное имя"))?.to_ascii_lowercase();
         if domain.is_empty() || domain.len() > 253 || domain.split('.').any(|part| {
             part.is_empty() || part.len() > 63 || part.starts_with('-') || part.ends_with('-') ||
             !part.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
@@ -174,6 +180,11 @@ mod tests {
         assert!(build_config(Mode::Blacklist, &["https://example.com".into()], &[], &[], 1080).is_err());
         assert!(build_config(Mode::Whitelist, &[], &["relative.exe".into()], &[], 1080).is_err());
         assert!(build_config(Mode::Whitelist, &["example.com".into()], &[], &[], 0).is_err());
+    }
+    #[test]
+    fn normalizes_international_domains() {
+        let c = build_config(Mode::Blacklist, &["пример.рф".into()], &[], &[], 1080).unwrap();
+        assert_eq!(c["route"]["rules"][3]["domain_suffix"][0], "xn--e1afmkfd.xn--p1ai");
     }
     #[test]
     fn detects_existing_subnet_conflicts() {
