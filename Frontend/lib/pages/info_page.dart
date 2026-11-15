@@ -2,12 +2,14 @@
 
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
+import 'package:flutter/foundation.dart'
+    show defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/update_info.dart';
+import '../services/app_update.dart';
 import '../state/providers.dart';
 import '../theme/assets.dart';
 import '../widgets/glass_card.dart';
@@ -26,7 +28,16 @@ class _InfoPageState extends ConsumerState<InfoPage> {
 
   UpdateInfo _lalune = UpdateInfo.empty;
   bool _checkingLaLune = false;
-  bool _isLatestStable = false;
+  final _updater = AppUpdater();
+  String _updateStatus = '';
+  double? _downloadProgress;
+  String? _downloadedUpdate;
+
+  @override
+  void dispose() {
+    _updater.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -36,7 +47,6 @@ class _InfoPageState extends ConsumerState<InfoPage> {
 
   Future<void> _refreshAll() async {
     final api = ref.read(apiClientProvider);
-    var localVersion = _laluneVersion;
 
     // Show the version reported by the running backend, which CI stamps
     // with the exact release tag (stable version or STABLE-shortsha).
@@ -44,54 +54,50 @@ class _InfoPageState extends ConsumerState<InfoPage> {
       final version = await api.getJson('/version');
       final value = (version['backend'] ?? version['ui'] ?? '').toString();
       if (value.isNotEmpty) {
-        localVersion = value;
         if (mounted) setState(() => _laluneVersion = value);
       }
     } catch (_) {}
-
-    try {
-      final j = await api.getJson('/update/check');
-      final rawInfo = UpdateInfo.fromJson(j);
-      final sameStableVersion = _sameReleaseVersion(
-        localVersion,
-        rawInfo.remoteTag,
-      );
-      final info = sameStableVersion
-          ? UpdateInfo(
-              hasUpdate: false,
-              remoteTag: rawInfo.remoteTag,
-              localVersion: localVersion,
-            )
-          : rawInfo;
-      if (mounted) {
-        setState(() {
-          _lalune = info;
-          _isLatestStable = sameStableVersion;
-        });
-      }
-    } catch (_) {
-      if (mounted) setState(() => _isLatestStable = false);
-    }
-  }
-
-  bool _sameReleaseVersion(String local, String remote) {
-    String normalize(String value) {
-      final v = value.trim();
-      if (v.length > 1 && (v.startsWith('v') || v.startsWith('V'))) {
-        return v.substring(1);
-      }
-      return v;
-    }
-
-    final a = normalize(local);
-    final b = normalize(remote);
-    return a.isNotEmpty && b.isNotEmpty && a == b;
   }
 
   Future<void> _manualCheckLaLune() async {
-    setState(() => _checkingLaLune = true);
-    await _refreshAll();
-    if (mounted) setState(() => _checkingLaLune = false);
+    setState(() {
+      _checkingLaLune = true;
+      _updateStatus = 'Проверяем релиз…';
+      _downloadProgress = null;
+      _downloadedUpdate = null;
+    });
+    try {
+      final asset = await _updater.check();
+      if (!mounted) return;
+      setState(() {
+        _lalune =
+            UpdateInfo(remoteTag: asset.tag, localVersion: _laluneVersion);
+        _updateStatus = 'Скачиваем ${asset.name}…';
+      });
+      var lastPercent = -1;
+      final path = await _updater.download(asset, onProgress: (value) {
+        final percent = (value * 100).floor();
+        if (mounted && percent != lastPercent) {
+          lastPercent = percent;
+          setState(() => _downloadProgress = value);
+        }
+      });
+      if (mounted)
+        setState(() {
+          _downloadedUpdate = path;
+          _updateStatus =
+              'Файл скачан: $path\nПодпись и версия пакета должны быть совместимы с установленным приложением.';
+        });
+    } catch (error) {
+      if (mounted)
+        setState(() => _updateStatus = 'Не удалось скачать обновление: $error');
+    } finally {
+      if (mounted)
+        setState(() {
+          _checkingLaLune = false;
+          _downloadProgress = null;
+        });
+    }
   }
 
   // ============================================================
@@ -145,8 +151,7 @@ class _InfoPageState extends ConsumerState<InfoPage> {
                     decoration: BoxDecoration(
                       color: Colors.white.withOpacity(0.05),
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                          color: Colors.white.withOpacity(0.15)),
+                      border: Border.all(color: Colors.white.withOpacity(0.15)),
                     ),
                     child: const Center(
                       child: Column(
@@ -169,8 +174,7 @@ class _InfoPageState extends ConsumerState<InfoPage> {
                 'Отсканируйте QR-код, чтобы подписаться на канал',
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                    fontSize: 12.5,
-                    color: Colors.white.withOpacity(0.65)),
+                    fontSize: 12.5, color: Colors.white.withOpacity(0.65)),
               ),
             ],
           ),
@@ -205,39 +209,45 @@ class _InfoPageState extends ConsumerState<InfoPage> {
               // LaLune
               _block('LaLune', [
                 _kv('Установлено', _laluneVersion),
-                _kv('Доступно', _lalune.remoteTag.isEmpty
-                    ? '—' : _lalune.remoteTag),
+                _kv('Доступно',
+                    _lalune.remoteTag.isEmpty ? '—' : _lalune.remoteTag),
               ]),
               _actionButton(
                 label: _checkingLaLune
                     ? 'Проверка...'
-                    : 'Проверить обновления LaLune',
+                    : 'Проверить и скачать обновление',
                 onTap: _checkingLaLune ? null : _manualCheckLaLune,
               ),
-              if (_lalune.hasUpdate) ...[
-                const SizedBox(height: 8),
-                _updateHint(
-                  'Доступно обновление LaLune: ${_lalune.remoteTag}',
-                  onTap: () {
-                    final api = ref.read(apiClientProvider);
-                    api.getJson('/update/url').then((j) {
-                      final url = j['url'] as String? ?? '';
-                      if (url.isNotEmpty) {
-                        api.postJson('/platform/open-url', {'url': url});
-                      }
-                    });
-                  },
+              if (_downloadProgress != null)
+                LinearProgressIndicator(value: _downloadProgress),
+              if (_updateStatus.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: SelectableText(_updateStatus,
+                      textAlign: TextAlign.center),
                 ),
-              ] else if (_isLatestStable) ...[
-                const SizedBox(height: 8),
-                _latestStableHint(),
-              ],
+              if (_downloadedUpdate != null &&
+                  defaultTargetPlatform == TargetPlatform.android)
+                _actionButton(
+                    label: 'Открыть установщик',
+                    onTap: () async {
+                      try {
+                        await const MethodChannel('com.lalune/native')
+                            .invokeMethod<void>('openDownloadedUpdate',
+                                {'path': _downloadedUpdate});
+                      } catch (_) {
+                        if (mounted)
+                          setState(() => _updateStatus =
+                              'Не удалось открыть установщик. Файл: $_downloadedUpdate');
+                      }
+                    }),
               const SizedBox(height: 18),
 
               _block('Авторы', [
                 _kv('CSQTT', 'amurcanov'),
                 _kv('LaLune', '@Endlad7373'),
-                _linkRow('Telegram-канал проекта', 't.me/endlad_new', _channelUrl,
+                _linkRow(
+                    'Telegram-канал проекта', 't.me/endlad_new', _channelUrl,
                     icon: Icons.telegram),
               ]),
               const SizedBox(height: 18),
@@ -310,7 +320,9 @@ class _InfoPageState extends ConsumerState<InfoPage> {
             .invokeMethod('openUrl', {'url': url});
         return;
       }
-      await ref.read(apiClientProvider).postJson('/platform/open-url', {'url': url});
+      await ref
+          .read(apiClientProvider)
+          .postJson('/platform/open-url', {'url': url});
     } catch (_) {
       // Не удалось открыть — копируем ссылку, чтобы её можно было вставить.
       await Clipboard.setData(ClipboardData(text: url));
@@ -326,10 +338,10 @@ class _InfoPageState extends ConsumerState<InfoPage> {
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: Row(
           children: [
-              if (icon != null) ...[
-                Icon(icon, size: 19, color: const Color(0xFF6C8CFF)),
-                const SizedBox(width: 8),
-              ],
+            if (icon != null) ...[
+              Icon(icon, size: 19, color: const Color(0xFF6C8CFF)),
+              const SizedBox(width: 8),
+            ],
             Expanded(
               child: Text(k,
                   style: TextStyle(color: Colors.white.withOpacity(0.65))),
@@ -371,52 +383,10 @@ class _InfoPageState extends ConsumerState<InfoPage> {
           foregroundColor: Colors.white,
           side: BorderSide(color: Colors.white.withOpacity(0.2)),
           padding: const EdgeInsets.symmetric(vertical: 12),
-          shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         ),
         child: Text(label),
-      ),
-    );
-  }
-
-  Widget _latestStableHint() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: const Color(0xFF7CFF9A).withOpacity(0.12),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFF7CFF9A).withOpacity(0.35)),
-      ),
-      child: const Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.check_circle_outline, size: 17, color: Color(0xFF7CFF9A)),
-          SizedBox(width: 8),
-          Flexible(
-            child: Text(
-              'Вы используете последнюю стабильную версию LaLune',
-              textAlign: TextAlign.center,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _updateHint(String text, {VoidCallback? onTap}) {
-    return SizedBox(
-      width: double.infinity,
-      child: ElevatedButton(
-        onPressed: onTap,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: const Color(0xFFF7E84E),
-          foregroundColor: Colors.black,
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10)),
-        ),
-        child: Text(text, textAlign: TextAlign.center),
       ),
     );
   }

@@ -92,6 +92,25 @@ class MainActivity : FlutterActivity() {
         methodChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
                 "getApiPort" -> result.success(apiPort)
+                "getUpdateDownloadDirectory" -> {
+                    val dir = getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS)
+                    if (dir == null) result.error("storage_unavailable", "Download storage unavailable", null)
+                    else result.success(dir.absolutePath)
+                }
+                "openDownloadedUpdate" -> {
+                    try {
+                        val dir = getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS)
+                            ?: throw IllegalStateException("Download storage unavailable")
+                        val file = java.io.File(call.argument<String>("path").orEmpty()).canonicalFile
+                        require(file.parentFile == dir.canonicalFile && file.isFile && file.name.endsWith(".apk"))
+                        val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.updates", file)
+                        startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive")
+                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("open_update_failed", e.javaClass.simpleName, null)
+                    }
+                }
                 "isBackendAlive" -> {
                     scope.launch {
                         val alive = isBackendAlive()

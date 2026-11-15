@@ -198,6 +198,9 @@ jobs:
           codesign --force --deep --sign - "$APP"
           mkdir -p Output
           ditto -c -k --keepParent "$APP" Output/LaLune-macOS.zip
+          lipo -verify_arch x86_64 arm64 "$APP/Contents/MacOS/lalune"
+          lipo -verify_arch x86_64 arm64 "$APP/Contents/Resources/lalune-backend"
+          cp Output/LaLune-macOS.zip Output/LaLune-macOS-universal.zip
           cp dist-macos/lalune-backend Output/lalune-backend-macos
 
       - uses: actions/upload-artifact@v4
@@ -878,6 +881,9 @@ jobs:
           done
           cp release/android/LaLune-Android.apk release/assets/
           if [ -f release/macos/LaLune-macOS.zip ]; then cp release/macos/LaLune-macOS.zip release/assets/; fi
+          for arch in arm64 x64 universal; do
+            if [ -f "release/macos/LaLune-macOS-$arch.zip" ]; then cp "release/macos/LaLune-macOS-$arch.zip" release/assets/; fi
+          done
           cp release/token-fetcher-windows/LaLuneTokenFetcher_Windows.zip release/assets/
           cp release/token-fetcher-linux/LaLuneTokenFetcher_Linux.zip release/assets/
 
@@ -971,5 +977,5 @@ jobs:
         if: hashFiles('release/assets/LaLune-macOS.zip') != ''
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ steps.version.outputs.tag }}" release/assets/LaLune-macOS.zip --clobber
+        run: gh release upload "${{ steps.version.outputs.tag }}" release/assets/LaLune-macOS*.zip --clobber
 
