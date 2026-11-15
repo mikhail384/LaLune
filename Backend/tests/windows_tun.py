@@ -164,6 +164,21 @@ with tempfile.TemporaryDirectory(prefix='lalune-windows-tun-') as temporary:
             wait_for(lambda: not api('/vpn/status')['connected'])
             wait_for(lambda: powershell("if (Get-NetRoute -InterfaceAlias 'LaLune-Routing' -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }", False).returncode == 0)
             print(json.dumps({'mode': mode, 'domain_dns_udp': 'passed'}), flush=True)
+        # Abruptly terminating the backend must also terminate its router
+        # process and remove the test router's system routes.
+        api('/settings', {'windowsSplitEnabled': True, 'windowsSplitMode': 'whitelist',
+            'windowsSplitPrograms': str(Path(sys.executable).resolve()), 'windowsSplitDomains': ''}, method='PATCH')
+        api('/vpn/connect', {'configId': config['id']})
+        wait_for(lambda: api('/vpn/status')['connected'], timeout=45)
+        def router_pid():
+            result = powershell(f"(Get-CimInstance Win32_Process -Filter 'ParentProcessId={process.pid}' | Where-Object Name -eq 'sing-box.exe' | Select-Object -First 1 -ExpandProperty ProcessId)", False)
+            return int(result.stdout.strip()) if result.stdout.strip().isdigit() else None
+        pid = wait_for(router_pid)
+        process.kill()
+        process.wait(timeout=10)
+        wait_for(lambda: powershell(f"if (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{ exit 1 }} else {{ exit 0 }}", False).returncode == 0)
+        wait_for(lambda: powershell("if (Get-NetRoute -InterfaceAlias 'LaLune-Routing' -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }", False).returncode == 0)
+        print(json.dumps({'backend_crash_cleanup': 'passed'}), flush=True)
     finally:
         if interface_default:
             powershell("Remove-NetRoute -DestinationPrefix '0.0.0.0/0' -InterfaceAlias 'CSQTT' -NextHop '0.0.0.0' -PolicyStore ActiveStore -Confirm:$false -ErrorAction SilentlyContinue", False)
@@ -173,7 +188,8 @@ with tempfile.TemporaryDirectory(prefix='lalune-windows-tun-') as temporary:
             api('/vpn/disconnect', {})
         except Exception:
             pass
-        process.terminate()
+        if process.poll() is None:
+            process.terminate()
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
