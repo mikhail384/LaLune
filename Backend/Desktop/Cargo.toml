@@ -48,6 +48,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 
 # Regex
 regex = "1"
+sha2 = "0.10"
 
 # Lua 5.4 (встроенный интерпретатор, без внешних .so)
 mlua = { version = "0.9", features = ["lua54", "vendored", "send"] }

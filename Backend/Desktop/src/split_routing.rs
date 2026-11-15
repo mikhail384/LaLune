@@ -4,6 +4,30 @@
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
 
+fn overlaps_router_subnet(prefix: &str) -> bool {
+    let Some((address, bits)) = prefix.trim().split_once('/') else { return false; };
+    let Ok(address) = address.parse::<std::net::Ipv4Addr>() else { return false; };
+    let Ok(bits) = bits.parse::<u32>() else { return false; };
+    // Ignore catch-all/default VPN routes; inspect actual LAN/host routes.
+    if !(8..=32).contains(&bits) { return false; }
+    let common = bits.min(30);
+    let mask = u32::MAX << (32 - common);
+    (u32::from(address) & mask) == (u32::from(std::net::Ipv4Addr::new(172, 29, 252, 0)) & mask)
+}
+
+#[cfg(target_os = "windows")]
+fn ensure_subnet_available() -> Result<()> {
+    use std::os::windows::process::CommandExt;
+    let out = std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", "Get-NetRoute -AddressFamily IPv4 -ErrorAction Stop | Select-Object -ExpandProperty DestinationPrefix"])
+        .creation_flags(0x08000000).output()?;
+    if !out.status.success() { bail!("Не удалось проверить существующие маршруты Windows"); }
+    if String::from_utf8_lossy(&out.stdout).lines().any(overlaps_router_subnet) {
+        bail!("Адресная сеть маршрутизатора 172.29.252.0/30 уже занята");
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "windows")]
 #[repr(C)]
 struct BasicLimits { process_time: i64, job_time: i64, flags: u32, min_working: usize, max_working: usize, active_limit: u32, affinity: usize, priority: u32, scheduling: u32 }
@@ -41,11 +65,17 @@ pub fn stop(runtime: &crate::vpn::VpnRuntime) {
 #[cfg(target_os = "windows")]
 pub fn start(runtime: &crate::vpn::VpnRuntime, directory: &std::path::Path,
              config: &Value) -> Result<()> {
+    use sha2::{Digest, Sha256};
     use std::os::windows::process::CommandExt;
     use std::os::windows::io::AsRawHandle;
     use std::process::{Command, Stdio};
     let exe = std::env::current_exe()?.parent().ok_or_else(|| anyhow::anyhow!("Каталог приложения недоступен"))?.join("sing-box.exe");
     if !exe.is_file() { bail!("Файл sing-box.exe отсутствует рядом с бэкендом"); }
+    let hash = format!("{:x}", Sha256::digest(std::fs::read(&exe)?));
+    if hash != "8f30682ee198855440d2a7fe070d5d3653793b2d01bb8c85eea88f93bbe7c8b9" {
+        bail!("Контрольная сумма sing-box.exe не совпадает с проверенной версией");
+    }
+    ensure_subnet_available()?;
     let path = directory.join("windows-split-routing.json");
     std::fs::write(&path, serde_json::to_vec(config)?)?;
     let check = Command::new(&exe).args(["check", "-c"]).arg(&path)
@@ -144,6 +174,14 @@ mod tests {
         assert!(build_config(Mode::Blacklist, &["https://example.com".into()], &[], &[], 1080).is_err());
         assert!(build_config(Mode::Whitelist, &[], &["relative.exe".into()], &[], 1080).is_err());
         assert!(build_config(Mode::Whitelist, &["example.com".into()], &[], &[], 0).is_err());
+    }
+    #[test]
+    fn detects_existing_subnet_conflicts() {
+        assert!(overlaps_router_subnet("172.16.0.0/12"));
+        assert!(overlaps_router_subnet("172.29.252.2/32"));
+        assert!(!overlaps_router_subnet("172.29.252.4/30"));
+        assert!(!overlaps_router_subnet("0.0.0.0/0"));
+        assert!(!overlaps_router_subnet("128.0.0.0/1"));
     }
     #[test]
     fn optionally_export_config_for_engine_validation() {
