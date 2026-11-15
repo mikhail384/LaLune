@@ -12,6 +12,8 @@ mod lua_runtime;
 mod protocol;
 mod settings;
 mod socks5;
+#[cfg(any(target_os = "windows", test))]
+mod split_routing;
 mod state;
 mod vk;
 mod vpn;

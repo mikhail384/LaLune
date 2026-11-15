@@ -75,6 +75,12 @@ jobs:
           Copy-Item Backend/Desktop/target/release/lalune-backend.exe "$release/LaLuneManager.exe"
           Copy-Item (Join-Path $env:RUNNER_TEMP 'wintun/wintun/bin/amd64/wintun.dll') "$release/wintun.dll"
           Copy-Item (Join-Path $env:RUNNER_TEMP 'wintun/wintun/LICENSE.txt') "$release/WINTUN-LICENSE.txt"
+          $singArchive = Join-Path $env:RUNNER_TEMP 'sing-box-bundle.zip'
+          Invoke-WebRequest -Uri 'https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-windows-amd64.zip' -OutFile $singArchive -TimeoutSec 120
+          if ((Get-FileHash $singArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne '99185d75d314a07dbba4a130c8ad986cbeb629a07927975636b341ca61f991df') { throw 'sing-box checksum mismatch' }
+          Expand-Archive $singArchive -DestinationPath (Join-Path $env:RUNNER_TEMP 'sing-box-bundle')
+          Copy-Item (Join-Path $env:RUNNER_TEMP 'sing-box-bundle/sing-box-1.14.4-windows-amd64/sing-box.exe') "$release/sing-box.exe"
+          Copy-Item (Join-Path $env:RUNNER_TEMP 'sing-box-bundle/sing-box-1.14.4-windows-amd64/LICENSE') "$release/SING-BOX-LICENSE.txt"
       - uses: actions/upload-artifact@v4
         with:
           name: LaLune-Windows-test
@@ -88,7 +94,7 @@ jobs:
           rustc Backend/tests/echo_core.rs -O -o "$env:RUNNER_TEMP/lalune-echo-core.exe"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python Backend/tests/windows_tun.py `
-            Backend/Desktop/target/release/lalune-backend.exe `
+            Frontend/build/windows/x64/runner/Release/LaLuneManager.exe `
             "$env:RUNNER_TEMP/lalune-echo-core.exe" `
             Frontend/build/windows/x64/runner/Release/wintun.dll
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

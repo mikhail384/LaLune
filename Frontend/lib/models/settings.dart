@@ -64,6 +64,10 @@ class Settings {
   final String ipRoutingIps; // one IPv4/IPv6 address or CIDR per line.
   final String androidAppRoutingMode; // blacklist: selected apps bypass VPN; whitelist: only selected apps use VPN.
   final List<String> androidVpnApps;
+  final bool windowsSplitEnabled;
+  final String windowsSplitMode;
+  final String windowsSplitDomains;
+  final String windowsSplitPrograms;
 
   Settings({
     this.peer = '',
@@ -114,6 +118,10 @@ class Settings {
     this.ipRoutingIps = '',
     this.androidAppRoutingMode = 'blacklist',
     this.androidVpnApps = const [],
+    this.windowsSplitEnabled = false,
+    this.windowsSplitMode = 'blacklist',
+    this.windowsSplitDomains = '',
+    this.windowsSplitPrograms = '',
   });
 
   factory Settings.fromJson(Map<String, dynamic> j) {
@@ -174,6 +182,10 @@ class Settings {
       ipRoutingIps: (j['ipRoutingIps'] ?? '') as String,
       androidAppRoutingMode: (j['androidAppRoutingMode'] ?? 'blacklist') as String,
       androidVpnApps: ((j['androidVpnApps'] ?? const []) as List).map((v) => v.toString()).toList(),
+      windowsSplitEnabled: (j['windowsSplitEnabled'] ?? false) as bool,
+      windowsSplitMode: (j['windowsSplitMode'] ?? 'blacklist') as String,
+      windowsSplitDomains: (j['windowsSplitDomains'] ?? '') as String,
+      windowsSplitPrograms: (j['windowsSplitPrograms'] ?? '') as String,
     );
   }
 
@@ -226,6 +238,10 @@ class Settings {
         'ipRoutingIps': ipRoutingIps,
         'androidAppRoutingMode': androidAppRoutingMode,
         'androidVpnApps': androidVpnApps,
+        'windowsSplitEnabled': windowsSplitEnabled,
+        'windowsSplitMode': windowsSplitMode,
+        'windowsSplitDomains': windowsSplitDomains,
+        'windowsSplitPrograms': windowsSplitPrograms,
       };
 
   Settings copyWith({
@@ -277,6 +293,10 @@ class Settings {
     String? ipRoutingIps,
     String? androidAppRoutingMode,
     List<String>? androidVpnApps,
+    bool? windowsSplitEnabled,
+    String? windowsSplitMode,
+    String? windowsSplitDomains,
+    String? windowsSplitPrograms,
   }) =>
       Settings(
         peer: peer ?? this.peer,
@@ -328,5 +348,9 @@ class Settings {
         ipRoutingIps: ipRoutingIps ?? this.ipRoutingIps,
         androidAppRoutingMode: androidAppRoutingMode ?? this.androidAppRoutingMode,
         androidVpnApps: androidVpnApps ?? this.androidVpnApps,
+        windowsSplitEnabled: windowsSplitEnabled ?? this.windowsSplitEnabled,
+        windowsSplitMode: windowsSplitMode ?? this.windowsSplitMode,
+        windowsSplitDomains: windowsSplitDomains ?? this.windowsSplitDomains,
+        windowsSplitPrograms: windowsSplitPrograms ?? this.windowsSplitPrograms,
       );
 }

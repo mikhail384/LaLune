@@ -11,7 +11,7 @@
 
 use anyhow::Result;
 #[cfg(target_os = "windows")]
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use parking_lot::{Mutex, RwLock};
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -82,6 +82,12 @@ pub struct VpnRuntime {
     pub bypass_routes: Arc<Mutex<Vec<String>>>,
     #[cfg(target_os = "windows")]
     windows_owned_bypass_routes: Arc<Mutex<Vec<String>>>,
+    #[cfg(target_os = "windows")]
+    pub windows_isolated_proxy: AtomicBool,
+    #[cfg(target_os = "windows")]
+    windows_isolated_route: AtomicBool,
+    #[cfg(target_os = "windows")]
+    pub split_router: Mutex<Option<std::process::Child>>,
     pub proxy_routes: Arc<Mutex<Vec<String>>>,
     pub physical_gateway: Arc<Mutex<String>>,
     pub phase: Arc<RwLock<String>>,
@@ -119,6 +125,12 @@ impl VpnRuntime {
             bypass_routes: Arc::new(Mutex::new(Vec::new())),
             #[cfg(target_os = "windows")]
             windows_owned_bypass_routes: Arc::new(Mutex::new(Vec::new())),
+            #[cfg(target_os = "windows")]
+            windows_isolated_proxy: AtomicBool::new(false),
+            #[cfg(target_os = "windows")]
+            windows_isolated_route: AtomicBool::new(false),
+            #[cfg(target_os = "windows")]
+            split_router: Mutex::new(None),
             proxy_routes: Arc::new(Mutex::new(Vec::new())),
             physical_gateway: Arc::new(Mutex::new(String::new())),
             phase: Arc::new(RwLock::new("disconnected".into())),
@@ -335,6 +347,10 @@ pub fn tunnel_dns_ipv4(runtime: &VpnRuntime) -> Option<Ipv4Addr> {
 }
 
 pub fn ensure_proxy_route(runtime: &VpnRuntime, target: IpAddr, events: &EventBus) -> Result<()> {
+    #[cfg(target_os = "windows")]
+    if runtime.windows_isolated_proxy.load(Ordering::Acquire) {
+        return Ok(());
+    }
     let IpAddr::V4(ip) = target else {
         anyhow::bail!("desktop SOCKS5 tunnel currently supports IPv4 destinations only");
     };
@@ -468,6 +484,8 @@ fn cleanup_routes_windows(runtime: &VpnRuntime, events: &EventBus) {
         .args(["interface", "ipv4", "delete", "route",
                "prefix=0.0.0.0/0", "interface=\"CSQTT\"", "store=active"])
         .output();
+    runtime.windows_isolated_route.store(false, Ordering::Release);
+    runtime.windows_isolated_proxy.store(false, Ordering::Release);
 
     let bypass_list = std::mem::take(&mut *runtime.windows_owned_bypass_routes.lock());
     let gateway = runtime.physical_gateway.lock().clone();
@@ -616,6 +634,15 @@ fn start_tun_windows(
         setup_routes(&runtime, &tun_ip, &tun_dns, &events);
     } else {
         configure_proxy_adapter_windows(&tun_ip, &events);
+        if runtime.windows_isolated_proxy.load(Ordering::Acquire) {
+            let result = std::process::Command::new("netsh")
+                .args(["interface", "ipv4", "add", "route", "prefix=0.0.0.0/0", "interface=CSQTT", "nexthop=0.0.0.0", "metric=9000", "store=active"])
+                .output().context("Не удалось запустить netsh для изолированного туннеля")?;
+            if !result.status.success() {
+                anyhow::bail!("Не удалось настроить маршрут изолированного туннеля: {}", String::from_utf8_lossy(&result.stderr));
+            }
+            runtime.windows_isolated_route.store(true, Ordering::Release);
+        }
     }
 
     let running_a = runtime.running.clone();

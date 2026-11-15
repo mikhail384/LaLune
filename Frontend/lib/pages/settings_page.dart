@@ -77,6 +77,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   final _pfMaxTokenCtl = TextEditingController();
   final _pfMaxUidCtl = TextEditingController();
   final _ipRoutingIpsCtl = TextEditingController();
+  final _windowsSplitDomainsCtl = TextEditingController();
+  final _windowsSplitProgramsCtl = TextEditingController();
+  bool _windowsSplitEnabled = false;
+  String _windowsSplitMode = 'blacklist';
   String _ipRoutingMode = 'blacklist';
   String _androidAppRoutingMode = 'blacklist';
   Set<String> _androidVpnApps = <String>{};
@@ -126,6 +130,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     _pfMaxTokenCtl.dispose();
     _pfMaxUidCtl.dispose();
     _ipRoutingIpsCtl.dispose();
+    _windowsSplitDomainsCtl.dispose();
+    _windowsSplitProgramsCtl.dispose();
     super.dispose();
   }
 
@@ -165,6 +171,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     _desktopSocks5Mode = s.desktopSocks5Mode;
     _ipRoutingMode = _isDesktop ? 'blacklist' : s.ipRoutingMode;
     _ipRoutingIpsCtl.text = s.ipRoutingIps;
+    _windowsSplitEnabled = s.windowsSplitEnabled;
+    _windowsSplitMode = s.windowsSplitMode;
+    _windowsSplitDomainsCtl.text = s.windowsSplitDomains;
+    _windowsSplitProgramsCtl.text = s.windowsSplitPrograms;
     _androidAppRoutingMode = s.androidAppRoutingMode;
     _androidVpnApps = s.androidVpnApps.toSet();
 
@@ -237,6 +247,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       desktopSocks5Mode: _desktopSocks5Mode,
       ipRoutingMode: _ipRoutingMode,
       ipRoutingIps: _ipRoutingIpsCtl.text.trim(),
+      windowsSplitEnabled: _windowsSplitEnabled,
+      windowsSplitMode: _windowsSplitMode,
+      windowsSplitDomains: _windowsSplitDomainsCtl.text.trim(),
+      windowsSplitPrograms: _windowsSplitProgramsCtl.text.trim(),
       androidAppRoutingMode: _androidAppRoutingMode,
       androidVpnApps: _androidVpnApps.toList()..sort(),
       pfTransport: _pfTransport,
@@ -577,6 +591,56 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (defaultTargetPlatform == TargetPlatform.windows) ...[
+          _toggleRow('Маршрутизация приложений и доменов', _windowsSplitEnabled, (v) {
+            setState(() => _windowsSplitEnabled = v);
+            _markDirty();
+          }),
+          if (_windowsSplitEnabled) ...[
+            _rowDropdown('Режим', _windowsSplitMode == 'whitelist' ? 'Белый список' : 'Чёрный список',
+                const ['Чёрный список', 'Белый список'], (v) {
+              setState(() => _windowsSplitMode = v == 'Белый список' ? 'whitelist' : 'blacklist');
+              _markDirty();
+            }),
+            Text(_windowsSplitMode == 'whitelist'
+                ? 'Указанные домены и приложения идут через VPN, остальные — напрямую.'
+                : 'Указанные домены и приложения идут напрямую, остальные — через VPN.',
+                style: TextStyle(fontSize: 11.5, height: 1.4, color: Colors.white.withOpacity(0.65))),
+            const SizedBox(height: 8),
+            TextField(controller: _windowsSplitDomainsCtl, minLines: 2, maxLines: 5,
+                decoration: const InputDecoration(labelText: 'Домены, по одному на строку', hintText: 'example.com\nexample.org'),
+                onChanged: (_) => _markDirty()),
+            const SizedBox(height: 8),
+            TextField(controller: _windowsSplitProgramsCtl, minLines: 2, maxLines: 5,
+                decoration: const InputDecoration(labelText: 'Полные пути к приложениям .exe', hintText: r'C:\Program Files\App\app.exe'),
+                onChanged: (_) => _markDirty()),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.folder_open),
+              label: const Text('Выбрать приложения'),
+              onPressed: () async {
+                try {
+                  final api = ref.read(apiClientProvider);
+                  if (!api.isLocalhost) throw StateError('Доступно только на локальном компьютере');
+                  final result = await api.postJson('/platform/pick-executables', {});
+                  final existing = _windowsSplitProgramsCtl.text.split('\n').map((v) => v.trim()).where((v) => v.isNotEmpty).toList();
+                  for (final path in (result['paths'] as List? ?? const [])) {
+                    final value = path.toString();
+                    if (!existing.any((p) => p.toLowerCase() == value.toLowerCase())) existing.add(value);
+                  }
+                  if (!mounted) return;
+                  setState(() => _windowsSplitProgramsCtl.text = existing.join('\n'));
+                  _markDirty();
+                } catch (_) {
+                  if (mounted) Toast.show(context, 'Не удалось выбрать приложения', isError: true);
+                }
+              },
+            ),
+            const SizedBox(height: 8),
+            Text('Изменения применяются при переподключении. Поддерживается IPv4; приложения с собственным зашифрованным DNS могут не передавать имя домена.',
+                style: TextStyle(fontSize: 11.5, height: 1.4, color: Colors.white.withOpacity(0.55))),
+            const Divider(height: 24),
+          ],
+        ],
         Text('IP-адреса', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600,
             color: Colors.white.withOpacity(0.9))),
         const SizedBox(height: 5),

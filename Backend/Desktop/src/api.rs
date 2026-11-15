@@ -119,6 +119,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/deploy/protocols", get(deploy_protocols_stub))
         .route("/platform/capabilities", get(platform_caps))
         .route("/platform/open-url", post(platform_open_url))
+        .route("/platform/pick-executables", post(platform_pick_executables))
         .route("/platform/notify", post(platform_notify))
         .route("/platform/open-path", post(platform_open_path))
         .route("/platform/share", post(platform_share))
@@ -662,6 +663,28 @@ async fn vpn_connect(
     }
 
     let mut settings = state.settings.read().clone();
+    #[cfg(target_os = "windows")]
+    let split_requested = settings.windows_split_enabled;
+    #[cfg(not(target_os = "windows"))]
+    let split_requested = false;
+    #[cfg(target_os = "windows")]
+    let split_data = if split_requested {
+        if !matches!(kind, ProtocolKind::Csqtt | ProtocolKind::Csqttr) {
+            return err(400, "Маршрутизация приложений поддерживается только для CSQTT и CSQTTR");
+        }
+        if !settings.ip_routing_ips.trim().is_empty() {
+            return err(400, "Очистите IP-исключения перед включением маршрутизации приложений и доменов");
+        }
+        let domains: Vec<String> = settings.windows_split_domains.lines().map(str::trim).filter(|v| !v.is_empty()).map(str::to_owned).collect();
+        let programs: Vec<String> = settings.windows_split_programs.lines().map(str::trim).filter(|v| !v.is_empty()).map(str::to_owned).collect();
+        let mode = if settings.windows_split_mode == "whitelist" { crate::split_routing::Mode::Whitelist } else { crate::split_routing::Mode::Blacklist };
+        let own = std::env::current_exe().unwrap_or_default();
+        let engine = own.parent().unwrap_or(std::path::Path::new("")).join("sing-box.exe");
+        if !engine.is_file() { return err(400, "В сборке отсутствует sing-box.exe для маршрутизации"); }
+        let internal = vec![own.to_string_lossy().into_owned(), core_path.to_string_lossy().into_owned(), engine.to_string_lossy().into_owned()];
+        if let Err(e) = crate::split_routing::build_config(mode, &domains, &programs, &internal, 1) { return err(400, e.to_string()); }
+        Some((mode, domains, programs, internal))
+    } else { None };
     let mut auto_api_call_ids: Vec<String> = Vec::new();
 
     if matches!(kind, ProtocolKind::Csqtt | ProtocolKind::Csqttr)
@@ -727,7 +750,7 @@ async fn vpn_connect(
         &settings.ip_routing_ips,
         &state.events,
     );
-    let desktop_socks5_mode = settings.desktop_socks5_mode
+    let desktop_socks5_mode = (settings.desktop_socks5_mode || split_requested)
         && matches!(kind, ProtocolKind::Csqtt | ProtocolKind::Csqttr);
     let share_socks5 = settings.share_vpn;
 
@@ -871,6 +894,9 @@ async fn vpn_connect(
                     let _operation = state2.vpn.operation.lock().await;
                     if core_stopped(&state2) { break; }
 
+                    #[cfg(target_os = "windows")]
+                    state2.vpn.windows_isolated_proxy.store(split_requested, std::sync::atomic::Ordering::Release);
+
                     let tunnel_result = if desktop_socks5_mode {
                         vpn::start_proxy_tun(
                             state2.vpn.clone(),
@@ -915,6 +941,24 @@ async fn vpn_connect(
                             }
                         }
                     }
+                    #[cfg(target_os = "windows")]
+                    if let Some((mode, domains, programs, internal)) = &split_data {
+                        let port = *state2.socks5_port.read();
+                        let result = crate::split_routing::build_config(*mode, domains, programs, internal, port)
+                            .and_then(|config| crate::split_routing::start(&state2.vpn, &state2.app_dir, &config));
+                        if let Err(e) = result {
+                            state2.log(format!("[ROUTE] Не удалось включить маршрутизацию: {e:#}"));
+                            finish_vpn(&state2).await;
+                            return;
+                        }
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                        if !crate::split_routing::alive(&state2.vpn) {
+                            state2.log("[ROUTE] Маршрутизатор завершился при запуске".to_string());
+                            finish_vpn(&state2).await;
+                            return;
+                        }
+                        state2.log("[ROUTE] Маршрутизация приложений и доменов запущена".to_string());
+                    }
                 }
 
                 state2.vpn.set_phase("connected", "Подключено");
@@ -946,6 +990,11 @@ async fn vpn_connect(
             while !core_stopped(&state2)
                 && state2.vpn.running.load(std::sync::atomic::Ordering::Acquire)
             {
+                #[cfg(target_os = "windows")]
+                if split_requested && !crate::split_routing::alive(&state2.vpn) {
+                    state2.log("[ROUTE] Маршрутизатор остановился; соединение отключается".to_string());
+                    break;
+                }
                 tokio::time::sleep(Duration::from_millis(250)).await;
             }
         }
@@ -966,6 +1015,8 @@ fn core_stopped(state: &AppState) -> bool {
 }
 
 async fn finish_vpn(state: &Arc<AppState>) {
+    #[cfg(target_os = "windows")]
+    crate::split_routing::stop(&state.vpn);
     state.vpn.stop_tun().await;
     #[cfg(target_os = "windows")]
     vpn::cleanup_routes(&state.vpn, &state.events);
@@ -1817,6 +1868,29 @@ async fn platform_open_url(Json(body): Json<OpenUrlBody>) -> impl IntoResponse {
         let _ = &body;
     }
     Json(json!({"ok": true}))
+}
+
+async fn platform_pick_executables() -> axum::response::Response {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let script = r#"[Console]::OutputEncoding=New-Object System.Text.UTF8Encoding($false); Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.OpenFileDialog; $d.Filter='Applications (*.exe)|*.exe'; $d.Multiselect=$true; if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { ConvertTo-Json -InputObject @($d.FileNames) -Compress } else { '[]' }; $d.Dispose()"#;
+        let result = tokio::task::spawn_blocking(move || std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-STA", "-Command", script])
+            .creation_flags(0x08000000).output()).await;
+        match result {
+            Ok(Ok(output)) if output.status.success() => {
+                let raw = String::from_utf8_lossy(&output.stdout);
+                match serde_json::from_str::<Vec<String>>(raw.trim()) {
+                    Ok(paths) => Json(json!({"paths":paths})).into_response(),
+                    Err(_) => err(500, "Не удалось прочитать список выбранных приложений"),
+                }
+            }
+            _ => err(500, "Не удалось открыть выбор приложений"),
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    { err(400, "Выбор приложений доступен только в Windows") }
 }
 
 #[derive(Deserialize)]

@@ -127,7 +127,7 @@ static void install_bundled_backend() {
   if (slash == std::wstring::npos) return;
   folder.resize(slash);
   CreateDirectoryW(manager_dir().c_str(), nullptr);
-  for (const wchar_t* name : {L"LaLuneManager.exe", L"wintun.dll"}) {
+  for (const wchar_t* name : {L"LaLuneManager.exe", L"wintun.dll", L"sing-box.exe"}) {
     std::wstring source = folder + L"\\" + name;
     std::wstring target = manager_dir() + L"\\" + name;
     if (file_exists(source) && !file_exists(target) &&

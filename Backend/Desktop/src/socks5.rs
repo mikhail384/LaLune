@@ -18,6 +18,39 @@ use tokio::time::timeout;
 use crate::events::Event;
 use crate::state::AppState;
 
+#[cfg(target_os = "windows")]
+fn bind_tunnel_interface<T: std::os::windows::io::AsRawSocket>(socket: &T, state: &AppState) -> Result<()> {
+    use std::sync::atomic::Ordering;
+    if !state.vpn.windows_isolated_proxy.load(Ordering::Acquire) { return Ok(()); }
+    #[link(name = "iphlpapi")]
+    extern "system" {
+        fn ConvertInterfaceAliasToLuid(alias: *const u16, luid: *mut u64) -> u32;
+        fn ConvertInterfaceLuidToIndex(luid: *const u64, index: *mut u32) -> u32;
+    }
+    #[link(name = "ws2_32")]
+    extern "system" {
+        fn setsockopt(socket: usize, level: i32, name: i32, value: *const i8, length: i32) -> i32;
+    }
+    let alias: Vec<u16> = "CSQTT\0".encode_utf16().collect();
+    let mut luid = 0u64;
+    let mut index = 0u32;
+    unsafe {
+        if ConvertInterfaceAliasToLuid(alias.as_ptr(), &mut luid) != 0 ||
+            ConvertInterfaceLuidToIndex(&luid, &mut index) != 0 {
+            bail!("Не удалось определить интерфейс CSQTT");
+        }
+        let network_index = index.to_be();
+        if setsockopt(socket.as_raw_socket() as usize, 0, 31,
+            &network_index as *const u32 as *const i8, 4) != 0 {
+            return Err(std::io::Error::last_os_error()).context("Не удалось привязать сокет к туннелю");
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn bind_tunnel_interface<T>(_socket: &T, _state: &AppState) -> Result<()> { Ok(()) }
+
 #[derive(Debug, Clone)]
 enum TargetHost {
     Ip(Ipv4Addr),
@@ -227,6 +260,7 @@ async fn handle_connect(
 
     let tunnel_ip = crate::vpn::tunnel_ipv4(&state.vpn)?;
     let socket = TcpSocket::new_v4()?;
+    bind_tunnel_interface(&socket, &state)?;
     socket.bind(SocketAddr::new(IpAddr::V4(tunnel_ip), 0))?;
     let mut remote = match timeout(Duration::from_secs(15), socket.connect(target_addr)).await {
         Ok(Ok(stream)) => stream,
@@ -293,6 +327,7 @@ async fn handle_udp_associate(
 
     let tunnel_ip = crate::vpn::tunnel_ipv4(&state.vpn)?;
     let outbound = UdpSocket::bind((tunnel_ip, 0)).await?;
+    bind_tunnel_interface(&outbound, &state)?;
     let mut client_udp: Option<SocketAddr> = None;
     let mut relay_buf = vec![0u8; 65535];
     let mut remote_buf = vec![0u8; 65535];
@@ -417,6 +452,7 @@ async fn resolve_a_via_tunnel(state: &Arc<AppState>, domain: &str) -> Result<Ipv
 
     let tunnel_ip = crate::vpn::tunnel_ipv4(&state.vpn)?;
     let socket = UdpSocket::bind((tunnel_ip, 0)).await?;
+    bind_tunnel_interface(&socket, state)?;
     let dns_addr = SocketAddr::new(IpAddr::V4(dns), 53);
 
     let id = SystemTime::now()

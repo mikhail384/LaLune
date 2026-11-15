@@ -96,8 +96,8 @@ with tempfile.TemporaryDirectory(prefix='lalune-windows-tun-') as temporary:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
                 sock.settimeout(5)
                 # IP_UNICAST_IF takes a Windows interface index in network byte order.
-                sock.setsockopt(socket.IPPROTO_IP, 31, struct.pack('!I', index))
                 sock.bind(('10.66.67.2', 0))
+                sock.setsockopt(socket.IPPROTO_IP, 31, struct.pack('!I', index))
                 sock.sendto(b'lalune-interface-bound-test', ('198.18.0.1', 23456))
                 assert sock.recv(128) == b'lalune-interface-bound-test'
             powershell("Remove-NetRoute -DestinationPrefix '0.0.0.0/0' -InterfaceAlias 'CSQTT' -NextHop '0.0.0.0' -PolicyStore ActiveStore -Confirm:$false -ErrorAction Stop")
@@ -106,6 +106,26 @@ with tempfile.TemporaryDirectory(prefix='lalune-windows-tun-') as temporary:
             wait_for(lambda: not api('/vpn/status')['connected'])
             assert api('/vpn/stats')['sessionId'] == ''
             print(json.dumps({'protocol': protocol, 'wintun_packet': 'passed'}), flush=True)
+        # Full integration: sing-box classifies the Python process, LaLune's
+        # SOCKS server binds to Wintun, and the synthetic core echoes packets.
+        for mode, expected_echo in [('whitelist', True), ('blacklist', False)]:
+            api('/settings', {'desktopSocks5Mode': False, 'windowsSplitEnabled': True,
+                'windowsSplitMode': mode, 'windowsSplitPrograms': str(Path(sys.executable).resolve()),
+                'windowsSplitDomains': '', 'ipRoutingIps': ''}, method='PATCH')
+            api('/vpn/connect', {'configId': config['id']})
+            wait_for(lambda: api('/vpn/status')['connected'], timeout=45)
+            time.sleep(2)
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.settimeout(4)
+                sock.sendto(b'lalune-split-process-test', ('1.1.1.1', 23456))
+                try:
+                    got_echo = sock.recv(128) == b'lalune-split-process-test'
+                except socket.timeout:
+                    got_echo = False
+                assert got_echo == expected_echo, f'{mode}: expected echo={expected_echo}, got {got_echo}'
+            api('/vpn/disconnect', {})
+            wait_for(lambda: not api('/vpn/status')['connected'])
+            print(json.dumps({'mode': mode, 'process_udp': 'passed'}), flush=True)
     finally:
         if interface_default:
             powershell("Remove-NetRoute -DestinationPrefix '0.0.0.0/0' -InterfaceAlias 'CSQTT' -NextHop '0.0.0.0' -PolicyStore ActiveStore -Confirm:$false -ErrorAction SilentlyContinue", False)

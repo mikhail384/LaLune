@@ -73,6 +73,10 @@ pub struct Settings {
     /// whitelist is preserved for API compatibility; desktop currently only applies blacklist.
     pub ip_routing_mode: String,
     pub ip_routing_ips: String,
+    pub windows_split_enabled: bool,
+    pub windows_split_mode: String,
+    pub windows_split_domains: String,
+    pub windows_split_programs: String,
 }
 
 impl Default for Settings {
@@ -127,6 +131,10 @@ impl Default for Settings {
             desktop_socks5_mode: false,
             ip_routing_mode: "blacklist".into(),
             ip_routing_ips: String::new(),
+            windows_split_enabled: false,
+            windows_split_mode: "blacklist".into(),
+            windows_split_domains: String::new(),
+            windows_split_programs: String::new(),
         }
     }
 }
@@ -155,6 +163,9 @@ impl Settings {
 
         if self.ip_routing_mode != "whitelist" {
             self.ip_routing_mode = "blacklist".into();
+        }
+        if self.windows_split_mode != "whitelist" {
+            self.windows_split_mode = "blacklist".into();
         }
     }
 
