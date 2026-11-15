@@ -80,6 +80,8 @@ pub struct VpnRuntime {
     pub started_at: Arc<Mutex<Option<Instant>>>,
     pub tun_conf: Arc<Mutex<Option<TunConf>>>,
     pub bypass_routes: Arc<Mutex<Vec<String>>>,
+    #[cfg(target_os = "windows")]
+    windows_owned_bypass_routes: Arc<Mutex<Vec<String>>>,
     pub proxy_routes: Arc<Mutex<Vec<String>>>,
     pub physical_gateway: Arc<Mutex<String>>,
     pub phase: Arc<RwLock<String>>,
@@ -115,6 +117,8 @@ impl VpnRuntime {
             started_at: Arc::new(Mutex::new(None)),
             tun_conf: Arc::new(Mutex::new(None)),
             bypass_routes: Arc::new(Mutex::new(Vec::new())),
+            #[cfg(target_os = "windows")]
+            windows_owned_bypass_routes: Arc::new(Mutex::new(Vec::new())),
             proxy_routes: Arc::new(Mutex::new(Vec::new())),
             physical_gateway: Arc::new(Mutex::new(String::new())),
             phase: Arc::new(RwLock::new("disconnected".into())),
@@ -276,13 +280,25 @@ fn get_physical_gateway() -> String {
     String::new()
 }
 
+#[cfg(any(target_os = "windows", test))]
+fn partition_bypass_routes<F>(prefixes: &[String], mut add: F) -> (Vec<String>, Vec<String>)
+where F: FnMut(&str) -> bool {
+    let mut installed = Vec::new();
+    let mut failed = Vec::new();
+    for prefix in prefixes {
+        if add(prefix) { installed.push(prefix.clone()); }
+        else { failed.push(prefix.clone()); }
+    }
+    (installed, failed)
+}
+
 #[cfg(target_os = "windows")]
-fn add_windows_bypass(prefix: &str, gateway: &str) {
+fn add_windows_bypass(prefix: &str, gateway: &str) -> bool {
     use std::process::Command;
-    let Some((network, _plen, mask)) = parse_ipv4_prefix(prefix) else { return; };
-    if gateway.is_empty() { return; }
+    let Some((network, _plen, mask)) = parse_ipv4_prefix(prefix) else { return false; };
+    if gateway.is_empty() { return false; }
     let destination = network.to_string();
-    let _ = Command::new("route")
+    Command::new("route")
         .args([
             "ADD",
             &destination,
@@ -292,15 +308,16 @@ fn add_windows_bypass(prefix: &str, gateway: &str) {
             "METRIC",
             "1",
         ])
-        .output();
+        .output().is_ok_and(|output| output.status.success())
 }
 
 #[cfg(target_os = "windows")]
-fn remove_windows_bypass(prefix: &str) {
+fn remove_windows_bypass(prefix: &str, gateway: &str) {
     use std::process::Command;
     let Some((network, _plen, mask)) = parse_ipv4_prefix(prefix) else { return; };
+    if gateway.is_empty() { return; }
     let _ = Command::new("route")
-        .args(["DELETE", &network.to_string(), "MASK", &mask.to_string()])
+        .args(["DELETE", &network.to_string(), "MASK", &mask.to_string(), gateway])
         .output();
 }
 
@@ -403,8 +420,10 @@ fn setup_routes_windows(runtime: &VpnRuntime, tun_ip: &str, tun_dns: &str, event
     *runtime.physical_gateway.lock() = gateway.clone();
 
     let bypass_list = runtime.bypass_routes.lock().clone();
-    for prefix in &bypass_list {
-        add_windows_bypass(prefix, &gateway);
+    let (installed, failed) = partition_bypass_routes(&bypass_list, |prefix| add_windows_bypass(prefix, &gateway));
+    runtime.windows_owned_bypass_routes.lock().extend(installed);
+    for prefix in failed {
+        events.emit(Event::log(format!("[ROUTE] Не удалось добавить исключение {prefix}; существующий маршрут не будет удалён")));
     }
 
     let _ = Command::new("netsh")
@@ -450,9 +469,10 @@ fn cleanup_routes_windows(runtime: &VpnRuntime, events: &EventBus) {
                "prefix=0.0.0.0/0", "interface=\"CSQTT\"", "store=active"])
         .output();
 
-    let bypass_list = runtime.bypass_routes.lock().clone();
+    let bypass_list = std::mem::take(&mut *runtime.windows_owned_bypass_routes.lock());
+    let gateway = runtime.physical_gateway.lock().clone();
     for prefix in &bypass_list {
-        remove_windows_bypass(prefix);
+        remove_windows_bypass(prefix, &gateway);
     }
     runtime.bypass_routes.lock().clear();
 
@@ -890,6 +910,19 @@ pub fn extract_ipv4_addrs(line: &str) -> Vec<String> {
     }
 
     result
+}
+
+#[cfg(test)]
+mod route_ownership_tests {
+    use super::partition_bypass_routes;
+
+    #[test]
+    fn only_successfully_added_routes_are_owned() {
+        let requested = vec!["192.0.2.0/24".into(), "198.51.100.1/32".into()];
+        let (owned, failed) = partition_bypass_routes(&requested, |route| route == "192.0.2.0/24");
+        assert_eq!(owned, vec!["192.0.2.0/24"]);
+        assert_eq!(failed, vec!["198.51.100.1/32"]);
+    }
 }
 
 #[cfg(all(test, target_os = "windows"))]
