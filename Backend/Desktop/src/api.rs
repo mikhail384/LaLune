@@ -1031,13 +1031,17 @@ async fn vpn_reconnect(state: State<Arc<AppState>>) -> impl IntoResponse {
 
 async fn vpn_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let session_before = state.vpn.session_id.lock().clone();
+    let config_before = *state.vpn.active_config_id.lock();
     let s = state.vpn.stats();
     let session_after = state.vpn.session_id.lock().clone();
+    let config_after = *state.vpn.active_config_id.lock();
+    let stable = session_before == session_after && config_before == config_after;
     let socks5_port = *state.socks5_port.read();
     Json(json!({
         "rxBytes": s.rx_bytes,
         "txBytes": s.tx_bytes,
-        "sessionId": if session_before == session_after { session_before } else { String::new() },
+        "sessionId": if stable { session_before } else { String::new() },
+        "configId": if stable { config_before } else { 0 },
         "rxRate": s.rx_rate,
         "txRate": s.tx_rate,
         "activeSessions": s.active_sessions,

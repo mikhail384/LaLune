@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -55,6 +56,7 @@ with tempfile.TemporaryDirectory(prefix='lalune-windows-tun-') as temporary:
     process = subprocess.Popen([str(backend)], env={**os.environ, 'APPDATA': str(root)},
                                stdout=log, stderr=log)
     route = False
+    interface_default = False
     try:
         wait_for(lambda: api('/ping'))
         api('/settings', {'desktopSocks5Mode': True}, method='PATCH')
@@ -65,12 +67,14 @@ with tempfile.TemporaryDirectory(prefix='lalune-windows-tun-') as temporary:
             api('/vpn/connect', {'configId': config['id']})
             wait_for(lambda: api('/vpn/status')['connected'])
             session_id = wait_for(lambda: api('/vpn/stats').get('sessionId'))
+            assert api('/vpn/stats')['configId'] == config['id']
             assert session_id != previous_session
             previous_session = session_id
             other = api('/configs', {'name': 'other fixture', 'protocol': protocol,
                 'peer': '192.0.2.1:46000', 'password': 'local-test', 'hashes': 'local-test'})
             api('/configs/selected', {'id': other['id']}, method='PUT')
             assert api('/vpn/status')['configId'] == config['id']
+            assert api('/vpn/stats')['configId'] == config['id']
             # A newly configured address may be Tentative while Windows runs
             # duplicate-address detection; binding to it is not yet possible.
             wait_for(lambda: powershell("if (Get-NetIPAddress -InterfaceAlias 'CSQTT' -AddressFamily IPv4 -IPAddress '10.66.67.2' -ErrorAction SilentlyContinue | Where-Object AddressState -eq Preferred) { exit 0 } else { exit 1 }", False).returncode == 0)
@@ -83,11 +87,28 @@ with tempfile.TemporaryDirectory(prefix='lalune-windows-tun-') as temporary:
                 assert sock.recv(128) == b'lalune-windows-tun-test'
             powershell("Remove-NetRoute -DestinationPrefix '198.18.0.1/32' -InterfaceAlias 'CSQTT' -PolicyStore ActiveStore -Confirm:$false -ErrorAction Stop")
             route = False
+            # Probe whether an interface-bound socket can use a low-priority
+            # tunnel default without installing global per-destination routes.
+            # This runs only in the disposable Windows test VM.
+            powershell("New-NetRoute -DestinationPrefix '0.0.0.0/0' -InterfaceAlias 'CSQTT' -NextHop '0.0.0.0' -RouteMetric 9000 -PolicyStore ActiveStore -ErrorAction Stop | Out-Null")
+            interface_default = True
+            index = int(powershell("(Get-NetAdapter -Name 'CSQTT').ifIndex").stdout.strip())
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.settimeout(5)
+                # IP_UNICAST_IF takes a Windows interface index in network byte order.
+                sock.setsockopt(socket.IPPROTO_IP, 31, struct.pack('!I', index))
+                sock.bind(('10.66.67.2', 0))
+                sock.sendto(b'lalune-interface-bound-test', ('198.18.0.1', 23456))
+                assert sock.recv(128) == b'lalune-interface-bound-test'
+            powershell("Remove-NetRoute -DestinationPrefix '0.0.0.0/0' -InterfaceAlias 'CSQTT' -NextHop '0.0.0.0' -PolicyStore ActiveStore -Confirm:$false -ErrorAction Stop")
+            interface_default = False
             api('/vpn/disconnect', {})
             wait_for(lambda: not api('/vpn/status')['connected'])
             assert api('/vpn/stats')['sessionId'] == ''
             print(json.dumps({'protocol': protocol, 'wintun_packet': 'passed'}), flush=True)
     finally:
+        if interface_default:
+            powershell("Remove-NetRoute -DestinationPrefix '0.0.0.0/0' -InterfaceAlias 'CSQTT' -NextHop '0.0.0.0' -PolicyStore ActiveStore -Confirm:$false -ErrorAction SilentlyContinue", False)
         if route:
             powershell("Remove-NetRoute -DestinationPrefix '198.18.0.1/32' -InterfaceAlias 'CSQTT' -PolicyStore ActiveStore -Confirm:$false -ErrorAction SilentlyContinue", False)
         try:
