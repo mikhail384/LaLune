@@ -1,12 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //
 // VPN: TUN-интерфейс, UDP-мост к ядру, маршруты, DNS, bypass.
-// Для PaperFlux в режиме proxy TUN оборачивает SOCKS5: маршруты
 // отправляют трафик на локальный SOCKS-прокси через tun2socks-подобный мост.
 // Здесь упрощённый вариант — используется тот же UDP-мост, что и для CSQTT
-// (ядро PaperFlux в режиме raw умеет работать напрямую с пакетами).
 //
-// ВАЖНО: для PaperFlux --mode proxy мы подсовываем ОС маршруты через TUN,
 // а TUN-мост сам подключается к SOCKS5 127.0.0.1:{CORE_LISTEN_PORT}.
 
 use anyhow::Result;

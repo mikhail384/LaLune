@@ -59,6 +59,7 @@ android {
             // useLegacyPackaging = true.
             keepDebugSymbols += setOf(
                 "**/libcsqtt-link.so",
+                "**/libtots.so",
             )
         }
         resources {

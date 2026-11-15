@@ -594,8 +594,6 @@ Color _tagColor(String tag) {
           return const Color(0xFFC49BFF);
         case 'SMART-TUNNEL':
           return const Color(0xFF8FAEFF);
-        case 'PAPERFLUX':
-          return const Color(0xFFFFA86B);
         case 'CSQTT':
           return const Color(0xFF80CBC4);
         default:

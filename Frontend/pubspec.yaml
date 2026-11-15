@@ -13,6 +13,7 @@ dependencies:
 
   # HTTP
   http: ^1.2.2
+  flutter_svg: ^2.0.10+1
 
   # SSH installer for OpenWRT
   dartssh2: ^4.1.0

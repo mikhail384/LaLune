@@ -40,7 +40,7 @@ enum Commands {
 
 #[derive(Parser, Debug)]
 pub struct DeployArgs {
-    /// Protocol to deploy: csqtt | freeturn | olcrtc | openflux | tots.
+    /// Protocol to deploy: csqtt | freeturn | olcrtc | tots.
     #[arg(long)]
     pub protocol: String,
 

@@ -3,6 +3,7 @@
 // Универсальный диалог подтверждения. Возвращает true / false / null.
 
 import 'package:flutter/material.dart';
+import 'glass_dialog.dart';
 
 Future<bool?> showConfirmDialog(
   BuildContext context, {
@@ -14,7 +15,7 @@ Future<bool?> showConfirmDialog(
   return showDialog<bool>(
     context: context,
     barrierColor: Colors.black.withOpacity(0.55),
-    builder: (ctx) => AlertDialog(
+    builder: (ctx) => GlassAlertDialog(
       backgroundColor: const Color(0xFF0F1540),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),

@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //
-// Protocol registry: CSQTT и PaperFlux.
+// Protocol registry: CSQTT, CSQTTR и ToTS.
 // Device ID передаётся только ядру CSQTT 2.1.9.
 
+use anyhow::{anyhow, Result};
+use base64::{engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD}, Engine as _};
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 use crate::config::ConfigItem;
 use crate::settings::Settings;
@@ -15,7 +18,7 @@ pub const CORE_LISTEN_PORT: u16 = 52230;
 pub enum ProtocolKind {
     Csqtt,
     Csqttr,
-    PaperFlux,
+    Tots,
 }
 
 impl ProtocolKind {
@@ -23,7 +26,7 @@ impl ProtocolKind {
         match s.trim().to_ascii_uppercase().as_str() {
             "CSQTT" | "CSQTT 2.1.9" | "CSQTT 2.5.1" => Some(Self::Csqtt),
             "CSQTTR" | "CSQTTR 2.5.2" => Some(Self::Csqttr),
-            "PAPERFLUX" | "OPENFLUX" => Some(Self::PaperFlux),
+            "TOTS" => Some(Self::Tots),
             _ => None,
         }
     }
@@ -32,7 +35,7 @@ impl ProtocolKind {
         match self {
             Self::Csqtt => "CSQTT",
             Self::Csqttr => "CSQTTR",
-            Self::PaperFlux => "PaperFlux",
+            Self::Tots => "ToTS",
         }
     }
 
@@ -40,7 +43,7 @@ impl ProtocolKind {
         match self {
             Self::Csqtt => "CSQTT (VK Calls)",
             Self::Csqttr => "CSQTTR",
-            Self::PaperFlux => "PaperFlux (Docs)",
+            Self::Tots => "ToTS",
         }
     }
 
@@ -48,7 +51,7 @@ impl ProtocolKind {
         match self {
             Self::Csqtt => "Endlad2/csqtt-core",
             Self::Csqttr => "Endlad2/csqttr-core",
-            Self::PaperFlux => "Endlad2/PaperFlux-core",
+            Self::Tots => "Endlad2/ToTS",
         }
     }
 
@@ -56,7 +59,7 @@ impl ProtocolKind {
         match self {
             Self::Csqtt => "Оригинальный протокол на базе VK Calls, TURN и WRAP.",
             Self::Csqttr => "CSQTTR 2.5.2.",
-            Self::PaperFlux => "Пробрасывает трафик через облачные документы (Yandex, Mail, OneMe и др.).",
+            Self::Tots => "ToTS: multi-provider transport (VK, Jazz, Ya Docs, Mail Docs, Cups).",
         }
     }
 
@@ -64,7 +67,7 @@ impl ProtocolKind {
         match self {
             Self::Csqtt => crate::core_manager::csqtt_asset_name(),
             Self::Csqttr => crate::core_manager::csqttr_asset_name(),
-            Self::PaperFlux => crate::core_manager::paperflux_asset_name(),
+            Self::Tots => crate::core_manager::tots_asset_name(),
         }
     }
 
@@ -72,7 +75,7 @@ impl ProtocolKind {
         match self {
             Self::Csqtt => crate::core_manager::csqtt_local_filename(),
             Self::Csqttr => crate::core_manager::csqttr_local_filename(),
-            Self::PaperFlux => crate::core_manager::paperflux_local_filename(),
+            Self::Tots => crate::core_manager::tots_local_filename(),
         }
     }
 }
@@ -104,12 +107,12 @@ pub fn supported_protocols() -> Vec<serde_json::Value> {
             "coreAsset": crate::core_manager::csqttr_asset_name(),
         }),
         serde_json::json!({
-            "id": "PaperFlux",
-            "displayName": "PaperFlux (Docs)",
-            "repo": "Endlad2/PaperFlux-core",
+            "id": "ToTS",
+            "displayName": "ToTS",
+            "repo": "Endlad2/ToTS",
             "realtime": true,
-            "description": "Пробрасывает трафик через облачные документы.",
-            "coreAsset": crate::core_manager::paperflux_asset_name(),
+            "description": "Multi-provider ToTS tunnel.",
+            "coreAsset": crate::core_manager::tots_asset_name(),
         }),
     ]
 }
@@ -132,13 +135,16 @@ pub fn settings_keys_for(kind: ProtocolKind) -> Vec<&'static str> {
             "shareVpn", "desktopSocks5Mode", "showCoreLogs",
             "ipRoutingMode", "ipRoutingIps",
         ],
-        ProtocolKind::PaperFlux => vec![
-            "pfTransport", "pfUrl", "pfUrls", "pfVolgaUrl",
-            "pfMode", "pfSocks5", "pfTcpRecovery",
-            "pfRelayUrl", "pfRelayToken", "pfRelayUser", "pfRelaySession",
-            "pfMaxToken", "pfMaxUid",
-            "workers", "shareVpn", "desktopSocks5Mode", "showCoreLogs",
-            "ipRoutingMode", "ipRoutingIps",
+        ProtocolKind::Tots => vec![
+            "totsWorkers", "autoApiWorkers", "totsMtu", "totsRelayOnly",
+            "totsVkEnabled", "totsJazzEnabled", "totsYaDocsEnabled",
+            "totsMailDocsEnabled", "totsCupsEnabled",
+            "totsVkPercent", "totsJazzPercent", "totsYaDocsPercent",
+            "totsMailDocsPercent", "totsCupsPercent",
+            "totsVkAuthMode", "totsVkCallLinks",
+            "totsJazzRoomName", "totsJazzRandomName",
+            "totsJazzData", "totsYaDocsData", "totsMailDocsData", "totsCupsData",
+            "showCoreLogs", "ipRoutingMode", "ipRoutingIps",
         ],
     }
 }
@@ -147,14 +153,182 @@ pub fn build_args(
     config: &ConfigItem,
     settings: &Settings,
     listen_port: u16,
-) -> Vec<String> {
+) -> Result<Vec<String>> {
     let kind = ProtocolKind::from_id(&config.protocol)
         .unwrap_or(ProtocolKind::Csqtt);
 
-    match kind {
+    Ok(match kind {
         ProtocolKind::Csqtt | ProtocolKind::Csqttr => build_csqtt_args(config, settings, listen_port),
-        ProtocolKind::PaperFlux => build_paperflux_args(config, settings, listen_port),
+        ProtocolKind::Tots => build_tots_args(config, settings)?,
+    })
+}
+
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TotsUriConfig {
+    #[serde(default)]
+    pub version: u32,
+    pub peer: String,
+    pub webrtc_port: u16,
+    pub turn_port: u16,
+    pub password: String,
+    pub device_id: String,
+    pub provider: String,
+    #[serde(default)]
+    pub provider_data: Value,
+    #[serde(default = "default_tots_mtu")]
+    pub mtu: u16,
+}
+
+fn default_tots_mtu() -> u16 { 1200 }
+
+pub fn parse_tots_uri(link: &str) -> Result<TotsUriConfig> {
+    let trimmed = link.trim();
+    let payload = trimmed.strip_prefix("tots://")
+        .or_else(|| trimmed.strip_prefix("ToTS://"))
+        .ok_or_else(|| anyhow!("invalid ToTS scheme"))?;
+    let encoded = payload.trim();
+    let bytes = URL_SAFE_NO_PAD.decode(encoded)
+        .or_else(|_| URL_SAFE.decode(encoded))
+        .map_err(|e| anyhow!("invalid ToTS base64: {e}"))?;
+    let cfg: TotsUriConfig = serde_json::from_slice(&bytes)
+        .map_err(|e| anyhow!("invalid ToTS JSON: {e}"))?;
+    if cfg.version != 1 { return Err(anyhow!("unsupported ToTS version {}", cfg.version)); }
+    if cfg.peer.trim().is_empty() || cfg.password.is_empty() || cfg.device_id.trim().is_empty() {
+        return Err(anyhow!("incomplete ToTS config"));
     }
+    if !(576..=1400).contains(&cfg.mtu) { return Err(anyhow!("invalid ToTS MTU")); }
+    Ok(cfg)
+}
+
+fn parse_json_object(raw: &str) -> Option<Value> {
+    if raw.trim().is_empty() { return None; }
+    serde_json::from_str::<Value>(raw).ok().filter(Value::is_object)
+}
+
+fn tots_vk_call_links(raw: &str) -> Vec<String> {
+    raw.split(|c: char| c == ',' || c == '+' || c == ';' || c.is_whitespace())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(|v| {
+            if v.starts_with("https://") || v.starts_with("http://") {
+                v.to_owned()
+            } else {
+                format!("https://vk.ru/call/join/{v}")
+            }
+        })
+        .collect()
+}
+
+fn normalize_worker_percentages(entries: &[(&str, bool, i32, bool)]) -> Option<Value> {
+    let active: Vec<_> = entries.iter()
+        .filter(|(_, enabled, _, has_data)| *enabled && *has_data)
+        .collect();
+    if active.is_empty() { return None; }
+
+    let sum: i32 = active.iter().map(|(_, _, pct, _)| (*pct).clamp(0, 100)).sum();
+    let mut out = Map::new();
+    if sum <= 0 {
+        for (idx, (name, _, _, _)) in active.iter().enumerate() {
+            out.insert((*name).to_string(), Value::from(if idx == 0 { 100 } else { 0 }));
+        }
+        return Some(Value::Object(out));
+    }
+
+    let mut used = 0i32;
+    for (idx, (name, _, pct, _)) in active.iter().enumerate() {
+        let value = if idx + 1 == active.len() {
+            100 - used
+        } else {
+            let scaled = ((*pct).clamp(0, 100) * 100) / sum;
+            used += scaled;
+            scaled
+        };
+        out.insert((*name).to_string(), Value::from(value));
+    }
+    Some(Value::Object(out))
+}
+
+fn build_tots_args(config: &ConfigItem, settings: &Settings) -> Result<Vec<String>> {
+    // Always decode the URI and pass explicit flags. Intentionally never use --config.
+    let parsed = parse_tots_uri(&config.raw_link)?;
+    let mut provider_data = parsed.provider_data.as_object().cloned().unwrap_or_default();
+
+    let enabled = [
+        ("vk", settings.tots_vk_enabled),
+        ("jazz", settings.tots_jazz_enabled),
+        ("ya-docs", settings.tots_ya_docs_enabled),
+        ("mail-docs", settings.tots_mail_docs_enabled),
+        ("cups", settings.tots_cups_enabled),
+    ];
+    for (name, is_enabled) in enabled {
+        if !is_enabled { provider_data.remove(name); }
+    }
+
+    if settings.tots_vk_enabled && !settings.tots_vk_call_links.trim().is_empty() {
+        let links = tots_vk_call_links(&settings.tots_vk_call_links);
+        if !links.is_empty() {
+            let mut vk = provider_data.get("vk")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            vk.insert("vk_call_links".into(), serde_json::json!(links));
+            provider_data.insert("vk".into(), Value::Object(vk));
+        }
+    }
+    for (name, raw, is_enabled) in [
+        ("jazz", settings.tots_jazz_data.as_str(), settings.tots_jazz_enabled),
+        ("ya-docs", settings.tots_ya_docs_data.as_str(), settings.tots_ya_docs_enabled),
+        ("mail-docs", settings.tots_mail_docs_data.as_str(), settings.tots_mail_docs_enabled),
+        ("cups", settings.tots_cups_data.as_str(), settings.tots_cups_enabled),
+    ] {
+        if is_enabled {
+            if let Some(value) = parse_json_object(raw) { provider_data.insert(name.into(), value); }
+        }
+    }
+    if settings.tots_jazz_enabled && !settings.tots_jazz_room_name.trim().is_empty() {
+        if let Some(Value::Object(jazz)) = provider_data.get_mut("jazz") {
+            jazz.insert("room_name".into(), Value::String(settings.tots_jazz_room_name.trim().to_string()));
+        }
+    }
+
+    if provider_data.is_empty() { return Err(anyhow!("ToTS provider_data is empty after applying enabled providers")); }
+    let provider = if provider_data.contains_key(&parsed.provider) {
+        parsed.provider.clone()
+    } else {
+        ["vk", "jazz", "ya-docs", "mail-docs", "cups"].into_iter()
+            .find(|name| provider_data.contains_key(*name)).unwrap_or("vk").to_string()
+    };
+
+    let has = |name: &str| provider_data.contains_key(name);
+    let percentages = normalize_worker_percentages(&[
+        ("vk", settings.tots_vk_enabled, settings.tots_vk_percent, has("vk")),
+        ("jazz", settings.tots_jazz_enabled, settings.tots_jazz_percent, has("jazz")),
+        ("ya-docs", settings.tots_ya_docs_enabled, settings.tots_ya_docs_percent, has("ya-docs")),
+        ("mail-docs", settings.tots_mail_docs_enabled, settings.tots_mail_docs_percent, has("mail-docs")),
+        ("cups", settings.tots_cups_enabled, settings.tots_cups_percent, has("cups")),
+    ]);
+
+    let mut args = vec![
+        "--peer".into(), parsed.peer,
+        "--webrtc-port".into(), parsed.webrtc_port.to_string(),
+        "--turn-port".into(), parsed.turn_port.to_string(),
+        "--password".into(), parsed.password,
+        "--device-id".into(), parsed.device_id,
+        "--provider".into(), provider,
+        "--provider-data".into(), Value::Object(provider_data).to_string(),
+        "--n".into(), settings.tots_workers.clamp(1, 127).to_string(),
+        "--mtu".into(), settings.tots_mtu.clamp(576, 1400).to_string(),
+    ];
+    if let Some(pct) = percentages {
+        args.push("--workers_percent".into());
+        args.push(pct.to_string());
+    }
+    if settings.tots_relay_only { args.push("--relay-only".into()); }
+    args.push("--tun-name".into());
+    args.push("tots0".into());
+    args.push("--tun-default-route".into());
+    Ok(args)
 }
 
 fn build_csqtt_args(
@@ -253,142 +427,6 @@ fn build_csqtt_args(
     args
 }
 
-fn build_paperflux_args(
-    config: &ConfigItem,
-    settings: &Settings,
-    listen_port: u16,
-) -> Vec<String> {
-    let mut args: Vec<String> = Vec::with_capacity(32);
-
-    args.push("--client".into());
-
-    if !config.profile_id.is_empty() {
-        args.push("--profile-id".into());
-        args.push(config.profile_id.clone());
-    }
-    if !config.profile_token.is_empty() {
-        args.push("--profile-token".into());
-        args.push(config.profile_token.clone());
-    }
-    let client_ip = if config.client_ip.is_empty() {
-        settings.pf_client_ip.clone()
-    } else {
-        config.client_ip.clone()
-    };
-    let client_ip = if client_ip.is_empty() { "10.10.10.2".into() } else { client_ip };
-    args.push("--client-ip".into());
-    args.push(client_ip);
-
-    let transport = if settings.pf_transport.is_empty() {
-        if config.transport.is_empty() { "yandex".to_string() } else { config.transport.clone() }
-    } else {
-        settings.pf_transport.clone()
-    };
-    args.push("--transport".into());
-    args.push(transport.clone());
-
-    if settings.pf_session {
-        args.push("--session".into());
-    }
-    if !settings.pf_tcp_recovery.is_empty() {
-        args.push("--tcp-recovery".into());
-        args.push(settings.pf_tcp_recovery.clone());
-    }
-
-    let url = if !config.url.is_empty() {
-        config.url.clone()
-    } else {
-        settings.pf_url.clone()
-    };
-    if !url.is_empty() {
-        args.push("--url".into());
-        args.push(url);
-    }
-
-    let urls = if !config.urls.is_empty() { config.urls.clone() } else { settings.pf_urls.clone() };
-    if !urls.is_empty() {
-        args.push("--urls".into());
-        args.push(urls);
-    }
-
-    let volga = if !config.volga_url.is_empty() {
-        config.volga_url.clone()
-    } else {
-        settings.pf_volga_url.clone()
-    };
-    if !volga.is_empty() {
-        args.push("--volga-url".into());
-        args.push(volga);
-    }
-
-    args.push("--mode".into());
-    args.push("proxy".into());
-    args.push("--socks5".into());
-    args.push(format!("127.0.0.1:{}", listen_port));
-
-    if !settings.pf_auth_service.is_empty() {
-        args.push("--auth-service".into());
-        args.push(settings.pf_auth_service.clone());
-    }
-    if !settings.pf_ipc_socket.is_empty() {
-        args.push("--ipc-socket".into());
-        args.push(settings.pf_ipc_socket.clone());
-    }
-    if !settings.pf_tun_fd_sock.is_empty() {
-        args.push("--tun-fd-sock".into());
-        args.push(settings.pf_tun_fd_sock.clone());
-    }
-    if !settings.pf_packet_sock.is_empty() {
-        args.push("--packet-sock".into());
-        args.push(settings.pf_packet_sock.clone());
-    }
-
-    if !settings.pf_exit_profiles.is_empty() {
-        args.push("--exit-profiles".into());
-        args.push(settings.pf_exit_profiles.clone());
-    }
-    if !settings.pf_exit_stats.is_empty() {
-        args.push("--exit-stats".into());
-        args.push(settings.pf_exit_stats.clone());
-    }
-    if !settings.pf_exit_cookies.is_empty() {
-        args.push("--exit-cookies".into());
-        args.push(settings.pf_exit_cookies.clone());
-    }
-
-    let relay_url = if !config.relay_url.is_empty() { config.relay_url.clone() } else { settings.pf_relay_url.clone() };
-    if !relay_url.is_empty() {
-        args.push("--relay-url".into());
-        args.push(relay_url);
-    }
-    let relay_token = if !config.relay_token.is_empty() { config.relay_token.clone() } else { settings.pf_relay_token.clone() };
-    if !relay_token.is_empty() {
-        args.push("--relay-token".into());
-        args.push(relay_token);
-    }
-    if settings.pf_relay_user > 0 {
-        args.push("--relay-user".into());
-        args.push(settings.pf_relay_user.to_string());
-    }
-    if !settings.pf_relay_session.is_empty() {
-        args.push("--relay-session".into());
-        args.push(settings.pf_relay_session.clone());
-    }
-
-    let max_token = if !config.max_token.is_empty() { config.max_token.clone() } else { settings.pf_max_token.clone() };
-    if !max_token.is_empty() {
-        args.push("--maxToken".into());
-        args.push(max_token);
-    }
-    let max_uid = if !config.max_uid.is_empty() { config.max_uid.clone() } else { settings.pf_max_uid.clone() };
-    if !max_uid.is_empty() {
-        args.push("--maxUid".into());
-        args.push(max_uid);
-    }
-
-    args
-}
-
 fn read_vk_token_for_core() -> Option<String> {
     let dir = crate::state::app_dir().ok()?;
     crate::vk::read_token(&dir)
@@ -399,8 +437,6 @@ pub fn link_placeholder(kind: ProtocolKind) -> &'static str {
         ProtocolKind::Csqtt | ProtocolKind::Csqttr => {
             "csqtt://connect?v=2&host=...&peer=...&password=...&hashes=h1+h2"
         }
-        ProtocolKind::PaperFlux => {
-            "paperflux://config?v=1&id=...&name=...&server=...&ip=...&transport=...&doc=...&token=...&volga=..."
-        }
+        ProtocolKind::Tots => "tots://<base64url-json>",
     }
 }

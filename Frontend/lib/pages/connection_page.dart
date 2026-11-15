@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 import 'package:flutter/material.dart';
+import '../widgets/glass_dialog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:flutter/services.dart';
 
+import '../models/config_item.dart';
 import '../models/subscription.dart';
 import '../state/configs_notifier.dart';
 import '../state/logs_notifier.dart';
@@ -12,6 +14,7 @@ import '../state/providers.dart';
 import '../state/subscriptions_notifier.dart';
 import '../state/vpn_notifier.dart';
 import '../utils/open_url.dart';
+import '../utils/profile_ping.dart';
 import '../widgets/config_selector.dart';
 import '../widgets/moon_button.dart';
 import '../widgets/toast.dart';
@@ -26,6 +29,10 @@ class ConnectionPage extends ConsumerStatefulWidget {
 }
 
 class _ConnectionPageState extends ConsumerState<ConnectionPage> {
+  final Map<String, int> _profilePings = <String, int>{};
+  bool _pingsMeasured = false;
+  bool _measuringPings = false;
+
   @override
   void initState() {
     super.initState();
@@ -100,6 +107,72 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
     }
   }
 
+  Future<void> _measureAllPings() async {
+    if (_measuringPings) return;
+    final configsState = ref.read(configsProvider);
+    final subsState = ref.read(subscriptionsProvider);
+    final managedIds = subsState.managedIds;
+    final plain = managedIds.isEmpty
+        ? configsState.items
+        : configsState.items.where((c) => !managedIds.contains(c.id)).toList();
+
+    setState(() {
+      _measuringPings = true;
+      _pingsMeasured = false;
+      _profilePings.clear();
+    });
+
+    final api = ref.read(apiClientProvider);
+    final results = <String, int>{};
+    final jobs = <Future<void>>[];
+
+    for (final config in plain) {
+      jobs.add(() async {
+        final ping = await probeProfile(config);
+        if (ping != null) results[configPingKey(config.id)] = ping;
+      }());
+    }
+
+    for (final sub in subsState.items) {
+      for (final config in sub.configs) {
+        if (config.expired) continue;
+        jobs.add(() async {
+          try {
+            final parsed = await api.postJson('/configs/parse', {
+              'link': config.config,
+              'protocol': config.protocol,
+            });
+            final item = ConfigItem.fromJson(parsed);
+            final ping = await probeProfile(item);
+            if (ping != null) {
+              results[subConfigPingKey(sub.id, config)] = ping;
+            }
+          } catch (_) {
+            // Ошибка одного профиля не должна отменять параллельный замер остальных.
+          }
+        }());
+      }
+    }
+
+    await Future.wait(jobs);
+    if (!mounted) return;
+    setState(() {
+      _profilePings
+        ..clear()
+        ..addAll(results);
+      _pingsMeasured = true;
+      _measuringPings = false;
+    });
+    final total = jobs.length;
+    Toast.show(
+      context,
+      total == 0
+          ? 'Нет профилей для проверки'
+          : 'Задержка измерена: ${results.length} из $total',
+      isError: total > 0 && results.isEmpty,
+    );
+  }
+
   Future<void> _showAddDialog() async {
     final result = await showAddConfigDialog(context);
     if (result == null) return;
@@ -145,7 +218,7 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
     final ok = await showDialog<bool>(
       context: context,
       barrierColor: Colors.black.withOpacity(0.55),
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         backgroundColor: const Color(0xFF0F1540),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
@@ -233,7 +306,7 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
     final ok = await showDialog<bool>(
       context: context,
       barrierColor: Colors.black.withOpacity(0.55),
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => GlassAlertDialog(
         backgroundColor: const Color(0xFF0F1540),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
@@ -355,6 +428,10 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
                   expandedSubs: subsState.expanded,
                   refreshingSubs: subsState.refreshing,
                   onRefreshSubs: _refreshSubscriptions,
+                  measuringPings: _measuringPings,
+                  pingsMeasured: _pingsMeasured,
+                  pings: _profilePings,
+                  onMeasurePings: _measureAllPings,
                   onToggleSub: (s) => ref
                       .read(subscriptionsProvider.notifier)
                       .toggleExpanded(s.id),

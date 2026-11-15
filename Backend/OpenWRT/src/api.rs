@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //
-// HTTP API OpenWRT. Только CSQTT (без PaperFlux).
+// HTTP API OpenWRT. Поддерживаемые OpenWRT-протоколы.
 // Lua-рантайм вызывается из /smarttunnel/*.
 
 use axum::{

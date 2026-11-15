@@ -8,6 +8,7 @@
 // Снизу — кнопка «Ввести IP роутера вручную».
 
 import 'package:flutter/material.dart';
+import 'glass_dialog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/router_info.dart';
@@ -80,7 +81,7 @@ class _RouterModalState extends ConsumerState<_RouterModal> {
     final list = map.values.toList()
       ..sort((a, b) => a.ip.compareTo(b.ip));
 
-    return Dialog(
+    return GlassDialog(
       backgroundColor: const Color(0xFF0F1540),
       insetPadding: const EdgeInsets.all(20),
       shape: RoundedRectangleBorder(

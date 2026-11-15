@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //
-// Ядро: CSQTT + PaperFlux (iOS). Скачивание + парсинг логов +
+// Ядра CSQTT / CSQTTR (iOS). Скачивание + парсинг логов +
 // запись общих настроек для Tunnel Extension.
 
 import Foundation
@@ -20,13 +20,9 @@ final class CoreManager {
         "https://raw.githubusercontent.com/Endlad2/csqttr-core/refs/heads/main/LATEST"
     private let CSQTTR_URL_TEMPLATE =
         "https://github.com/Endlad2/csqttr-core/releases/download/%@/%@"
-    private let LATEST_PAPERFLUX_URL =
-        "https://raw.githubusercontent.com/Endlad2/PaperFlux-core/refs/heads/main/LATEST"
 
     private let CSQTT_URL_TEMPLATE =
         "https://github.com/Endlad2/csqtt-core/releases/download/%@/%@"
-    private let PAPERFLUX_URL =
-        "https://github.com/Endlad2/PaperFlux-core/releases/latest/download/paperflux-ios.zip"
 
     private let PROXY_URL = "http://31.77.148.203:8855/?url="
     private let UA_BROWSER =
@@ -65,7 +61,7 @@ final class CoreManager {
     }
 
     private func latestFile(protocol proto: String) -> URL {
-        let name = proto.lowercased() == "paperflux" ? "LATEST.PaperFlux" : (proto.uppercased().hasPrefix("CSQTTR") ? "LATEST.CSQTTR" : "LATEST.Csqtt")
+        let name = proto.uppercased().hasPrefix("CSQTTR") ? "LATEST.CSQTTR" : "LATEST.Csqtt"
         return appDir.appendingPathComponent(name)
     }
 
@@ -83,7 +79,7 @@ final class CoreManager {
     // MARK: - LATEST
 
     func fetchLatestVersion(protocol proto: String = "CSQTT") -> String? {
-        let baseURL = proto.lowercased() == "paperflux" ? LATEST_PAPERFLUX_URL : (proto.uppercased().hasPrefix("CSQTTR") ? LATEST_CSQTTR_URL : LATEST_CSQTT_URL)
+        let baseURL = proto.uppercased().hasPrefix("CSQTTR") ? LATEST_CSQTTR_URL : LATEST_CSQTT_URL
         for level in 1...3 {
             let urlStr = level == 1
                 ? baseURL
@@ -133,38 +129,6 @@ final class CoreManager {
         let filename = "libcsqttr_ios_core.a"
         let base = String(format: CSQTTR_URL_TEMPLATE, version, filename)
         return downloadFrom(baseURL: base, destName: filename, latestName: "LATEST.CSQTTR", latestValue: version)
-    }
-
-    private func downloadPaperFlux() -> Bool {
-        // paperflux-ios.zip содержит liboflux.a + liboflux.h.
-        // Мы кладём .a в Core/ — как статическую библиотеку. На iOS ядро
-        // линкуется в tunnel-extension, а не запускается как процесс.
-        for level in 1...3 {
-            let urlStr = level == 1
-                ? PAPERFLUX_URL
-                : PROXY_URL + (PAPERFLUX_URL.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")
-            guard let url = URL(string: urlStr) else { continue }
-            var req = URLRequest(url: url)
-            req.timeoutInterval = 120
-            req.setValue(level == 3 ? UA_CURL : UA_BROWSER, forHTTPHeaderField: "User-Agent")
-
-            let sem = DispatchSemaphore(value: 0)
-            var success = false
-            URLSession.shared.dataTask(with: req) { data, _, _ in
-                defer { sem.signal() }
-                guard let data = data, data.count > 1024 else { return }
-                try? FileManager.default.createDirectory(at: self.coreDir, withIntermediateDirectories: true)
-                // Сохраняем zip; Tunnel Extension сам распакует нужный .a.
-                let zipDest = self.coreDir.appendingPathComponent("paperflux-ios.zip")
-                try? data.write(to: zipDest)
-                try? "latest".write(to: self.latestFile(protocol: "PaperFlux"),
-                                     atomically: true, encoding: .utf8)
-                success = true
-            }.resume()
-            sem.wait()
-            if success { return true }
-        }
-        return false
     }
 
     private func downloadFrom(baseURL: String, destName: String, latestName: String, latestValue: String) -> Bool {
@@ -226,8 +190,7 @@ final class CoreManager {
         protocol proto: String,
         peer: String,
         password: String,
-        hashes: String,
-        paperfluxArgs: [String] = []
+        hashes: String
     ) {
         let shared = UserDefaults(suiteName: APP_GROUP)
         shared?.set(proto, forKey: "protocol")
@@ -244,13 +207,6 @@ final class CoreManager {
         shared?.set(settingsJson["captchaMode"] as? String ?? "auto", forKey: "captchaMode")
         shared?.set(settingsJson["turnTransport"] as? String ?? "udp", forKey: "turnTransport")
         shared?.set(settingsJson["validateVkHashes"] as? Bool ?? false, forKey: "validateVkHashes")
-
-        // PaperFlux-поля
-        shared?.set(paperfluxArgs, forKey: "paperfluxArgs")
-        shared?.set(settingsJson["pfTransport"] as? String ?? "yandex", forKey: "pfTransport")
-        shared?.set(settingsJson["pfMode"] as? String ?? "proxy", forKey: "pfMode")
-        shared?.set(settingsJson["pfSocks5"] as? String ?? "127.0.0.1:1080", forKey: "pfSocks5")
-        shared?.set(settingsJson["pfClientIp"] as? String ?? "10.10.10.2", forKey: "pfClientIp")
 
         shared?.set(settingsJson["deviceId"] as? String ?? "", forKey: "deviceId")
         shared?.synchronize()

@@ -36,29 +36,6 @@ pub struct Settings {
     pub workers: i32,
     pub auto_api_workers: i32,
 
-    // -------- PaperFlux --------
-    pub pf_transport: String,
-    pub pf_url: String,
-    pub pf_urls: String,
-    pub pf_volga_url: String,
-    pub pf_mode: String,
-    pub pf_socks5: String,
-    pub pf_tcp_recovery: String,
-    pub pf_session: bool,
-    pub pf_client_ip: String,
-    pub pf_auth_service: String,
-    pub pf_ipc_socket: String,
-    pub pf_tun_fd_sock: String,
-    pub pf_packet_sock: String,
-    pub pf_exit_profiles: String,
-    pub pf_exit_stats: String,
-    pub pf_exit_cookies: String,
-    pub pf_relay_url: String,
-    pub pf_relay_token: String,
-    pub pf_relay_user: i64,
-    pub pf_relay_session: String,
-    pub pf_max_token: String,
-    pub pf_max_uid: String,
 
     // -------- Экспериментальное --------
     pub enable_smart_tunnel: bool,
@@ -93,28 +70,6 @@ impl Default for Settings {
             workers: DEFAULT_WORKERS,
             auto_api_workers: DEFAULT_AUTO_API_WORKERS,
 
-            pf_transport: "yandex".into(),
-            pf_url: String::new(),
-            pf_urls: String::new(),
-            pf_volga_url: String::new(),
-            pf_mode: "proxy".into(),
-            pf_socks5: "127.0.0.1:1080".into(),
-            pf_tcp_recovery: "auto".into(),
-            pf_session: false,
-            pf_client_ip: "10.10.10.2".into(),
-            pf_auth_service: String::new(),
-            pf_ipc_socket: String::new(),
-            pf_tun_fd_sock: String::new(),
-            pf_packet_sock: String::new(),
-            pf_exit_profiles: String::new(),
-            pf_exit_stats: String::new(),
-            pf_exit_cookies: String::new(),
-            pf_relay_url: String::new(),
-            pf_relay_token: String::new(),
-            pf_relay_user: 0,
-            pf_relay_session: String::new(),
-            pf_max_token: String::new(),
-            pf_max_uid: String::new(),
 
             enable_smart_tunnel: false,
             show_core_logs: false,
@@ -140,11 +95,6 @@ impl Settings {
         if self.vk_auth_mode.is_empty() { self.vk_auth_mode = "vkcalls".into(); }
         if self.client_ids.is_empty() { self.client_ids = "8202606,6287487".into(); }
 
-        if self.pf_transport.is_empty() { self.pf_transport = "yandex".into(); }
-        if self.pf_mode.is_empty() { self.pf_mode = "proxy".into(); }
-        if self.pf_socks5.is_empty() { self.pf_socks5 = "127.0.0.1:1080".into(); }
-        if self.pf_tcp_recovery.is_empty() { self.pf_tcp_recovery = "auto".into(); }
-        if self.pf_client_ip.is_empty() { self.pf_client_ip = "10.10.10.2".into(); }
     }
 
     pub fn merge_from_json(&mut self, value: serde_json::Value) -> anyhow::Result<()> {

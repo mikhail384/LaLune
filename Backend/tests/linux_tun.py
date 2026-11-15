@@ -44,8 +44,8 @@ while True:
 '''
 
 CASES=['routes','packet','disconnect','cancel','setup_failure','dns_failure','dns_changed','core_exit','reconnect','group_conflict','table_alias','missing_kill','invalid_connect']
-DESKTOP_CASES=['paperflux_compat','csqttr_compat']
-LEGACY_CASES=['paperflux_compat']
+DESKTOP_CASES=['csqttr_compat']
+LEGACY_CASES=[]
 
 
 def cmd(*args, check=True):
@@ -98,7 +98,7 @@ def inside(binary, case):
         routes=cmd('ip','-4','route','show','table','all').stdout
         rules=cmd('ip','-4','rule','show').stdout
         symlink=Path('/etc/resolv.conf').is_symlink()
-        for name in ['csqtt-client-aarch64','csqtt-core','paperflux-core','csqttr-core']:
+        for name in ['csqtt-client-aarch64','csqtt-core','csqttr-core']:
             f=app/name;f.write_text(CORE);f.chmod(0o755)
         delay='0'
         environment={**os.environ,'HOME':str(home),'TEST_CORE_DELAY':delay,'RUST_LOG':'info'}
@@ -115,7 +115,7 @@ def inside(binary, case):
         process=subprocess.Popen(command,env=environment,stdout=log,stderr=log)
         try:
             wait_for(lambda:api('/ping'))
-            protocol={'paperflux_compat':'PaperFlux','csqttr_compat':'CSQTTR'}.get(case,'CSQTT')
+            protocol={'csqttr_compat':'CSQTTR'}.get(case,'CSQTT')
             conf=api('/configs',{'name':'Kernel regression','protocol':protocol,
                  'peer':'192.0.2.1:46000','password':'local-test','hashes':'local-test'})
             if case=='missing_kill':

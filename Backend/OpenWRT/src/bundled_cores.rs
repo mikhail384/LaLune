@@ -176,6 +176,5 @@ mod tests {
         }
         assert!(copy_core(b"bad zip", Core::Csqtt, &mut Vec::new()).is_err());
         assert!(Core::parse("../core").is_none());
-        assert!(Core::parse("PaperFlux").is_none());
     }
 }

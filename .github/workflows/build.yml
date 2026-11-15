@@ -642,22 +642,24 @@ jobs:
           file "$DEST/armeabi-v7a/libcsqttr-android-armeabi-v7a.so"
           file "$DEST/x86_64/libcsqttr-android-x86_64.so"
 
-      - name: Download PaperFlux cores (jniLibs)
+      - name: Refresh ToTS core binaries (jniLibs)
         shell: bash
         run: |
           set -euo pipefail
-          TMP_PF=$(mktemp -d)
-          curl -L --fail --retry 3 -o "$TMP_PF/paperflux-android.zip" \
-            https://github.com/Endlad2/PaperFlux-core/releases/latest/download/paperflux-android.zip
-          unzip -o "$TMP_PF/paperflux-android.zip" -d "$TMP_PF/extracted"
-          for abi in arm64-v8a armeabi-v7a x86_64 x86; do
-            mkdir -p "Frontend/android/app/src/main/jniLibs/$abi"
-            SRC="$TMP_PF/extracted/$abi/libopenflux.so"
-            if [ -f "$SRC" ]; then
-              cp "$SRC" "Frontend/android/app/src/main/jniLibs/$abi/libopenflux.so"
-            fi
-          done
-          rm -rf "$TMP_PF"
+          TMP_TOTS=$(mktemp -d)
+          URL=https://github.com/Endlad2/ToTS/releases/latest/download/tots-android-multiabi.zip
+          if curl -L --fail --retry 3 -o "$TMP_TOTS/tots-android-multiabi.zip" "$URL"; then
+            unzip -o "$TMP_TOTS/tots-android-multiabi.zip" -d "$TMP_TOTS/extracted"
+            for abi in arm64-v8a armeabi-v7a x86_64; do
+              src="$TMP_TOTS/extracted/jniLibs/$abi/libtots.so"
+              [ -f "$src" ] || { echo "Missing ToTS ABI in release: $abi" >&2; exit 1; }
+              mkdir -p "Frontend/android/app/src/main/jniLibs/$abi"
+              cp "$src" "Frontend/android/app/src/main/jniLibs/$abi/libtots.so"
+            done
+          else
+            echo "ToTS multi-ABI release asset is unavailable; using the binaries bundled in the repository."
+          fi
+          rm -rf "$TMP_TOTS"
 
       - name: Copy Lua scripts to assets
         shell: bash
@@ -690,7 +692,7 @@ jobs:
           set -euo pipefail
           APK=$(find Frontend/build/app/outputs/flutter-apk -name "app-debug.apk" -type f | head -n 1)
           echo "APK: $APK"
-          unzip -l "$APK" | grep -E 'libcsqtt-link|libclient-android|libcsqttr-android|libopenflux' || true
+          unzip -l "$APK" | grep -E 'libcsqtt-link|libclient-android|libcsqttr-android|libtots' || true
 
       - name: Locate & rename APK
         id: find_apk

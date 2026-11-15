@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 import '../models/config_item.dart';
 import '../models/subscription.dart';
+import '../utils/profile_ping.dart';
 import 'glass_card.dart';
 import 'toast.dart';
 
@@ -29,6 +33,12 @@ class ConfigSelector extends StatelessWidget {
   final ValueChanged<Subscription>? onDeleteSub;
   final void Function(Subscription sub, SubConfig config)? onSelectSubConfig;
 
+  // --- замер задержки ---
+  final bool measuringPings;
+  final bool pingsMeasured;
+  final Map<String, int> pings;
+  final VoidCallback? onMeasurePings;
+
   const ConfigSelector({
     super.key,
     required this.configs,
@@ -47,6 +57,10 @@ class ConfigSelector extends StatelessWidget {
     this.onOpenSubControl,
     this.onDeleteSub,
     this.onSelectSubConfig,
+    this.measuringPings = false,
+    this.pingsMeasured = false,
+    this.pings = const {},
+    this.onMeasurePings,
   });
 
   Widget _note(String text, {bool spinner = false, Widget? action}) {
@@ -68,7 +82,8 @@ class ConfigSelector extends StatelessWidget {
                 const SizedBox(width: 9),
               ],
               Flexible(
-                  child: Text(text, style: style, textAlign: TextAlign.center)),
+                child: Text(text, style: style, textAlign: TextAlign.center),
+              ),
             ],
           ),
           if (action != null) action,
@@ -81,42 +96,75 @@ class ConfigSelector extends StatelessWidget {
   Widget build(BuildContext context) {
     final hasError = error != null && error!.trim().isNotEmpty;
     final hasSubs = subscriptions.isNotEmpty;
+    final hasProfiles = configs.isNotEmpty || hasSubs;
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 400),
       child: GlassCard(
         padding: const EdgeInsets.all(8),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Кнопка обновления подписок — в правом верхнем углу блока конфигов.
-            if (hasSubs)
-              Align(
-                alignment: Alignment.centerRight,
-                child: SizedBox(
-                  height: 30,
-                  width: 34,
-                  child: refreshingSubs
-                      ? const Padding(
-                          padding: EdgeInsets.all(8),
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : IconButton(
-                          onPressed: onRefreshSubs,
-                          tooltip: 'Обновить подписки',
-                          padding: EdgeInsets.zero,
-                          iconSize: 19,
-                          icon: Icon(Icons.refresh,
-                              color: Colors.white.withOpacity(0.7)),
-                        ),
-                ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(6, 2, 4, 5),
+              child: Row(
+                children: [
+                  Text(
+                    'Профили',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white.withOpacity(0.88),
+                    ),
+                  ),
+                  const Spacer(),
+                  if (hasProfiles)
+                    SizedBox(
+                      height: 30,
+                      width: 34,
+                      child: measuringPings
+                          ? const Padding(
+                              padding: EdgeInsets.all(8),
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : IconButton(
+                              onPressed: onMeasurePings,
+                              tooltip: 'Измерить задержку всех профилей',
+                              padding: EdgeInsets.zero,
+                              iconSize: 19,
+                              icon: Icon(Icons.speed,
+                                  color: Colors.white.withOpacity(0.72)),
+                            ),
+                    ),
+                  if (hasSubs)
+                    SizedBox(
+                      height: 30,
+                      width: 34,
+                      child: refreshingSubs
+                          ? const Padding(
+                              padding: EdgeInsets.all(8),
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : IconButton(
+                              onPressed: onRefreshSubs,
+                              tooltip: 'Обновить подписки',
+                              padding: EdgeInsets.zero,
+                              iconSize: 19,
+                              icon: Icon(Icons.refresh,
+                                  color: Colors.white.withOpacity(0.72)),
+                            ),
+                    ),
+                ],
               ),
+            ),
             if (configs.isNotEmpty) ...[
               ...configs.map((c) => _ConfigRow(
                     config: c,
                     selected: c.id == selectedId,
+                    ping: pings[configPingKey(c.id)],
+                    pingMeasured: pingsMeasured,
                     onSelect: () => onSelect(c),
                     onDelete: () => onDelete(c.id),
                   )),
-              // Показанный список остаётся, пока backend недоступен.
               if (hasError)
                 _note('Не удалось обновить список — показаны сохранённые данные',
                     action: onRetry == null
@@ -135,12 +183,13 @@ class ConfigSelector extends StatelessWidget {
               _note('Загрузка конфигов…', spinner: true)
             else
               _note('Нет конфигов. Нажмите + чтобы добавить'),
-            // Подписки отображаются там же, где конфиги (после обычных).
             for (final sub in subscriptions)
               _SubGroup(
                 sub: sub,
                 expanded: expandedSubs.contains(sub.id),
                 selectedBackendId: selectedId,
+                pings: pings,
+                pingMeasured: pingsMeasured,
                 onToggle: () => onToggleSub?.call(sub),
                 onOpenControl: sub.subControl == null
                     ? null
@@ -155,12 +204,12 @@ class ConfigSelector extends StatelessWidget {
   }
 }
 
-/// Группа подписки: имя хостера, трафик и (в развёрнутом виде) её конфиги,
-/// сдвинутые чуть правее обычных.
 class _SubGroup extends StatelessWidget {
   final Subscription sub;
   final bool expanded;
   final int? selectedBackendId;
+  final Map<String, int> pings;
+  final bool pingMeasured;
   final VoidCallback onToggle;
   final VoidCallback? onOpenControl;
   final VoidCallback onDelete;
@@ -170,11 +219,24 @@ class _SubGroup extends StatelessWidget {
     required this.sub,
     required this.expanded,
     required this.selectedBackendId,
+    required this.pings,
+    required this.pingMeasured,
     required this.onToggle,
     required this.onOpenControl,
     required this.onDelete,
     required this.onSelectConfig,
   });
+
+  int? get _bestPing {
+    final values = <int>[];
+    for (final config in sub.configs) {
+      final value = pings[subConfigPingKey(sub.id, config)];
+      if (value != null) values.add(value);
+    }
+    if (values.isEmpty) return null;
+    values.sort();
+    return values.first;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -204,8 +266,7 @@ class _SubGroup extends StatelessWidget {
                 borderRadius: BorderRadius.circular(10),
                 onTap: onToggle,
                 child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                   child: Row(
                     children: [
                       AnimatedRotation(
@@ -215,13 +276,10 @@ class _SubGroup extends StatelessWidget {
                             size: 20, color: Colors.white.withOpacity(0.7)),
                       ),
                       const SizedBox(width: 6),
-                      // Имя + счётчик занимают всю свободную ширину (раньше Spacer
-                      // делил её пополам с именем и обрезал его).
                       Expanded(
                         child: Row(
                           children: [
                             Flexible(
-                              // Нажатие на имя хостера открывает sub_control.
                               child: GestureDetector(
                                 behavior: HitTestBehavior.opaque,
                                 onTap: onOpenControl ?? onToggle,
@@ -229,8 +287,8 @@ class _SubGroup extends StatelessWidget {
                                   sub.hoster,
                                   overflow: TextOverflow.ellipsis,
                                   style: TextStyle(
-                                    fontSize: 13.5,
-                                    fontWeight: FontWeight.w600,
+                                    fontSize: 16.5,
+                                    fontWeight: FontWeight.w700,
                                     color: onOpenControl != null ? accent : null,
                                     decoration: onOpenControl != null
                                         ? TextDecoration.underline
@@ -251,20 +309,16 @@ class _SubGroup extends StatelessWidget {
                       if (sub.error != null)
                         Tooltip(
                           message: sub.error!,
-                          child: const Icon(Icons.error_outline,
-                              size: 16, color: Color(0xFFFFB74D)),
+                          child: const Padding(
+                            padding: EdgeInsets.only(right: 5),
+                            child: Icon(Icons.error_outline,
+                                size: 16, color: Color(0xFFFFB74D)),
+                          ),
                         ),
-                      IconButton(
-                        onPressed: onDelete,
-                        tooltip: 'Удалить подписку',
-                        splashRadius: 16,
-                        iconSize: 16,
-                        padding: EdgeInsets.zero,
-                        constraints:
-                            const BoxConstraints(minWidth: 28, minHeight: 28),
-                        icon: Icon(Icons.close,
-                            color: Colors.white.withOpacity(0.35)),
-                      ),
+                      _PingIndicator(
+                          ping: _bestPing, measured: pingMeasured, compact: true),
+                      const SizedBox(width: 5),
+                      _TrashButton(onPressed: onDelete, tooltip: 'Удалить подписку'),
                     ],
                   ),
                 ),
@@ -283,14 +337,15 @@ class _SubGroup extends StatelessWidget {
                             : Colors.white.withOpacity(0.5),
                       ),
                     ),
-                      if (sub.receivedBytes + sub.sentBytes > 0) ...[
-                        const SizedBox(height: 3),
-                        Text(
-                          'Получено: ${formatBytes(sub.receivedBytes)} · Отправлено: ${formatBytes(sub.sentBytes)}'
-                          '${sub.usedBytes > sub.receivedBytes + sub.sentBytes ? ' (часть истории без разбивки)' : ''}',
-                          style: TextStyle(fontSize: 10.5, color: Colors.white.withOpacity(0.5)),
-                        ),
-                      ],
+                    if (sub.receivedBytes + sub.sentBytes > 0) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        'Получено: ${formatBytes(sub.receivedBytes)} · Отправлено: ${formatBytes(sub.sentBytes)}'
+                        '${sub.usedBytes > sub.receivedBytes + sub.sentBytes ? ' (часть истории без разбивки)' : ''}',
+                        style: TextStyle(
+                            fontSize: 10.5, color: Colors.white.withOpacity(0.5)),
+                      ),
+                    ],
                     if (limit != null) ...[
                       const SizedBox(height: 5),
                       ClipRRect(
@@ -316,6 +371,8 @@ class _SubGroup extends StatelessWidget {
               config: c,
               selected: sub.backendIds[c.key] != null &&
                   sub.backendIds[c.key] == selectedBackendId,
+              ping: pings[subConfigPingKey(sub.id, c)],
+              pingMeasured: pingMeasured,
               onTap: () => onSelectConfig(c),
             ),
       ],
@@ -323,21 +380,25 @@ class _SubGroup extends StatelessWidget {
   }
 }
 
-/// Конфиг внутри подписки — со сдвигом вправо относительно обычных конфигов.
 class _SubConfigRow extends StatelessWidget {
   final SubConfig config;
   final bool selected;
+  final int? ping;
+  final bool pingMeasured;
   final VoidCallback onTap;
 
-  const _SubConfigRow(
-      {required this.config, required this.selected, required this.onTap});
+  const _SubConfigRow({
+    required this.config,
+    required this.selected,
+    required this.ping,
+    required this.pingMeasured,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
     final expired = config.expired;
-    final badgeColor = config.protocol.toLowerCase() == 'paperflux'
-        ? const Color(0xFFF7E84E)
-        : const Color(0xFF4A6CF7);
+    const accent = Color(0xFF4A6CF7);
     String? expiryText;
     if (config.expires != null) {
       final d = config.expires!;
@@ -354,35 +415,21 @@ class _SubConfigRow extends StatelessWidget {
           behavior: HitTestBehavior.opaque,
           child: Container(
             margin: const EdgeInsets.symmetric(vertical: 3),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
             decoration: BoxDecoration(
               color: selected
-                  ? badgeColor.withOpacity(0.22)
+                  ? accent.withOpacity(0.22)
                   : Colors.white.withOpacity(0.02),
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
                 color: selected
-                    ? badgeColor.withOpacity(0.55)
+                    ? accent.withOpacity(0.55)
                     : Colors.white.withOpacity(0.08),
               ),
             ),
             child: Row(
               children: [
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: badgeColor.withOpacity(0.18),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(
-                    config.protocol,
-                    style: TextStyle(
-                        fontSize: 9.5,
-                        fontWeight: FontWeight.w700,
-                        color: badgeColor),
-                  ),
-                ),
+                _SubscriptionIcon(dataUrl: config.icon),
                 const SizedBox(width: 9),
                 Expanded(
                   child: Column(
@@ -390,7 +437,7 @@ class _SubConfigRow extends StatelessWidget {
                     children: [
                       Text(config.name,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 13)),
+                          style: const TextStyle(fontSize: 13.5)),
                       if (expiryText != null)
                         Text(expiryText,
                             style: TextStyle(
@@ -401,9 +448,12 @@ class _SubConfigRow extends StatelessWidget {
                     ],
                   ),
                 ),
-                if (selected)
-                  const Icon(Icons.check_circle,
-                      size: 16, color: Color(0xFF7CFF9A)),
+                const SizedBox(width: 8),
+                _ProtocolPingColumn(
+                  protocol: config.protocol,
+                  ping: ping,
+                  measured: pingMeasured,
+                ),
               ],
             ),
           ),
@@ -416,12 +466,16 @@ class _SubConfigRow extends StatelessWidget {
 class _ConfigRow extends StatefulWidget {
   final ConfigItem config;
   final bool selected;
+  final int? ping;
+  final bool pingMeasured;
   final VoidCallback onSelect;
   final VoidCallback onDelete;
 
   const _ConfigRow({
     required this.config,
     required this.selected,
+    required this.ping,
+    required this.pingMeasured,
     required this.onSelect,
     required this.onDelete,
   });
@@ -435,11 +489,7 @@ class _ConfigRowState extends State<_ConfigRow> {
 
   @override
   Widget build(BuildContext context) {
-    // Цвет бейджа зависит от протокола.
-    final badgeColor = widget.config.isPaperFlux
-        ? const Color(0xFFF7E84E)
-        : const Color(0xFF4A6CF7);
-
+    const accent = Color(0xFF4A6CF7);
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
@@ -450,60 +500,41 @@ class _ConfigRowState extends State<_ConfigRow> {
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 160),
           margin: const EdgeInsets.symmetric(vertical: 3),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 9),
           decoration: BoxDecoration(
             color: widget.selected
-                ? badgeColor.withOpacity(0.22)
+                ? accent.withOpacity(0.22)
                 : Colors.white.withOpacity(_hover ? 0.06 : 0.02),
             borderRadius: BorderRadius.circular(10),
             border: Border.all(
               color: widget.selected
-                  ? badgeColor.withOpacity(0.55)
+                  ? accent.withOpacity(0.55)
                   : Colors.white.withOpacity(0.08),
             ),
           ),
           child: Row(
             children: [
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                width: 32,
+                height: 32,
                 decoration: BoxDecoration(
-                  color: badgeColor.withOpacity(0.18),
-                  borderRadius: BorderRadius.circular(20),
+                  color: Colors.white.withOpacity(0.06),
+                  borderRadius: BorderRadius.circular(8),
                 ),
-                child: Text(
-                  widget.config.protocol,
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                    color: badgeColor,
-                  ),
-                ),
+                child: Icon(Icons.vpn_key_outlined,
+                    size: 17, color: Colors.white.withOpacity(0.65)),
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      widget.config.displayName,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 13.5),
-                    ),
-                    if (widget.config.isPaperFlux &&
-                        widget.config.transport.isNotEmpty)
-                      Text(
-                        widget.config.transport,
-                        style: TextStyle(
-                          fontSize: 10.5,
-                          color: Colors.white.withOpacity(0.5),
-                        ),
-                      ),
-                  ],
+                child: Text(
+                  widget.config.displayName,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 13.5),
                 ),
               ),
               if (widget.config.isCsqtt251)
                 Padding(
-                  padding: const EdgeInsets.only(right: 4),
+                  padding: const EdgeInsets.only(left: 4, right: 6),
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onTap: () => Toast.show(
@@ -519,30 +550,212 @@ class _ConfigRowState extends State<_ConfigRow> {
                         color: const Color(0xFFF7E84E),
                         borderRadius: BorderRadius.circular(5),
                       ),
-                      child: const Text(
-                        '!',
-                        style: TextStyle(
-                          color: Color(0xFF302900),
-                          fontSize: 14,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
+                      child: const Text('!',
+                          style: TextStyle(
+                              color: Color(0xFF302900),
+                              fontSize: 14,
+                              fontWeight: FontWeight.w900)),
                     ),
                   ),
                 ),
-              if (widget.selected)
-                const Icon(Icons.check_circle,
-                    size: 16, color: Color(0xFF7CFF9A)),
-              const SizedBox(width: 6),
-              IconButton(
+              _ProtocolPingColumn(
+                protocol: widget.config.protocol,
+                ping: widget.ping,
+                measured: widget.pingMeasured,
+              ),
+              const SizedBox(width: 7),
+              _TrashButton(
                 onPressed: widget.onDelete,
-                splashRadius: 16,
-                iconSize: 16,
-                icon: Icon(Icons.close,
-                    color: Colors.white.withOpacity(_hover ? 0.75 : 0.35)),
+                tooltip: 'Удалить профиль',
+                opacity: _hover ? 0.82 : 0.48,
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ProtocolPingColumn extends StatelessWidget {
+  final String protocol;
+  final int? ping;
+  final bool measured;
+
+  const _ProtocolPingColumn({
+    required this.protocol,
+    required this.ping,
+    required this.measured,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 76,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            protocol,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 10.5,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF8EA5FF),
+            ),
+          ),
+          const SizedBox(height: 3),
+          _PingIndicator(ping: ping, measured: measured),
+        ],
+      ),
+    );
+  }
+}
+
+class _PingIndicator extends StatelessWidget {
+  final int? ping;
+  final bool measured;
+  final bool compact;
+
+  const _PingIndicator({
+    required this.ping,
+    required this.measured,
+    this.compact = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final value = ping;
+    final Color color;
+    final int bars;
+    if (value == null) {
+      color = Colors.white.withOpacity(0.32);
+      bars = 0;
+    } else if (value < 70) {
+      color = const Color(0xFF70E38B);
+      bars = 4;
+    } else if (value <= 100) {
+      color = const Color(0xFF70E38B);
+      bars = 3;
+    } else if (value < 200) {
+      color = const Color(0xFFF2C94C);
+      bars = 2;
+    } else {
+      color = const Color(0xFFFF626C);
+      bars = 1;
+    }
+    final label = value == null ? (measured ? '—' : '—') : '$value ms';
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(label,
+            style: TextStyle(
+                fontSize: compact ? 9.5 : 9.5,
+                fontWeight: FontWeight.w700,
+                color: color)),
+        const SizedBox(width: 4),
+        _SignalBars(activeBars: bars, color: color, compact: compact),
+      ],
+    );
+  }
+}
+
+class _SignalBars extends StatelessWidget {
+  final int activeBars;
+  final Color color;
+  final bool compact;
+
+  const _SignalBars({
+    required this.activeBars,
+    required this.color,
+    this.compact = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: compact ? 11 : 12,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: List.generate(4, (index) {
+          final active = index < activeBars;
+          return Container(
+            width: compact ? 2.3 : 2.6,
+            height: (index + 1) * (compact ? 2.2 : 2.5),
+            margin: const EdgeInsets.only(left: 1.4),
+            decoration: BoxDecoration(
+              color: active ? color : Colors.white.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(1),
+            ),
+          );
+        }),
+      ),
+    );
+  }
+}
+
+class _SubscriptionIcon extends StatelessWidget {
+  final String? dataUrl;
+  const _SubscriptionIcon({required this.dataUrl});
+
+  Uint8List? _bytes() {
+    final raw = dataUrl;
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final parsed = UriData.parse(raw);
+      final bytes = parsed.contentAsBytes();
+      return bytes.isEmpty ? null : Uint8List.fromList(bytes);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bytes = _bytes();
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        width: 34,
+        height: 34,
+        color: Colors.white.withOpacity(0.06),
+        child: bytes == null
+            ? Icon(Icons.person_outline,
+                size: 19, color: Colors.white.withOpacity(0.62))
+            : Image.memory(bytes, fit: BoxFit.cover, gaplessPlayback: true),
+      ),
+    );
+  }
+}
+
+class _TrashButton extends StatelessWidget {
+  final VoidCallback onPressed;
+  final String tooltip;
+  final double opacity;
+
+  const _TrashButton({
+    required this.onPressed,
+    required this.tooltip,
+    this.opacity = 0.58,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      onPressed: onPressed,
+      tooltip: tooltip,
+      splashRadius: 16,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+      icon: SvgPicture.asset(
+        'assets/icons/trash.svg',
+        width: 16,
+        height: 16,
+        colorFilter: ColorFilter.mode(
+          Colors.white.withOpacity(opacity),
+          BlendMode.srcIn,
         ),
       ),
     );

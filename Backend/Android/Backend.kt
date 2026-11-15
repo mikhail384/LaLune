@@ -18,6 +18,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedInputStream
@@ -35,6 +36,7 @@ import java.net.URL
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.text.SimpleDateFormat
+import java.security.MessageDigest
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
@@ -77,7 +79,7 @@ class Backend(private val context: Context) {
         const val PROTO_CSQTT = "CSQTT"
         const val PROTO_CSQTT_219 = "CSQTT 2.1.9"
         const val PROTO_CSQTT_251 = "CSQTT 2.5.1"
-        const val PROTO_PAPERFLUX = "PaperFlux"
+        const val PROTO_TOTS = "ToTS"
     }
 
     private val apiPort = portFor(context.packageName)
@@ -88,6 +90,7 @@ class Backend(private val context: Context) {
     private val logsFile = File(appDir, "logs.log")
     private val tokenFile = File(appDir, "token.json")
     private val selectedConfigFile = File(appDir, "selected_config.json")
+    private val totsRuntimeFile = File(appDir, "tots_runtime.json")
 
     private val eventSubscribers = CopyOnWriteArrayList<EventStream>()
     private val logs = CopyOnWriteArrayList<String>()
@@ -695,12 +698,12 @@ class Backend(private val context: Context) {
             put("coreAsset", coreManager?.getCoreName(CoreManager.PROTO_CSQTTR) ?: "")
         })
         put(JSONObject().apply {
-            put("id", PROTO_PAPERFLUX)
-            put("displayName", "PaperFlux (Docs)")
-            put("repo", "Endlad2/PaperFlux-core")
+            put("id", PROTO_TOTS)
+            put("displayName", "ToTS")
+            put("repo", "Endlad2/ToTS")
             put("realtime", true)
-            put("description", "Пробрасывает трафик через облачные документы")
-            put("coreAsset", "libopenflux.so")
+            put("description", "Multi-provider ToTS tunnel")
+            put("coreAsset", coreManager?.getCoreName(PROTO_TOTS) ?: "")
         })
     }
 
@@ -808,18 +811,27 @@ class Backend(private val context: Context) {
                 put("linkPlaceholder",
                     "csqtt://connect?v=2&host=...&peer=...&password=...&hashes=h1+h2")
             }
+        } else if (upper == PROTO_TOTS.uppercase()) {
+            JSONObject().apply {
+                put("protocol", PROTO_TOTS)
+                put("keys", JSONArray(listOf(
+                    "totsWorkers", "autoApiWorkers", "totsMtu", "totsRelayOnly",
+                    "totsVkEnabled", "totsJazzEnabled", "totsYaDocsEnabled",
+                    "totsMailDocsEnabled", "totsCupsEnabled",
+                    "totsVkPercent", "totsJazzPercent", "totsYaDocsPercent",
+                    "totsMailDocsPercent", "totsCupsPercent",
+                    "totsVkAuthMode", "totsVkCallLinks",
+                    "totsJazzRoomName", "totsJazzRandomName",
+                    "totsJazzData", "totsYaDocsData", "totsMailDocsData", "totsCupsData",
+                    "shareVpn", "showCoreLogs"
+                )))
+                put("linkPlaceholder", "tots://eyJ2ZXJzaW9uIjoxLC4uLn0")
+            }
         } else {
             JSONObject().apply {
-                put("protocol", PROTO_PAPERFLUX)
-                put("keys", JSONArray(listOf(
-                    "pfTransport", "pfUrl", "pfUrls", "pfVolgaUrl",
-                    "pfMode", "pfSocks5", "pfTcpRecovery",
-                    "pfRelayUrl", "pfRelayToken", "pfRelayUser", "pfRelaySession",
-                    "pfMaxToken", "pfMaxUid",
-                    "workers", "shareVpn", "showCoreLogs"
-                )))
-                put("linkPlaceholder",
-                    "paperflux://config?v=1&id=...&name=...&server=...&ip=...&transport=...&doc=...&token=...&volga=...")
+                put("protocol", proto)
+                put("keys", JSONArray())
+                put("linkPlaceholder", "")
             }
         }
     }
@@ -980,6 +992,27 @@ class Backend(private val context: Context) {
         put("pfRelaySession", "")
         put("pfMaxToken", "")
         put("pfMaxUid", "")
+        put("totsWorkers", 1)
+        put("totsMtu", 1200)
+        put("totsRelayOnly", false)
+        put("totsVkEnabled", true)
+        put("totsJazzEnabled", true)
+        put("totsYaDocsEnabled", true)
+        put("totsMailDocsEnabled", true)
+        put("totsCupsEnabled", true)
+        put("totsVkPercent", 100)
+        put("totsJazzPercent", 0)
+        put("totsYaDocsPercent", 0)
+        put("totsMailDocsPercent", 0)
+        put("totsCupsPercent", 0)
+        put("totsVkAuthMode", "manual")
+        put("totsVkCallLinks", "")
+        put("totsJazzRoomName", "")
+        put("totsJazzRandomName", true)
+        put("totsJazzData", "")
+        put("totsYaDocsData", "")
+        put("totsMailDocsData", "")
+        put("totsCupsData", "")
         put("enableSmartTunnel", false)
         put("showCoreLogs", false)
         put("shareVpn", false)
@@ -997,6 +1030,12 @@ class Backend(private val context: Context) {
             .coerceIn(MIN_AUTO_API_WORKERS, MAX_AUTO_API_WORKERS)
         s.put("workers", w)
         s.put("autoApiWorkers", aw)
+        s.put("totsWorkers", s.optInt("totsWorkers", 1).coerceIn(1, 127))
+        s.put("totsMtu", s.optInt("totsMtu", 1200).coerceIn(576, 1400))
+        listOf("totsVkPercent", "totsJazzPercent", "totsYaDocsPercent", "totsMailDocsPercent", "totsCupsPercent").forEach { key ->
+            s.put(key, s.optInt(key, if (key == "totsVkPercent") 100 else 0).coerceIn(0, 100))
+        }
+        if (s.optString("totsVkAuthMode", "manual") != "autoApi") s.put("totsVkAuthMode", "manual")
         s.put("deviceId", ensureDeviceId())
         try { settingsFile.writeText(s.toString()) } catch (_: Exception) {}
     }
@@ -1141,7 +1180,7 @@ class Backend(private val context: Context) {
 
     private fun normalizeConfigLink(rawLink: String, selectedProtocol: String): Pair<String, String> {
         val trimmed = rawLink.trim()
-        val schemes = listOf("paperflux://", "openflux://", "csqtt://", "csqttr://")
+        val schemes = listOf("csqtt://", "csqttr://", "tots://")
         val match = schemes.mapNotNull { scheme ->
             val index = trimmed.indexOf(scheme, ignoreCase = true)
             if (index >= 0) index to scheme else null
@@ -1154,7 +1193,7 @@ class Backend(private val context: Context) {
             "csqtt 2.1.9" -> PROTO_CSQTT_219
             "csqtt 2.5.1" -> PROTO_CSQTT_251
             "csqttr" -> CoreManager.PROTO_CSQTTR
-            "paperflux" -> PROTO_PAPERFLUX
+            "tots" -> PROTO_TOTS
             else -> null
         }
 
@@ -1164,6 +1203,7 @@ class Backend(private val context: Context) {
             !uri.substringAfter("://").startsWith("connect?", ignoreCase = true)
         val effectiveProtocol = explicitProtocol ?: when {
             normalizedScheme == "csqttr://" -> CoreManager.PROTO_CSQTTR
+            normalizedScheme == "tots://" -> PROTO_TOTS
             isOpaqueCsqtt && selectedProtocol.equals(PROTO_CSQTT_219, ignoreCase = true) -> PROTO_CSQTT_251
             else -> selectedProtocol
         }
@@ -1178,8 +1218,8 @@ class Backend(private val context: Context) {
     private fun parseLink(link: String, protocol: String = PROTO_CSQTT): JSONObject {
         val (normalizedLink, effectiveProtocol) = normalizeConfigLink(link, protocol)
         val lower = normalizedLink.trim().lowercase(Locale.ROOT)
-        if (lower.startsWith("paperflux://") || lower.startsWith("openflux://")) {
-            return parsePaperFlux(normalizedLink).apply { put("protocol", PROTO_PAPERFLUX) }
+        if (lower.startsWith("tots://")) {
+            return parseTots(normalizedLink)
         }
         return parseCsqtt(normalizedLink, effectiveProtocol).apply {
             when {
@@ -1188,6 +1228,32 @@ class Backend(private val context: Context) {
                 effectiveProtocol.equals(CoreManager.PROTO_CSQTTR, ignoreCase = true) ->
                     put("protocol", CoreManager.PROTO_CSQTTR)
             }
+        }
+    }
+
+    private fun parseTots(link: String): JSONObject {
+        require(link.startsWith("tots://", ignoreCase = true)) { "invalid ToTS URI" }
+        val encoded = link.substringAfter("://").trim()
+        require(encoded.isNotEmpty()) { "empty ToTS payload" }
+        val decoded = try {
+            String(Base64.decode(encoded, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING), Charsets.UTF_8)
+        } catch (e: Exception) {
+            throw IllegalArgumentException("invalid ToTS base64")
+        }
+        val cfg = try { JSONObject(decoded) } catch (_: Exception) {
+            throw IllegalArgumentException("invalid ToTS JSON")
+        }
+        val peer = cfg.optString("peer", "").trim()
+        require(peer.isNotEmpty()) { "ToTS config has no peer" }
+        val version = cfg.optInt("version", 0)
+        require(version == 1) { "unsupported ToTS config version: $version" }
+        return JSONObject().apply {
+            put("protocol", PROTO_TOTS)
+            put("peer", peer)
+            put("password", cfg.optString("password", ""))
+            put("name", "ToTS · $peer")
+            put("rawLink", link)
+            put("totsConfig", cfg)
         }
     }
 
@@ -1295,58 +1361,6 @@ class Backend(private val context: Context) {
         return out
     }
 
-    private fun parsePaperFlux(link: String): JSONObject {
-        val out = JSONObject().apply {
-            put("protocol", PROTO_PAPERFLUX)
-            put("profileId", ""); put("profileToken", "")
-            put("clientIp", ""); put("transport", "")
-            put("url", ""); put("urls", ""); put("volgaUrl", "")
-            put("relayUrl", ""); put("relayToken", "")
-            put("maxToken", ""); put("maxUid", "")
-            put("server", ""); put("peer", ""); put("name", "")
-        }
-        val idx = link.indexOf("://")
-        if (idx < 0) return out
-        var rest = link.substring(idx + 3)
-        if (rest.startsWith("config?")) rest = rest.removePrefix("config?")
-        else if (rest.startsWith("config&")) rest = rest.removePrefix("config&")
-        else if (rest.startsWith("config")) rest = rest.removePrefix("config")
-
-        var name = ""; var server = ""
-        rest.split("&").forEach { kv ->
-            val eq = kv.indexOf('=')
-            if (eq <= 0) return@forEach
-            val k = kv.substring(0, eq)
-            val v = urlDecode(kv.substring(eq + 1))
-            when (k) {
-                "id" -> out.put("profileId", v)
-                "name" -> name = v
-                "server" -> server = v
-                "ip" -> out.put("clientIp", v)
-                "transport" -> out.put("transport", v)
-                "doc", "url" -> out.put("url", v)
-                "urls" -> out.put("urls", v)
-                "token" -> out.put("profileToken", v)
-                "volga", "volga_url", "volga-url" -> out.put("volgaUrl", v)
-                "relay_url", "relayUrl" -> out.put("relayUrl", v)
-                "relay_token", "relayToken" -> out.put("relayToken", v)
-                "maxToken" -> out.put("maxToken", v)
-                "maxUid" -> out.put("maxUid", v)
-            }
-        }
-        val display = if (name.isEmpty()) "PaperFlux" else name
-        out.put("name", display)
-        out.put("server", server)
-        out.put("peer", server)
-        return out
-    }
-
-    private fun urlDecode(s: String): String {
-        return try {
-            URLDecoder.decode(s, "UTF-8")
-        } catch (_: Exception) { s }
-    }
-
     private fun vpnConnect(body: String): Pair<Int, String> {
         // A new connection attempt starts with an empty log (the file itself is
         // truncated when the core starts).
@@ -1366,20 +1380,13 @@ class Backend(private val context: Context) {
             if (!cm.downloadCore(protocol)) return 500 to jsonErr("core download failed")
         }
 
-        if (protocol.equals(PROTO_PAPERFLUX, ignoreCase = true)) {
-            val peer = sel?.optString("server", "") ?: ""
-            if (peer.isEmpty()) return 400 to jsonErr("no server in PaperFlux config")
-
-            val args = buildPaperFluxArgs(sel, settings)
-            // Never join argv here: it carries profile/relay tokens and URLs.
-            addLog("[VPN] PaperFlux core starting: args=${args.size}")
-
-            val started = cm.startCore(
-                protocol = protocol,
-                args = args,
-                onLog = { line -> addCoreLog(line) }
-            )
-            if (!started) return 500 to jsonErr("paperflux core start failed")
+        if (protocol.equals(PROTO_TOTS, ignoreCase = true)) {
+            val raw = sel?.optString("rawLink", "") ?: ""
+            if (raw.isBlank()) return 400 to jsonErr("no ToTS config link")
+            val runtime = try { buildTotsRuntime(raw, settings) }
+            catch (e: Exception) { return 400 to jsonErr(e.message ?: "invalid ToTS config") }
+            try { totsRuntimeFile.writeText(runtime.toString()) }
+            catch (_: Exception) { return 500 to jsonErr("cannot prepare ToTS runtime") }
 
             LaLuneVpnService.snapshotConfigId = selectedId
             markVpnConnecting()
@@ -1392,6 +1399,8 @@ class Backend(private val context: Context) {
             }
             luaRuntime?.onConnect()
             return 200 to jsonOk("ok" to true, "status" to "connecting")
+        } else {
+            try { totsRuntimeFile.delete() } catch (_: Exception) {}
         }
 
         val peer = sel?.optString("peer", "") ?: settings.optString("peer", "")
@@ -1428,61 +1437,142 @@ class Backend(private val context: Context) {
         return 200 to jsonOk("ok" to true, "status" to "connecting")
     }
 
-    private fun buildPaperFluxArgs(
-        cfg: JSONObject?,
-        settings: JSONObject,
-    ): List<String> {
-        val args = mutableListOf<String>()
-        args += "--client"
+    private fun buildTotsRuntime(rawLink: String, settings: JSONObject): JSONObject {
+        // Parse the URI on every connection. We intentionally never pass --config to ToTS.
+        val parsed = parseTots(rawLink)
+        val cfg = parsed.getJSONObject("totsConfig")
+        val providerData = JSONObject((cfg.optJSONObject("provider_data") ?: JSONObject()).toString())
 
-        fun fromCfgOrSettings(cfgKey: String, settingsKey: String, fallback: String = ""): String {
-            val fromCfg = cfg?.optString(cfgKey, "") ?: ""
-            if (fromCfg.isNotEmpty()) return fromCfg
-            val fromSettings = settings.optString(settingsKey, "")
-            return if (fromSettings.isNotEmpty()) fromSettings else fallback
+        data class ProviderSetting(val name: String, val enabledKey: String, val percentKey: String, val defaultPercent: Int)
+        val providers = listOf(
+            ProviderSetting("vk", "totsVkEnabled", "totsVkPercent", 100),
+            ProviderSetting("jazz", "totsJazzEnabled", "totsJazzPercent", 0),
+            ProviderSetting("ya-docs", "totsYaDocsEnabled", "totsYaDocsPercent", 0),
+            ProviderSetting("mail-docs", "totsMailDocsEnabled", "totsMailDocsPercent", 0),
+            ProviderSetting("cups", "totsCupsEnabled", "totsCupsPercent", 0),
+        )
+        providers.filter { !settings.optBoolean(it.enabledKey, true) }.forEach { providerData.remove(it.name) }
+
+        fun overrideProvider(name: String, key: String) {
+            val text = settings.optString(key, "").trim()
+            if (text.isNotEmpty()) {
+                val value = try { JSONObject(text) } catch (_: Exception) {
+                    throw IllegalArgumentException("$name provider data is not valid JSON")
+                }
+                providerData.put(name, value)
+            }
+        }
+        overrideProvider("jazz", "totsJazzData")
+        overrideProvider("ya-docs", "totsYaDocsData")
+        overrideProvider("mail-docs", "totsMailDocsData")
+        overrideProvider("cups", "totsCupsData")
+
+        if (settings.optBoolean("totsVkEnabled", true)) {
+            var links = settings.optString("totsVkCallLinks", "")
+                .split(Regex("[\\s,+;]+"))
+                .map { it.trim() }.filter { it.isNotEmpty() }
+                .map { value ->
+                    if (value.startsWith("https://") || value.startsWith("http://")) value
+                    else "https://vk.ru/call/join/$value"
+                }
+            if (settings.optString("totsVkAuthMode", "manual") == "autoApi") {
+                val token = readVkToken() ?: throw IllegalArgumentException("Auto API requires VK token")
+                val workers = settings.optInt("totsWorkers", 1).coerceIn(1, 127)
+                val count = callCountForWorkers(workers, settings.optInt("autoApiWorkers", DEFAULT_AUTO_API_WORKERS))
+                val generated = mutableListOf<String>()
+                for (slot in 0 until count) {
+                    if (slot > 0) Thread.sleep(if (count <= 4) 80L else 202L)
+                    val (callId, hash, errCode) = startVkCall(token)
+                    if (hash.isNotEmpty()) {
+                        activeCallIds.add(callId)
+                        generated += "https://vk.ru/call/join/$hash"
+                    } else if (errCode in listOf(4, 5, 27, 28)) {
+                        throw IllegalArgumentException("VK token invalid")
+                    }
+                }
+                if (generated.isEmpty()) throw IllegalArgumentException("Auto API could not create any VK calls")
+                links = generated
+            }
+            if (links.isNotEmpty()) {
+                val vk = JSONObject((providerData.optJSONObject("vk") ?: JSONObject()).toString())
+                vk.put("vk_call_links", JSONArray(links))
+                providerData.put("vk", vk)
+            }
         }
 
-        val profileId = fromCfgOrSettings("profileId", "pfProfileId")
-        if (profileId.isNotEmpty()) { args += "--profile-id"; args += profileId }
+        if (settings.optBoolean("totsJazzEnabled", true) && providerData.has("jazz")) {
+            val jazz = JSONObject((providerData.optJSONObject("jazz") ?: JSONObject()).toString())
+            val roomName = if (settings.optBoolean("totsJazzRandomName", true)) {
+                val names = listOf(
+                    "Иван", "Владимир", "Алексей", "Михаил", "Александр", "Дмитрий",
+                    "Николай", "Сергей", "Андрей", "Павел", "Мария", "Анна",
+                    "Елена", "Ольга", "Наталья", "Ирина", "Дарья", "София"
+                )
+                names[(System.nanoTime().ushr(4) % names.size).toInt()]
+            } else settings.optString("totsJazzRoomName", "").trim()
+            if (roomName.isNotEmpty()) jazz.put("room_name", roomName)
+            providerData.put("jazz", jazz)
+        }
 
-        val profileToken = fromCfgOrSettings("profileToken", "pfProfileToken")
-        if (profileToken.isNotEmpty()) { args += "--profile-token"; args += profileToken }
+        val available = providers.filter { settings.optBoolean(it.enabledKey, true) && providerData.has(it.name) }
+        require(available.isNotEmpty()) { "ToTS: no enabled provider data" }
+        var primary = cfg.optString("provider", "vk")
+        if (available.none { it.name == primary }) primary = available.first().name
 
-        val clientIp = fromCfgOrSettings("clientIp", "pfClientIp", "10.10.10.2")
-        args += "--client-ip"; args += clientIp
+        val rawWeights = available.associate { it.name to settings.optInt(it.percentKey, it.defaultPercent).coerceIn(0, 100) }
+        val positiveSum = rawWeights.values.sum()
+        val weights = linkedMapOf<String, Int>()
+        if (positiveSum <= 0) {
+            available.forEachIndexed { index, p -> weights[p.name] = if (index == 0) 100 else 0 }
+        } else {
+            var used = 0
+            available.forEachIndexed { index, p ->
+                val value = if (index == available.lastIndex) 100 - used
+                    else ((rawWeights[p.name] ?: 0) * 100 / positiveSum).coerceIn(0, 100 - used)
+                weights[p.name] = value
+                used += value
+            }
+        }
 
-        val transport = fromCfgOrSettings("transport", "pfTransport", "yandex")
-        args += "--transport"; args += transport
+        val peer = cfg.optString("peer", "").trim()
+        val webrtcPort = cfg.optInt("webrtc_port", 0)
+        val turnPort = cfg.optInt("turn_port", 0)
+        val password = cfg.optString("password", "")
+        val deviceId = cfg.optString("device_id", "").trim()
+        require(peer.isNotEmpty() && webrtcPort > 0 && turnPort > 0 && password.isNotEmpty() && deviceId.isNotEmpty()) {
+            "ToTS config is missing connection fields"
+        }
+        val mtu = settings.optInt("totsMtu", cfg.optInt("mtu", 1200)).coerceIn(576, 1400)
+        val args = JSONArray().apply {
+            put("--peer"); put(peer)
+            put("--webrtc-port"); put(webrtcPort.toString())
+            put("--turn-port"); put(turnPort.toString())
+            put("--password"); put(password)
+            put("--device-id"); put(deviceId)
+            put("--provider"); put(primary)
+            put("--provider-data"); put(providerData.toString())
+            put("--n"); put(settings.optInt("totsWorkers", 1).coerceIn(1, 127).toString())
+            put("--workers_percent"); put(JSONObject().apply { weights.forEach { (k, v) -> put(k, v) } }.toString())
+            put("--mtu"); put(mtu.toString())
+            if (settings.optBoolean("totsRelayOnly", false)) put("--relay-only")
+        }
 
-        if (settings.optBoolean("pfSession", false)) args += "--session"
-        val tcpRecovery = settings.optString("pfTcpRecovery", "")
-        if (tcpRecovery.isNotEmpty()) { args += "--tcp-recovery"; args += tcpRecovery }
+        return JSONObject().apply {
+            put("protocol", PROTO_TOTS)
+            put("virtualIp", totsVirtualIp(deviceId))
+            put("mtu", mtu)
+            put("args", args)
+        }
+    }
 
-        val url = fromCfgOrSettings("url", "pfUrl")
-        if (url.isNotEmpty()) { args += "--url"; args += url }
-        val urls = fromCfgOrSettings("urls", "pfUrls")
-        if (urls.isNotEmpty()) { args += "--urls"; args += urls }
-        val volga = fromCfgOrSettings("volgaUrl", "pfVolgaUrl")
-        if (volga.isNotEmpty()) { args += "--volga-url"; args += volga }
-
-        args += "--mode"; args += "proxy"
-        args += "--socks5"; args += "127.0.0.1:1080"
-
-        val relayUrl = fromCfgOrSettings("relayUrl", "pfRelayUrl")
-        if (relayUrl.isNotEmpty()) { args += "--relay-url"; args += relayUrl }
-        val relayToken = fromCfgOrSettings("relayToken", "pfRelayToken")
-        if (relayToken.isNotEmpty()) { args += "--relay-token"; args += relayToken }
-        val relayUser = settings.optInt("pfRelayUser", 0)
-        if (relayUser > 0) { args += "--relay-user"; args += relayUser.toString() }
-        val relaySession = settings.optString("pfRelaySession", "")
-        if (relaySession.isNotEmpty()) { args += "--relay-session"; args += relaySession }
-
-        val maxToken = fromCfgOrSettings("maxToken", "pfMaxToken")
-        if (maxToken.isNotEmpty()) { args += "--maxToken"; args += maxToken }
-        val maxUid = fromCfgOrSettings("maxUid", "pfMaxUid")
-        if (maxUid.isNotEmpty()) { args += "--maxUid"; args += maxUid }
-
-        return args
+    private fun totsVirtualIp(deviceId: String): String {
+        val uuid = java.util.UUID.fromString(deviceId)
+        val raw = java.nio.ByteBuffer.allocate(16)
+            .putLong(uuid.mostSignificantBits).putLong(uuid.leastSignificantBits).array()
+        val digest = MessageDigest.getInstance("SHA-256").digest(raw)
+        val a = 1 + ((digest[0].toInt() and 0xff) % 253)
+        val b = 1 + ((digest[1].toInt() and 0xff) % 253)
+        return "10.77.$a.$b"
     }
 
     private fun markVpnConnecting() {
@@ -1524,6 +1614,7 @@ class Backend(private val context: Context) {
         val i = Intent(context, LaLuneVpnService::class.java).apply { action = "STOP" }
         try { context.startService(i) } catch (_: Exception) {}
         coreManager?.stopCore()
+        try { totsRuntimeFile.delete() } catch (_: Exception) {}
         stopSocks5()
         vpnConnected = false
         vpnState = "disconnected"

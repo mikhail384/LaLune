@@ -4,6 +4,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'glass_dialog.dart';
 import '../state/openwrt_installer.dart';
 import '../state/router_scanner.dart';
 
@@ -11,7 +12,7 @@ Future<String?> showOpenWrtActionDialog(BuildContext context) {
   return showDialog<String>(
     context: context,
     barrierColor: Colors.black.withOpacity(0.65),
-    builder: (context) => AlertDialog(
+    builder: (context) => GlassAlertDialog(
       backgroundColor: const Color(0xFF0F1540),
       title: const Text('OpenWRT'),
       content: const Text('Что сделать с роутером?'),
@@ -120,7 +121,7 @@ class _SshCredentialsDialogState extends State<_SshCredentialsDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
+    return GlassAlertDialog(
       backgroundColor: const Color(0xFF0F1540),
       title: Text('SSH · ${widget.host}'),
       content: SizedBox(
@@ -270,7 +271,7 @@ class _SshHostModalState extends State<_SshHostModal> {
 
   @override
   Widget build(BuildContext context) {
-    return Dialog(
+    return GlassDialog(
       backgroundColor: const Color(0xFF0F1540),
       insetPadding: const EdgeInsets.all(20),
       shape: RoundedRectangleBorder(
@@ -471,7 +472,7 @@ class _InstallProgressDialogState extends State<_InstallProgressDialog> {
     final result = _result;
     return PopScope(
       canPop: result != null,
-      child: AlertDialog(
+      child: GlassAlertDialog(
         backgroundColor: const Color(0xFF0F1540),
         title: Text(result == null
             ? 'Установка OpenWRT'

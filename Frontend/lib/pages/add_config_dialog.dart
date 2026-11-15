@@ -6,6 +6,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../widgets/glass_dialog.dart';
 import '../widgets/toast.dart';
 
 class AddConfigResult {
@@ -18,7 +19,7 @@ const _protocols = <String>[
   'CSQTT 2.1.9',
   'CSQTT 2.5.1',
   'CSQTTR',
-  'PaperFlux',
+  'ToTS',
   'LaLuneSUB',
 ];
 
@@ -26,9 +27,8 @@ String _placeholderFor(String protocol) {
   switch (protocol) {
     case 'LaLuneSUB':
       return 'https://… или data:application/json;base64,…';
-    case 'PaperFlux':
-      return 'paperflux://config?v=1&id=...&name=...&server=...&ip=...'
-          '&transport=...&doc=...&token=...&volga=...';
+    case 'ToTS':
+      return 'tots://eyJ2ZXJzaW9uIjoxLC4uLn0';
     default:
       return 'csqtt://connect?v=2&host=...&peer=...&password=...&hashes=h1+h2';
   }
@@ -103,7 +103,7 @@ class _AddConfigDialogState extends State<_AddConfigDialog>
   @override
   Widget build(BuildContext context) {
     final keyboardVisible = MediaQuery.viewInsetsOf(context).bottom > 0;
-    return AlertDialog(
+    return GlassAlertDialog(
       backgroundColor: const Color(0xFF0F1540),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),

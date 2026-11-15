@@ -10,7 +10,7 @@ import 'package:lalune/state/router_notifier.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 const _routerIp = '192.0.2.1';
-const _localIds = ['CSQTT 2.1.9', 'CSQTT 2.5.1', 'CSQTTR', 'PaperFlux'];
+const _localIds = ['CSQTT 2.1.9', 'CSQTT 2.5.1', 'CSQTTR', 'ToTS'];
 
 Future<
     ({
@@ -66,7 +66,7 @@ Future<
                 return http.Response(jsonEncode(remoteBody), remoteStatus);
               }
               // A previously selected router must not stand in for the local backend.
-              return http.Response('[{"id":"PaperFlux"}]', 200);
+              return http.Response('[{"id":"ToTS"}]', 200);
             }
             if (request.url.path == '/vk/token/raw') {
               return http.Response('{"token":""}', 200);
@@ -99,7 +99,7 @@ void main() {
 
   test('preserves an exact match for other protocols', () async {
     final result = await _connect(remoteBody: [
-      {'id': 'PaperFlux'}
+      {'id': 'ToTS'}
     ]);
     expect(result.connected, isTrue);
   });

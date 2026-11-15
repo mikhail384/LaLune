@@ -233,7 +233,6 @@ class LogsNotifier extends StateNotifier<LogsState> {
     return tags.any((tag) =>
         tag == 'CORE' ||
         tag == 'CSQTT' ||
-        tag == 'PAPERFLUX' ||
         tag == 'LUA' ||
         tag == 'SMART-TUNNEL' ||
         tag == 'WINTUN');

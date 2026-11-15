@@ -284,17 +284,11 @@ jobs:
             https://github.com/Endlad2/csqtt-core/releases/latest/download/libclient-android-armeabi-v7a.so
           curl -L --fail --retry 3 -o Frontend/android/app/src/main/jniLibs/x86_64/libclient-android-x86_64.so \
             https://github.com/Endlad2/csqtt-core/releases/latest/download/libclient-android-x86_64.so
-      - name: Download PaperFlux cores (jniLibs)
         run: |
           TMP_PF=$(mktemp -d)
-          curl -L --fail --retry 3 -o "$TMP_PF/paperflux-android.zip" \
-            https://github.com/Endlad2/PaperFlux-core/releases/latest/download/paperflux-android.zip
-          unzip -o "$TMP_PF/paperflux-android.zip" -d "$TMP_PF/extracted"
           for abi in arm64-v8a armeabi-v7a x86_64 x86; do
             mkdir -p "Frontend/android/app/src/main/jniLibs/$abi"
-            SRC="$TMP_PF/extracted/$abi/libopenflux.so"
             if [ -f "$SRC" ]; then
-              cp "$SRC" "Frontend/android/app/src/main/jniLibs/$abi/libopenflux.so"
             fi
           done
           rm -rf "$TMP_PF"

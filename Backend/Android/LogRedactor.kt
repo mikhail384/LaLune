@@ -9,7 +9,7 @@ import java.security.MessageDigest
 
 object LogRedactor {
     private val linkRe = Regex(
-        "(?i)\\b(csqttr?|paperflux|openflux|vless|vmess|trojan|ss|ssr|hysteria2?|tuic|wireguard)://[^\\s\"'<>]+"
+        "(?i)\\b(csqttr?|tots|vless|vmess|trojan|ss|ssr|hysteria2?|tuic|wireguard)://[^\\s\"'<>]+"
     )
     private val kvRe = Regex(
         "(?i)\\b(access_token|refresh_token|id_token|token|password|passwd|pwd|secret|hashes|hash|profile[_-]?token|relay[_-]?token|" +

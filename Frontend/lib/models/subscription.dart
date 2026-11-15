@@ -7,7 +7,7 @@
 //
 //   {
 //     "Имя #1": {"config": "...", "protocol": "CSQTTR", "expires": "0"},
-//     "Имя #2": {"config": "...", "protocol": "CSQTT-2.5.1", "expires": "0"},
+//     "Имя #2": {"config": "...", "protocol": "CSQTT-2.5.1", "expires": "0", "icon": "data:image/png;base64,..."},
 //     "hoster": "LaLune Free sub",
 //     "traffic": "10TB",
 //     "sub_control": "https://t.me/lalune_freedombot"
@@ -25,7 +25,7 @@ import 'package:http/http.dart' as http;
 final RegExp _prefix = RegExp(r'^\s*lalunesub\s*:\s*', caseSensitive: false);
 
 /// true, если введённая строка похожа на подписку LaLuneSUB (а не на обычный
-/// профиль csqtt:// / paperflux://).
+/// профиль csqtt:// / csqttr:// / tots://).
 bool looksLikeSubscription(String input) {
   final s = input.trim();
   if (_prefix.hasMatch(s)) return true;
@@ -56,8 +56,8 @@ String normalizeSubProtocol(String raw) {
     case 'CSQTTR':
     case 'CSQTTR 2.5.2':
       return 'CSQTTR';
-    case 'PAPERFLUX':
-      return 'PaperFlux';
+    case 'TOTS':
+      return 'ToTS';
   }
   return s;
 }
@@ -155,11 +155,15 @@ class SubConfig {
   /// null — бессрочно.
   final DateTime? expires;
 
+  /// Необязательная data:-иконка профиля из подписки.
+  final String? icon;
+
   const SubConfig({
     required this.name,
     required this.config,
     required this.protocol,
     this.expires,
+    this.icon,
   });
 
   /// Идентичность конфига внутри подписки.
@@ -173,16 +177,17 @@ class SubConfig {
         'config': config,
         'protocol': protocol,
         'expires': expires?.toIso8601String(),
+        if (icon != null) 'icon': icon,
       };
 
   factory SubConfig.fromJson(Map<String, dynamic> j) => SubConfig(
-        name: (j['name'] ?? '') as String,
-        config: (j['config'] ?? '') as String,
-        protocol: (j['protocol'] ?? 'CSQTT') as String,
+        name: (j['name'] ?? '').toString(),
+        config: (j['config'] ?? '').toString(),
+        protocol: (j['protocol'] ?? 'CSQTT').toString(),
         expires: parseSubExpires(j['expires']),
+        icon: _normalizeIcon(j['icon']),
       );
 }
-
 class Subscription {
   /// Стабильный идентификатор (из источника).
   final String id;
@@ -338,32 +343,57 @@ Subscription parseLaLuneSub(
   required String source,
   Subscription? previous,
 }) {
-  Object? decoded;
-  try {
-    decoded = jsonDecode(jsonText);
-  } catch (_) {
-    throw const SubscriptionFormatException('Подписка вернула не JSON');
+  final decoded = _decodeSubscriptionPayload(jsonText);
+  Map<String, dynamic> root;
+  Object? rawConfigs;
+
+  if (decoded is Map) {
+    root = Map<String, dynamic>.from(decoded);
+    rawConfigs = _takeCaseInsensitive(root, 'configs');
+  } else if (decoded is List) {
+    root = <String, dynamic>{};
+    rawConfigs = decoded;
+  } else {
+    throw const SubscriptionFormatException(
+        'Формат подписки: ожидался JSON-объект или список');
   }
-  if (decoded is! Map) {
-    throw const SubscriptionFormatException('Формат подписки: ожидался JSON-объект');
-  }
-  final map = Map<String, dynamic>.from(decoded);
-  final hoster = (map.remove('hoster') ?? '').toString().trim();
-  final traffic = (map.remove('traffic') ?? '').toString().trim();
-  final control = (map.remove('sub_control') ?? '').toString().trim();
+
+  final hoster = (_takeCaseInsensitive(root, 'hoster') ?? '').toString().trim();
+  final traffic = (_takeCaseInsensitive(root, 'traffic') ?? '').toString().trim();
+  final control =
+      (_takeCaseInsensitive(root, 'sub_control') ??
+              _takeCaseInsensitive(root, 'subControl') ??
+              '')
+          .toString()
+          .trim();
+
+  // Старый формат хранит конфиги прямо в корне. Новый также может использовать
+  // поле "configs" как объект или список.
+  rawConfigs ??= root;
 
   final configs = <SubConfig>[];
-  map.forEach((name, value) {
-    if (value is! Map) return;
-    final config = (value['config'] ?? '').toString().trim();
-    if (config.isEmpty) return;
-    configs.add(SubConfig(
-      name: name.trim().isEmpty ? 'Конфиг ${configs.length + 1}' : name.trim(),
-      config: config,
-      protocol: normalizeSubProtocol((value['protocol'] ?? '').toString()),
-      expires: parseSubExpires(value['expires']),
-    ));
-  });
+  if (rawConfigs is Map) {
+    final map = Map<Object?, Object?>.from(rawConfigs);
+    for (final entry in map.entries) {
+      final name = entry.key.toString().trim();
+      final value = entry.value;
+      if (_isMetadataKey(name)) continue;
+      final parsed = _parseSubConfigValue(
+        value,
+        fallbackName: name.isEmpty ? 'Конфиг ${configs.length + 1}' : name,
+      );
+      if (parsed != null) configs.add(parsed);
+    }
+  } else if (rawConfigs is List) {
+    for (final value in rawConfigs) {
+      final parsed = _parseSubConfigValue(
+        value,
+        fallbackName: 'Конфиг ${configs.length + 1}',
+      );
+      if (parsed != null) configs.add(parsed);
+    }
+  }
+
   if (configs.isEmpty) {
     throw const SubscriptionFormatException('В подписке нет ни одного конфига');
   }
@@ -384,7 +414,6 @@ Subscription parseLaLuneSub(
     trafficConfigId: previous?.trafficConfigId ?? 0,
     trafficCheckpointRx: previous?.trafficCheckpointRx ?? 0,
     trafficCheckpointTx: previous?.trafficCheckpointTx ?? 0,
-    // id backend-конфигов сохраняем только для тех, что остались в подписке
     backendIds: {
       for (final c in configs)
         if (previous?.backendIds[c.key] != null)
@@ -393,6 +422,162 @@ Subscription parseLaLuneSub(
   );
 }
 
+Object _decodeSubscriptionPayload(String input) {
+  var text = input.trim();
+  if (text.startsWith('\uFEFF')) text = text.substring(1).trimLeft();
+  if (text.startsWith('```')) {
+    text = text.replaceFirst(
+        RegExp(r'^```(?:json)?\s*', caseSensitive: false), '');
+    text = text.replaceFirst(RegExp(r'\s*```\s*$'), '');
+  }
+
+  Object? decoded = _tryJson(text);
+  decoded ??= _tryJson(_extractJsonEnvelope(text) ?? '');
+
+  // Некоторые сервисы заворачивают JSON/base64 ещё в JSON-строку.
+  for (var i = 0; i < 2 && decoded is String; i++) {
+    final inner = _maybeBase64(decoded).trim();
+    decoded = _tryJson(inner) ?? _tryJson(_extractJsonEnvelope(inner) ?? '');
+  }
+
+  if (decoded == null) {
+    final base = _maybeBase64(text);
+    decoded = _tryJson(base) ?? _tryJson(_extractJsonEnvelope(base) ?? '');
+  }
+
+  if (decoded == null) {
+    throw const SubscriptionFormatException('Подписка вернула не JSON');
+  }
+  return decoded;
+}
+
+Object? _tryJson(String text) {
+  if (text.trim().isEmpty) return null;
+  try {
+    return jsonDecode(text);
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Выделяет первый сбалансированный JSON-объект/массив из ответа с лишним
+/// текстом вокруг. Учитывает кавычки и экранирование.
+String? _extractJsonEnvelope(String text) {
+  final source = text.trim();
+  var start = -1;
+  String? opener;
+  for (var i = 0; i < source.length; i++) {
+    final c = source[i];
+    if (c == '{' || c == '[') {
+      start = i;
+      opener = c;
+      break;
+    }
+  }
+  if (start < 0 || opener == null) return null;
+  final closer = opener == '{' ? '}' : ']';
+  var depth = 0;
+  var quoted = false;
+  var escaped = false;
+  for (var i = start; i < source.length; i++) {
+    final c = source[i];
+    if (quoted) {
+      if (escaped) {
+        escaped = false;
+      } else if (c == '\\') {
+        escaped = true;
+      } else if (c == '"') {
+        quoted = false;
+      }
+      continue;
+    }
+    if (c == '"') {
+      quoted = true;
+    } else if (c == opener) {
+      depth++;
+    } else if (c == closer) {
+      depth--;
+      if (depth == 0) return source.substring(start, i + 1);
+    }
+  }
+  return null;
+}
+
+Object? _takeCaseInsensitive(Map<String, dynamic> map, String key) {
+  final wanted = key.toLowerCase();
+  for (final current in map.keys.toList()) {
+    if (current.toLowerCase() == wanted) return map.remove(current);
+  }
+  return null;
+}
+
+bool _isMetadataKey(String key) {
+  final k = key.toLowerCase();
+  return k == 'hoster' ||
+      k == 'traffic' ||
+      k == 'sub_control' ||
+      k == 'subcontrol' ||
+      k == 'configs';
+}
+
+SubConfig? _parseSubConfigValue(Object? raw, {required String fallbackName}) {
+  if (raw is String) {
+    final config = raw.trim();
+    if (config.isEmpty) return null;
+    return SubConfig(
+      name: fallbackName,
+      config: config,
+      protocol: _protocolFromLink(config),
+    );
+  }
+  if (raw is! Map) return null;
+  final value = Map<String, dynamic>.from(raw);
+  final config =
+      (_takeCaseInsensitive(value, 'config') ??
+              _takeCaseInsensitive(value, 'link') ??
+              _takeCaseInsensitive(value, 'url') ??
+              '')
+          .toString()
+          .trim();
+  if (config.isEmpty) return null;
+  final name =
+      (_takeCaseInsensitive(value, 'name') ?? fallbackName).toString().trim();
+  final protocolRaw = (_takeCaseInsensitive(value, 'protocol') ?? '').toString();
+  final expires = _takeCaseInsensitive(value, 'expires') ??
+      _takeCaseInsensitive(value, 'expire') ??
+      _takeCaseInsensitive(value, 'expiry');
+  final icon = _takeCaseInsensitive(value, 'icon');
+  final normalized = normalizeSubProtocol(protocolRaw);
+  return SubConfig(
+    name: name.isEmpty ? fallbackName : name,
+    config: config,
+    protocol: protocolRaw.trim().isEmpty ? _protocolFromLink(config) : normalized,
+    expires: parseSubExpires(expires),
+    icon: _normalizeIcon(icon),
+  );
+}
+
+String _protocolFromLink(String link) {
+  final lower = link.trimLeft().toLowerCase();
+  if (lower.startsWith('tots://')) return 'ToTS';
+  if (lower.startsWith('csqttr://')) return 'CSQTTR';
+  if (lower.startsWith('csqtt://')) return 'CSQTT';
+  return 'CSQTT';
+}
+
+String? _normalizeIcon(Object? raw) {
+  final value = raw?.toString().trim() ?? '';
+  if (value.isEmpty || !value.toLowerCase().startsWith('data:image/')) return null;
+  try {
+    final parsed = UriData.parse(value);
+    if (!parsed.mimeType.toLowerCase().startsWith('image/')) return null;
+    final bytes = parsed.contentAsBytes();
+    if (bytes.isEmpty || bytes.length > 2 * 1024 * 1024) return null;
+    return value;
+  } catch (_) {
+    return null;
+  }
+}
 /// Загружает текст подписки: из data:-URL или по http(s).
 Future<String> fetchSubscriptionText(
   String input, {
@@ -464,12 +649,18 @@ String _short(Object e) {
 
 /// Некоторые серверы отдают JSON в base64: если текст не JSON, пробуем декодировать.
 String _maybeBase64(String text) {
-  final t = text.trim();
-  if (t.startsWith('{') || t.startsWith('[')) return t;
-  try {
-    final bytes = base64.decode(base64.normalize(t));
-    return utf8.decode(Uint8List.fromList(bytes), allowMalformed: true).trim();
-  } catch (_) {
-    return t;
+  var t = text.trim();
+  if (t.startsWith('\uFEFF')) t = t.substring(1).trimLeft();
+  if (t.startsWith('{') || t.startsWith('[') || t.startsWith('"')) return t;
+
+  final compact = t.replaceAll(RegExp(r'\s+'), '');
+  for (final codec in <Base64Codec>[base64, base64Url]) {
+    try {
+      final bytes = codec.decode(codec.normalize(compact));
+      final decoded =
+          utf8.decode(Uint8List.fromList(bytes), allowMalformed: true).trim();
+      if (decoded.isNotEmpty) return decoded;
+    } catch (_) {}
   }
+  return t;
 }

@@ -36,29 +36,29 @@ pub struct Settings {
     pub workers: i32,
     pub auto_api_workers: i32,
 
-    // -------- PaperFlux --------
-    pub pf_transport: String,
-    pub pf_url: String,
-    pub pf_urls: String,
-    pub pf_volga_url: String,
-    pub pf_mode: String,
-    pub pf_socks5: String,
-    pub pf_tcp_recovery: String,
-    pub pf_session: bool,
-    pub pf_client_ip: String,
-    pub pf_auth_service: String,
-    pub pf_ipc_socket: String,
-    pub pf_tun_fd_sock: String,
-    pub pf_packet_sock: String,
-    pub pf_exit_profiles: String,
-    pub pf_exit_stats: String,
-    pub pf_exit_cookies: String,
-    pub pf_relay_url: String,
-    pub pf_relay_token: String,
-    pub pf_relay_user: i64,
-    pub pf_relay_session: String,
-    pub pf_max_token: String,
-    pub pf_max_uid: String,
+    // -------- ToTS --------
+    pub tots_workers: i32,
+    pub tots_mtu: i32,
+    pub tots_relay_only: bool,
+    pub tots_vk_enabled: bool,
+    pub tots_jazz_enabled: bool,
+    pub tots_ya_docs_enabled: bool,
+    pub tots_mail_docs_enabled: bool,
+    pub tots_cups_enabled: bool,
+    pub tots_vk_percent: i32,
+    pub tots_jazz_percent: i32,
+    pub tots_ya_docs_percent: i32,
+    pub tots_mail_docs_percent: i32,
+    pub tots_cups_percent: i32,
+    pub tots_vk_auth_mode: String,
+    pub tots_vk_call_links: String,
+    pub tots_jazz_room_name: String,
+    pub tots_jazz_random_name: bool,
+    pub tots_jazz_data: String,
+    pub tots_ya_docs_data: String,
+    pub tots_mail_docs_data: String,
+    pub tots_cups_data: String,
+
 
     // -------- Экспериментальное --------
     pub enable_smart_tunnel: bool,
@@ -98,28 +98,28 @@ impl Default for Settings {
             workers: DEFAULT_WORKERS,
             auto_api_workers: DEFAULT_AUTO_API_WORKERS,
 
-            pf_transport: "yandex".into(),
-            pf_url: String::new(),
-            pf_urls: String::new(),
-            pf_volga_url: String::new(),
-            pf_mode: "proxy".into(),
-            pf_socks5: "127.0.0.1:1080".into(),
-            pf_tcp_recovery: "auto".into(),
-            pf_session: false,
-            pf_client_ip: "10.10.10.2".into(),
-            pf_auth_service: String::new(),
-            pf_ipc_socket: String::new(),
-            pf_tun_fd_sock: String::new(),
-            pf_packet_sock: String::new(),
-            pf_exit_profiles: String::new(),
-            pf_exit_stats: String::new(),
-            pf_exit_cookies: String::new(),
-            pf_relay_url: String::new(),
-            pf_relay_token: String::new(),
-            pf_relay_user: 0,
-            pf_relay_session: String::new(),
-            pf_max_token: String::new(),
-            pf_max_uid: String::new(),
+            tots_workers: 1,
+            tots_mtu: 1200,
+            tots_relay_only: false,
+            tots_vk_enabled: true,
+            tots_jazz_enabled: true,
+            tots_ya_docs_enabled: true,
+            tots_mail_docs_enabled: true,
+            tots_cups_enabled: true,
+            tots_vk_percent: 100,
+            tots_jazz_percent: 0,
+            tots_ya_docs_percent: 0,
+            tots_mail_docs_percent: 0,
+            tots_cups_percent: 0,
+            tots_vk_auth_mode: "manual".into(),
+            tots_vk_call_links: String::new(),
+            tots_jazz_room_name: String::new(),
+            tots_jazz_random_name: true,
+            tots_jazz_data: String::new(),
+            tots_ya_docs_data: String::new(),
+            tots_mail_docs_data: String::new(),
+            tots_cups_data: String::new(),
+
 
             enable_smart_tunnel: false,
             show_core_logs: false,
@@ -138,6 +138,14 @@ impl Settings {
 
         if self.auto_api_workers < MIN_AUTO_API_WORKERS { self.auto_api_workers = MIN_AUTO_API_WORKERS; }
         if self.auto_api_workers > MAX_AUTO_API_WORKERS { self.auto_api_workers = MAX_AUTO_API_WORKERS; }
+        self.tots_workers = self.tots_workers.clamp(1, 127);
+        self.tots_mtu = self.tots_mtu.clamp(576, 1400);
+        self.tots_vk_percent = self.tots_vk_percent.clamp(0, 100);
+        self.tots_jazz_percent = self.tots_jazz_percent.clamp(0, 100);
+        self.tots_ya_docs_percent = self.tots_ya_docs_percent.clamp(0, 100);
+        self.tots_mail_docs_percent = self.tots_mail_docs_percent.clamp(0, 100);
+        self.tots_cups_percent = self.tots_cups_percent.clamp(0, 100);
+        if self.tots_vk_auth_mode != "autoApi" { self.tots_vk_auth_mode = "manual".into(); }
 
         if self.auth_mode.is_empty() { self.auth_mode = "manual".into(); }
         if self.turn_transport.is_empty() { self.turn_transport = "udp".into(); }
@@ -147,11 +155,6 @@ impl Settings {
         if self.vk_auth_mode.is_empty() { self.vk_auth_mode = "vkcalls".into(); }
         if self.client_ids.is_empty() { self.client_ids = "8202606,6287487".into(); }
 
-        if self.pf_transport.is_empty() { self.pf_transport = "yandex".into(); }
-        if self.pf_mode.is_empty() { self.pf_mode = "proxy".into(); }
-        if self.pf_socks5.is_empty() { self.pf_socks5 = "127.0.0.1:1080".into(); }
-        if self.pf_tcp_recovery.is_empty() { self.pf_tcp_recovery = "auto".into(); }
-        if self.pf_client_ip.is_empty() { self.pf_client_ip = "10.10.10.2".into(); }
 
         if self.ip_routing_mode != "whitelist" {
             self.ip_routing_mode = "blacklist".into();

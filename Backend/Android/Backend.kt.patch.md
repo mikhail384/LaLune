@@ -457,7 +457,6 @@ jobs:
           set -euo pipefail
           APK=$(find Frontend/build/app/outputs/flutter-apk -name "app-debug.apk" -type f | head -n 1)
           echo "APK: $APK"
-          unzip -l "$APK" | grep -E 'libcsqtt-link|libclient-android|libopenflux' || true
 
       - name: Locate & rename APK
         id: find_apk

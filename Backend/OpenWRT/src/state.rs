@@ -3,7 +3,7 @@
 // Глобальное состояние OpenWRT.
 //
 // Отличия от Desktop:
-//   * release: встроены CSQTT / CSQTTR / CSQTT 2.1.9 (без PaperFlux)
+//   * release: встроены CSQTT / CSQTTR / CSQTT 2.1.9
 //   * core_path используется только fallback dev-сборкой без встроенного bundle
 //   * Lua-рантайм через mlua 5.4
 

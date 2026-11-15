@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //
-// Ядро: CSQTT + PaperFlux. Трёхуровневый fallback (direct / proxy-browserUA / proxy-curlUA).
+// Ядра CSQTT / CSQTTR / ToTS. Трёхуровневый fallback (direct / proxy-browserUA / proxy-curlUA).
 //
 // stdout/stderr читаются построчно, эмитятся с префиксом [CORE]
 // и параллельно пишутся в logs.log (для watchdog'а).
@@ -19,14 +19,12 @@ pub const LATEST_CSQTTR_URL: &str =
     "https://raw.githubusercontent.com/Endlad2/csqttr-core/refs/heads/main/LATEST";
 pub const CSQTTR_URL_TEMPLATE: &str =
     "https://github.com/Endlad2/csqttr-core/releases/download/{VER}/{FILE}";
-pub const LATEST_PAPERFLUX_URL: &str =
-    "https://raw.githubusercontent.com/Endlad2/PaperFlux-core/refs/heads/main/LATEST";
 
 pub const CSQTT_URL_TEMPLATE: &str =
     "https://github.com/Endlad2/csqtt-core/releases/download/{VER}/{FILE}";
 pub const CSQTT_219_RELEASE: &str = "2026.09.17.17.36";
-pub const PAPERFLUX_URL_TEMPLATE: &str =
-    "https://github.com/Endlad2/PaperFlux-core/releases/latest/download/{FILE}";
+pub const TOTS_URL_TEMPLATE: &str =
+    "https://github.com/Endlad2/ToTS/releases/latest/download/{FILE}";
 
 pub const PROXY_URL: &str = "http://31.77.148.203:8855/?url=";
 pub const USER_AGENT_BROWSER: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -74,25 +72,30 @@ pub fn csqttr_local_filename() -> &'static str {
 }
 
 // ============================================================
-//  PaperFlux: имена ассетов
+//  ToTS: latest release archive
 // ============================================================
 
-pub fn paperflux_asset_name() -> &'static str {
-    #[cfg(target_os = "windows")]
-    { "paperflux-windows-amd64.exe" }
-    #[cfg(target_os = "linux")]
-    { "paperflux-linux-amd64" }
-    #[cfg(target_os = "macos")]
-    { "paperflux-darwin-amd64" }
-    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
-    { "paperflux-unknown" }
+pub fn tots_asset_name() -> &'static str {
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    { "tots-client-x86_64-pc-windows-msvc.zip" }
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    { "tots-client-x86_64-unknown-linux-gnu.tar.gz" }
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    { "tots-client-aarch64-apple-darwin.tar.gz" }
+    #[cfg(any(
+        all(target_os = "windows", not(target_arch = "x86_64")),
+        all(target_os = "linux", not(target_arch = "x86_64")),
+        all(target_os = "macos", not(target_arch = "aarch64")),
+        not(any(target_os = "windows", target_os = "linux", target_os = "macos"))
+    ))]
+    { "tots-client-unsupported" }
 }
 
-pub fn paperflux_local_filename() -> &'static str {
+pub fn tots_local_filename() -> &'static str {
     #[cfg(target_os = "windows")]
-    { "paperflux-core.exe" }
+    { "tots-client.exe" }
     #[cfg(not(target_os = "windows"))]
-    { "paperflux-core" }
+    { "tots-client" }
 }
 
 /// Список поддерживаемых протоколов (делегируем в protocol.rs).
@@ -123,11 +126,6 @@ pub async fn download_csqttr(
 ) -> Result<()> {
     let url = CSQTTR_URL_TEMPLATE.replace("{VER}", version).replace("{FILE}", csqttr_asset_name());
     download_binary(client, &url, dest, events).await
-}
-
-/// Скачивает LATEST для PaperFlux.
-pub async fn fetch_latest_paperflux(client: &reqwest::Client, events: &EventBus) -> Option<String> {
-    fetch_latest_generic(client, events, LATEST_PAPERFLUX_URL).await
 }
 
 async fn fetch_latest_generic(
@@ -212,15 +210,79 @@ pub async fn download_csqtt_219(
     download_binary(client, &url, dest, events).await
 }
 
-/// Скачивает и кладёт ядро PaperFlux (latest).
-pub async fn download_paperflux(
+pub async fn download_tots(
     client: &reqwest::Client,
     dest: &Path,
     events: &EventBus,
 ) -> Result<()> {
-    let file = paperflux_asset_name();
-    let url = PAPERFLUX_URL_TEMPLATE.replace("{FILE}", file);
-    download_binary(client, &url, dest, events).await
+    let asset = tots_asset_name();
+    if asset == "tots-client-unsupported" {
+        return Err(anyhow!("ToTS desktop binary is not published for this platform/architecture"));
+    }
+    let url = TOTS_URL_TEMPLATE.replace("{FILE}", asset);
+    let urls = [
+        url.clone(),
+        format!("{}{}", PROXY_URL, urlencode(&url)),
+        format!("{}{}", PROXY_URL, urlencode(&url)),
+    ];
+    for (i, candidate) in urls.iter().enumerate() {
+        let level = i + 1;
+        let ua = if level == 3 { USER_AGENT_CURL } else { USER_AGENT_BROWSER };
+        events.emit(Event::log(format!("[DOWNLOAD][ToTS][LEVEL {}] {}", level, truncate(candidate, 120))));
+        let resp = match client.get(candidate).header("User-Agent", ua).send().await { Ok(v) => v, Err(_) => continue };
+        if resp.status().as_u16() != 200 { continue; }
+        let bytes = match resp.bytes().await { Ok(v) if v.len() > 1024 => v, _ => continue };
+        let extracted: Vec<u8> = {
+            #[cfg(target_os = "windows")]
+            {
+                let reader = std::io::Cursor::new(bytes.as_ref());
+                let mut archive = zip::ZipArchive::new(reader)?;
+                let mut found = None;
+                for idx in 0..archive.len() {
+                    let mut entry = archive.by_index(idx)?;
+                    if entry.name().replace('\\', "/").ends_with("tots-client.exe") {
+                        let mut out = Vec::new();
+                        std::io::Read::read_to_end(&mut entry, &mut out)?;
+                        found = Some(out);
+                        break;
+                    }
+                }
+                found.ok_or_else(|| anyhow!("tots-client.exe missing in ToTS archive"))?
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                let decoder = flate2::read::GzDecoder::new(bytes.as_ref());
+                let mut archive = tar::Archive::new(decoder);
+                let mut found = None;
+                for entry in archive.entries()? {
+                    let mut entry = entry?;
+                    let path = entry.path()?.to_string_lossy().replace('\\', "/");
+                    if path.ends_with("tots-client") {
+                        let mut out = Vec::new();
+                        std::io::Read::read_to_end(&mut entry, &mut out)?;
+                        found = Some(out);
+                        break;
+                    }
+                }
+                found.ok_or_else(|| anyhow!("tots-client missing in ToTS archive"))?
+            }
+        };
+        if let Some(parent) = dest.parent() { tokio::fs::create_dir_all(parent).await?; }
+        let tmp = dest.with_extension("tmp");
+        tokio::fs::write(&tmp, &extracted).await?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = tokio::fs::metadata(&tmp).await?.permissions();
+            perms.set_mode(0o755);
+            tokio::fs::set_permissions(&tmp, perms).await?;
+        }
+        if dest.exists() { let _ = tokio::fs::remove_file(dest).await; }
+        tokio::fs::rename(&tmp, dest).await?;
+        events.emit(Event::log(format!("[DOWNLOAD][ToTS] OK ({} bytes) → {}", extracted.len(), dest.display())));
+        return Ok(());
+    }
+    Err(anyhow!("failed to download ToTS archive"))
 }
 
 async fn download_binary(
@@ -404,7 +466,7 @@ pub fn build_args(
     config: &crate::config::ConfigItem,
     settings: &crate::settings::Settings,
     listen_port: u16,
-) -> Vec<String> {
+) -> Result<Vec<String>> {
     crate::protocol::build_args(config, settings, listen_port)
 }
 

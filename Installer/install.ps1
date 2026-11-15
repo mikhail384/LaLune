@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    LaLune installer для Windows (CSQTT + CSQTTR + PaperFlux).
+    LaLune installer для Windows (CSQTT + CSQTTR + ToTS).
 #>
 
 [CmdletBinding()]
@@ -17,20 +17,19 @@ $ErrorActionPreference = 'Stop'
 
 $REPO_LALUNE   = 'mikhail384/LaLune'
 $REPO_CSQTT    = 'Endlad2/csqtt-core'
-$REPO_PAPERFLUX = 'Endlad2/PaperFlux-core'
 $REPO_CSQTTR = 'Endlad2/csqttr-core'
+$REPO_TOTS = 'Endlad2/ToTS'
 
 $URL_LALUNE_ZIP     = "https://github.com/$REPO_LALUNE/releases/latest/download/LaLune-Windows.zip"
 $URL_BACKEND_ZIP    = "https://github.com/$REPO_LALUNE/releases/latest/download/Backend-Windows.zip"
 $URL_CSQTT_EXE      = "https://github.com/$REPO_CSQTT/releases/latest/download/client-windows-x86_64.exe"
 $URL_CSQTT_219_EXE  = "https://github.com/$REPO_CSQTT/releases/download/2026.09.17.17.36/client-windows-x86_64.exe"
-$URL_PAPERFLUX_EXE  = "https://github.com/$REPO_PAPERFLUX/releases/latest/download/paperflux-windows-amd64.exe"
 $URL_CSQTTR_EXE     = "https://github.com/$REPO_CSQTTR/releases/latest/download/client-windows-x86_64.exe"
 $URL_CSQTTR_LATEST  = "https://raw.githubusercontent.com/$REPO_CSQTTR/refs/heads/main/LATEST"
 $URL_CSQTT_LATEST   = "https://raw.githubusercontent.com/$REPO_CSQTT/refs/heads/main/LATEST"
-$URL_PF_LATEST      = "https://raw.githubusercontent.com/$REPO_PAPERFLUX/refs/heads/main/LATEST"
 $URL_ICON           = "https://raw.githubusercontent.com/$REPO_LALUNE/refs/heads/main/icon.ico"
 $URL_WINTUN_ZIP     = "https://endlad2.github.io/wintun.zip"
+$URL_TOTS_ZIP       = "https://github.com/$REPO_TOTS/releases/latest/download/tots-client-x86_64-pc-windows-msvc.zip"
 
 $APPDATA_DIR  = Join-Path $env:APPDATA '.la-lune'
 $APP_DIR      = Join-Path $APPDATA_DIR 'app'
@@ -130,6 +129,24 @@ function Expand-ZipOverwrite {
     } finally { $zip.Dispose() }
 }
 
+function Extract-TotsClient {
+    param(
+        [Parameter(Mandatory=$true)][string]$ZipPath,
+        [Parameter(Mandatory=$true)][string]$DestDir
+    )
+    Write-Step "Извлекаю tots-client.exe из $([System.IO.Path]::GetFileName($ZipPath))"
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+    try {
+        $entry = $zip.Entries | Where-Object { $_.FullName -match '(^|[\\/])tots-client\.exe$' } | Select-Object -First 1
+        if (-not $entry) { throw "tots-client.exe не найден внутри $ZipPath" }
+        $dest = Join-Path $DestDir 'tots-client.exe'
+        if (Test-Path -LiteralPath $dest) { Remove-Item -LiteralPath $dest -Force }
+        [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $dest, $true)
+        Write-Ok "ToTS → $dest"
+    } finally { $zip.Dispose() }
+}
+
 function New-Shortcut {
     param(
         [Parameter(Mandatory=$true)][string]$LinkPath,
@@ -173,7 +190,7 @@ function Main {
     Write-Host ''
     Write-Host '========================================' -ForegroundColor Green
     Write-Host '     LaLune Installer (Windows)        ' -ForegroundColor Green
-    Write-Host '     CSQTT + PaperFlux                 ' -ForegroundColor Green
+    Write-Host '     CSQTT + CSQTTR + ToTS           ' -ForegroundColor Green
     Write-Host '========================================' -ForegroundColor Green
     Write-Host ''
 
@@ -188,13 +205,12 @@ function Main {
     $csqttExe        = Join-Path $TEMP_DIR 'client-windows-x86_64.exe'
     $csqtt219Exe     = Join-Path $TEMP_DIR 'csqtt-219.exe'
     $csqtt219Latest  = Join-Path $TEMP_DIR 'LATEST.CSQTT-2.1.9'
-    $paperfluxExe    = Join-Path $TEMP_DIR 'paperflux-windows-amd64.exe'
     $csqttrExe       = Join-Path $TEMP_DIR 'csqttr-windows-x86_64.exe'
     $csqttrLatest    = Join-Path $TEMP_DIR 'LATEST.CSQTTR'
     $csqttLatest     = Join-Path $TEMP_DIR 'LATEST.Csqtt'
-    $pfLatest        = Join-Path $TEMP_DIR 'LATEST.PaperFlux'
     $iconFile        = Join-Path $TEMP_DIR 'icon.ico'
     $wintunZip       = Join-Path $TEMP_DIR 'wintun.zip'
+    $totsZip         = Join-Path $TEMP_DIR 'tots-client-x86_64-pc-windows-msvc.zip'
 
     if ($ci) {
         if (-not (Test-Path -LiteralPath $csqttrExe)) {
@@ -206,8 +222,11 @@ function Main {
         if (-not (Test-Path -LiteralPath $csqtt219Latest)) {
             Set-Content -LiteralPath $csqtt219Latest -Value '2026.09.17.17.36' -NoNewline -Encoding ascii
         }
+        if (-not (Test-Path -LiteralPath $totsZip)) {
+            Download-File -Url $URL_TOTS_ZIP -Dest $totsZip
+        }
         $missing = @()
-        foreach ($f in @($laLuneZip, $backendZip, $csqttExe, $csqtt219Exe, $csqtt219Latest, $csqttrExe, $csqttrLatest, $paperfluxExe, $csqttLatest, $pfLatest, $iconFile, $wintunZip)) {
+        foreach ($f in @($laLuneZip, $backendZip, $csqttExe, $csqtt219Exe, $csqtt219Latest, $csqttrExe, $csqttrLatest, $csqttLatest, $iconFile, $wintunZip, $totsZip)) {
             if (-not (Test-Path -LiteralPath $f)) { $missing += $f }
         }
         if ($missing.Count -gt 0) {
@@ -220,13 +239,12 @@ function Main {
         Download-File -Url $URL_CSQTT_EXE     -Dest $csqttExe
         Download-File -Url $URL_CSQTT_219_EXE -Dest $csqtt219Exe
         Set-Content -LiteralPath $csqtt219Latest -Value '2026.09.17.17.36' -NoNewline -Encoding ascii
-        Download-File -Url $URL_PAPERFLUX_EXE -Dest $paperfluxExe
         Download-File -Url $URL_CSQTTR_EXE -Dest $csqttrExe
         Download-File -Url $URL_CSQTTR_LATEST -Dest $csqttrLatest
         Download-File -Url $URL_CSQTT_LATEST  -Dest $csqttLatest
-        Download-File -Url $URL_PF_LATEST     -Dest $pfLatest
         Download-File -Url $URL_ICON          -Dest $iconFile
         Download-File -Url $URL_WINTUN_ZIP    -Dest $wintunZip
+        Download-File -Url $URL_TOTS_ZIP      -Dest $totsZip
         Write-Ok 'Все файлы скачаны'
     }
 
@@ -259,13 +277,9 @@ function Main {
     # CSQTTR core
     Copy-Item -LiteralPath $csqttrExe -Destination (Join-Path $APPDATA_DIR 'csqttr-core.exe') -Force
 
-    # PaperFlux core
-    if (Test-Path -LiteralPath $paperfluxExe) {
-        Write-Step 'Кладу PaperFlux core'
-        Copy-Item -LiteralPath $paperfluxExe -Destination (Join-Path $APPDATA_DIR 'paperflux-core.exe') -Force
-    } else {
-        Write-Warn 'PaperFlux core не скачан (CI без файла?)'
-    }
+    # ToTS client
+    Write-Step 'Кладу ToTS client'
+    Extract-TotsClient -ZipPath $totsZip -DestDir $APPDATA_DIR
 
     # LATEST-версии
     Write-Step 'Кладу LATEST-файлы'
@@ -274,7 +288,6 @@ function Main {
     }
     Copy-Item -LiteralPath $csqtt219Latest -Destination (Join-Path $APPDATA_DIR 'LATEST.CSQTT-2.1.9') -Force
     Copy-Item -LiteralPath $csqttrLatest -Destination (Join-Path $APPDATA_DIR 'LATEST.CSQTTR') -Force
-    Copy-Item -LiteralPath $pfLatest -Destination (Join-Path $APPDATA_DIR 'LATEST.PaperFlux') -Force
 
     # wintun.dll
     Extract-WintunDll -ZipPath $wintunZip -DestDir $APPDATA_DIR
