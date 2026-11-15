@@ -65,11 +65,19 @@ with tempfile.TemporaryDirectory(prefix='lalune-macos-tun-') as temporary:
     try:
         wait_for(lambda: api('/ping'))
         api('/settings', {'desktopSocks5Mode': True}, method='PATCH')
+        previous_session = ''
         for protocol in ('CSQTT', 'CSQTTR'):
             config = api('/configs', {'name': 'local fixture', 'protocol': protocol,
                 'peer': '192.0.2.1:46000', 'password': 'local-test', 'hashes': 'local-test'})
             api('/vpn/connect', {'configId': config['id']})
             wait_for(lambda: api('/vpn/status')['connected'])
+            session_id = wait_for(lambda: api('/vpn/stats').get('sessionId'))
+            assert session_id != previous_session
+            previous_session = session_id
+            other = api('/configs', {'name': 'other fixture', 'protocol': protocol,
+                'peer': '192.0.2.1:46000', 'password': 'local-test', 'hashes': 'local-test'})
+            api('/configs/selected', {'id': other['id']}, method='PUT')
+            assert api('/vpn/status')['configId'] == config['id']
             tun = wait_for(interface)
             subprocess.run(['route', '-n', 'add', '-host', target, '-interface', tun],
                            check=True, capture_output=True)
@@ -83,6 +91,7 @@ with tempfile.TemporaryDirectory(prefix='lalune-macos-tun-') as temporary:
             installed_route = False
             api('/vpn/disconnect', {})
             wait_for(lambda: not api('/vpn/status')['connected'])
+            assert api('/vpn/stats')['sessionId'] == ''
             wait_for(lambda: interface() is None)
             print(json.dumps({'protocol': protocol, 'utun_packet': 'passed'}), flush=True)
     finally:

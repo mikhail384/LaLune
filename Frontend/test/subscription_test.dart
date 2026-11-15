@@ -75,7 +75,9 @@ void main() {
       final first = parseLaLuneSub(_sample, source: 'x');
       final key0 = first.configs[0].key;
       final key1 = first.configs[1].key;
-      final prev = first.copyWith(usedBytes: 12345, backendIds: {key0: 7, key1: 8});
+      final prev = first.copyWith(usedBytes: 12345, backendIds: {key0: 7, key1: 8},
+          trafficSessionId: 'fixture', trafficConfigId: 7,
+          trafficCheckpointRx: 123, trafficCheckpointTx: 45);
       final fresh = parseLaLuneSub(
         '{"ИМЯ #1":{"config":"csqttr://connect?v=2&host=1.2.3.4&peer=46000&password=p&hashes=h","protocol":"CSQTTR"},"hoster":"New"}',
         source: 'x',
@@ -84,6 +86,10 @@ void main() {
       expect(fresh.usedBytes, 12345);
       expect(fresh.hoster, 'New');
       expect(fresh.backendIds, {key0: 7});
+      expect(fresh.trafficSessionId, 'fixture');
+      expect(fresh.trafficConfigId, 7);
+      expect(fresh.trafficCheckpointRx, 123);
+      expect(fresh.trafficCheckpointTx, 45);
     });
   });
 
@@ -378,5 +384,82 @@ void main() {
     pendingStats = null;
     await notifier.flushTraffic();
     expect(container.read(subscriptionsProvider).items.single.usedBytes, 438);
+  });
+
+  test('persists a matching tunnel checkpoint with subscription totals', () async {
+    final original = parseLaLuneSub(_sample, source: _dataUrl(_sample));
+    final saved = original.copyWith(
+      usedBytes: 400, receivedBytes: 250, sentBytes: 150,
+      backendIds: {original.configs.first.key: 42},
+      trafficSessionId: 'fixture-session-a', trafficConfigId: 42,
+      trafficCheckpointRx: 900, trafficCheckpointTx: 550,
+    );
+    SharedPreferences.setMockInitialValues({
+      'lalune_subscriptions_v1': jsonEncode([saved.toJson()]),
+    });
+    var rx = 1000;
+    var tx = 600;
+    var session = 'fixture-session-a';
+    final client = MockClient((request) async {
+      if (request.url.path == '/vpn/status') {
+        return _resp('{"state":"connected","connected":true,"configId":42}');
+      }
+      if (request.url.path == '/vpn/stats') {
+        return _resp(jsonEncode({'rxBytes': rx, 'txBytes': tx, 'sessionId': session}));
+      }
+      return _resp('{}');
+    });
+    final api = ApiClient(httpClient: client);
+    ProviderContainer makeContainer() => ProviderContainer(overrides: [
+      apiClientProvider.overrideWithValue(api),
+      vpnProvider.overrideWith((ref) => _TestVpnNotifier(ref)),
+    ]);
+    Future<void> waitForSubscriptions(ProviderContainer c) async {
+      for (var i = 0; i < 50 && c.read(subscriptionsProvider).items.isEmpty; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(c.read(subscriptionsProvider).items, hasLength(1));
+      (c.read(vpnProvider.notifier) as _TestVpnNotifier).setStatus(
+        const VpnStatus(state: 'connected', connected: true, configId: 42));
+    }
+
+    var c = makeContainer();
+    await waitForSubscriptions(c);
+    await c.read(subscriptionsProvider.notifier).flushTraffic();
+    var tracked = c.read(subscriptionsProvider).items.single;
+    expect(tracked.usedBytes, 550);
+    expect(tracked.trafficCheckpointRx, 1000);
+    expect(tracked.trafficCheckpointTx, 600);
+    c.dispose();
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    rx = 1100;
+    tx = 650;
+    c = makeContainer();
+    await waitForSubscriptions(c);
+    await c.read(subscriptionsProvider.notifier).flushTraffic();
+    tracked = c.read(subscriptionsProvider).items.single;
+    expect(tracked.usedBytes, 700);
+    expect(tracked.receivedBytes, 450);
+    expect(tracked.sentBytes, 250);
+    expect(tracked.trafficCheckpointRx, 1100);
+    expect(tracked.trafficCheckpointTx, 650);
+
+    // A different session must never reuse the previous session's baseline.
+    c.dispose();
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    session = 'fixture-session-b';
+    rx = 1500;
+    tx = 900;
+    c = makeContainer();
+    await waitForSubscriptions(c);
+    await c.read(subscriptionsProvider.notifier).flushTraffic();
+    expect(c.read(subscriptionsProvider).items.single.usedBytes, 700);
+    rx += 5;
+    tx += 7;
+    await c.read(subscriptionsProvider.notifier).flushTraffic();
+    expect(c.read(subscriptionsProvider).items.single.usedBytes, 712);
+    c.dispose();
+    client.close();
   });
 }

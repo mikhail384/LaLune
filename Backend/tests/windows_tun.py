@@ -58,11 +58,19 @@ with tempfile.TemporaryDirectory(prefix='lalune-windows-tun-') as temporary:
     try:
         wait_for(lambda: api('/ping'))
         api('/settings', {'desktopSocks5Mode': True}, method='PATCH')
+        previous_session = ''
         for protocol in ('CSQTT', 'CSQTTR'):
             config = api('/configs', {'name': 'local fixture', 'protocol': protocol,
                 'peer': '192.0.2.1:46000', 'password': 'local-test', 'hashes': 'local-test'})
             api('/vpn/connect', {'configId': config['id']})
             wait_for(lambda: api('/vpn/status')['connected'])
+            session_id = wait_for(lambda: api('/vpn/stats').get('sessionId'))
+            assert session_id != previous_session
+            previous_session = session_id
+            other = api('/configs', {'name': 'other fixture', 'protocol': protocol,
+                'peer': '192.0.2.1:46000', 'password': 'local-test', 'hashes': 'local-test'})
+            api('/configs/selected', {'id': other['id']}, method='PUT')
+            assert api('/vpn/status')['configId'] == config['id']
             # A newly configured address may be Tentative while Windows runs
             # duplicate-address detection; binding to it is not yet possible.
             wait_for(lambda: powershell("if (Get-NetIPAddress -InterfaceAlias 'CSQTT' -AddressFamily IPv4 -IPAddress '10.66.67.2' -ErrorAction SilentlyContinue | Where-Object AddressState -eq Preferred) { exit 0 } else { exit 1 }", False).returncode == 0)
@@ -77,6 +85,7 @@ with tempfile.TemporaryDirectory(prefix='lalune-windows-tun-') as temporary:
             route = False
             api('/vpn/disconnect', {})
             wait_for(lambda: not api('/vpn/status')['connected'])
+            assert api('/vpn/stats')['sessionId'] == ''
             print(json.dumps({'protocol': protocol, 'wintun_packet': 'passed'}), flush=True)
     finally:
         if route:

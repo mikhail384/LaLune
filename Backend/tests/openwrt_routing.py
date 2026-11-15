@@ -10,6 +10,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import urllib.error
 
 from linux_tun import CORE, api, cmd, wait_for
 
@@ -111,7 +112,10 @@ def inside(binary, case):
                 wait_for(lambda: api('/ping'))
                 config = api('/configs', {'name':'Routing fixture', 'protocol':'CSQTT',
                     'peer':'192.0.2.1:46000', 'password':'fixture', 'hashes':'fixture'})
-                api('/vpn/connect', {'configId': config['id']})
+                try:
+                    api('/vpn/connect', {'configId': config['id']})
+                except urllib.error.HTTPError as error:
+                    raise AssertionError('Fixture connect failed: ' + error.read().decode('utf-8', 'replace')) from error
                 if case in ['firewall_failure', 'dns_failure']:
                     wait_for(lambda: 'tun start failed' in logs())
                     assert not api('/vpn/status')['connected']
@@ -119,6 +123,14 @@ def inside(binary, case):
                     assert expected in logs(), 'Underlying error was hidden: ' + logs()
                 else:
                     wait_for(lambda: api('/vpn/status')['connected'])
+                    session_id = wait_for(lambda: api('/vpn/stats').get('sessionId'))
+                    assert api('/vpn/stats')['sessionId'] == session_id
+                    if case == 'clean':
+                        other = api('/configs', {'name':'Other profile', 'protocol':'CSQTT',
+                            'peer':'192.0.2.1:46000', 'password':'fixture', 'hashes':'fixture'})
+                        api('/configs/selected', {'id': other['id']}, method='PUT')
+                        assert api('/vpn/status')['configId'] == config['id'], 'Selection replaced active tunnel identity'
+                        api('/configs/selected', {'id': config['id']}, method='PUT')
                     marked = cmd('ip', '-4', 'route', 'get', '198.51.100.1', 'mark', '0x1062').stdout
                     assert 'dev lalune0' in marked, marked
                     assert 'dev wan0' in cmd('ip', '-4', 'route', 'show', 'default').stdout
@@ -137,6 +149,8 @@ def inside(binary, case):
                     if case == 'clean':
                         api('/vpn/connect', {'configId': config['id']})
                         wait_for(lambda: api('/vpn/status')['connected'])
+                        next_session = wait_for(lambda: api('/vpn/stats').get('sessionId'))
+                        assert next_session != session_id, 'Reconnect reused session ID'
                         api('/vpn/disconnect', {})
                 wait_for(lambda: cmd('ip', 'link', 'show', 'lalune0', check=False).returncode != 0)
                 if case == 'legacy':

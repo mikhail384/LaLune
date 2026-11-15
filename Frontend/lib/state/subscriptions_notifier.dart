@@ -70,6 +70,7 @@ class SubscriptionsNotifier extends StateNotifier<SubscriptionsState> {
   /// Подписка, по конфигу которой запущено текущее подключение (null — нет).
   String? _activeSubId;
   int? _activeConfigId;
+  String _activeSessionId = '';
   int _lastRx = 0;
   int _lastTx = 0;
   int _connectionGeneration = 0;
@@ -190,6 +191,10 @@ class SubscriptionsNotifier extends StateNotifier<SubscriptionsState> {
         }
         _replace(fresh.copyWith(usedBytes: latest.usedBytes,
             receivedBytes: latest.receivedBytes, sentBytes: latest.sentBytes,
+            trafficSessionId: latest.trafficSessionId,
+            trafficConfigId: latest.trafficConfigId,
+            trafficCheckpointRx: latest.trafficCheckpointRx,
+            trafficCheckpointTx: latest.trafficCheckpointTx,
             backendIds: mergedIds));
       } catch (e) {
         // сервер недоступен: оставляем прежние данные, показываем ошибку
@@ -268,6 +273,7 @@ class SubscriptionsNotifier extends StateNotifier<SubscriptionsState> {
   void beginConnection(String? subId, {int? configId}) {
     _activeSubId = subId;
     _activeConfigId = subId == null ? null : configId;
+    _activeSessionId = '';
     _lastRx = 0;
     _lastTx = 0;
     _connectionGeneration++;
@@ -295,15 +301,15 @@ class SubscriptionsNotifier extends StateNotifier<SubscriptionsState> {
         // to the previous configuration, even within the same subscription.
         _activeSubId = null;
         _activeConfigId = null;
+        _activeSessionId = '';
         _lastRx = 0;
         _lastTx = 0;
         _connectionGeneration++;
         subId = null;
       }
       // The VPN service can outlive the UI process. Recover ownership from
-      // the active backend config, but establish a baseline first: the
-      // cumulative tunnel counters may already have been recorded before the
-      // restart and must not be added twice.
+      // the active backend config and only reuse a persisted checkpoint if
+      // the backend confirms the same tunnel session.
       final resuming = subId == null;
       if (resuming) {
         if (vpn.configId <= 0) return;
@@ -325,22 +331,49 @@ class SubscriptionsNotifier extends StateNotifier<SubscriptionsState> {
             (configId > 0 && currentVpn.configId != configId)) return;
         final rx = ((j['rxBytes'] as num?) ?? 0).toInt();
         final tx = ((j['txBytes'] as num?) ?? 0).toInt();
+        if (rx < 0 || tx < 0) return;
+        final sessionId = (j['sessionId'] is String) ? j['sessionId'] as String : '';
+        final sub = _byId(ownerId);
+        if (sub == null) return;
         if (resuming) {
-          if (_activeSubId != null || state.ownerOf(configId)?.id != ownerId ||
-              rx < 0 || tx < 0) {
+          if (_activeSubId != null || state.ownerOf(configId)?.id != ownerId) {
             return;
           }
           _activeSubId = ownerId;
           _activeConfigId = configId;
-          _lastRx = rx;
-          _lastTx = tx;
-          return;
+          final canResume = sessionId.isNotEmpty &&
+              sessionId == sub.trafficSessionId && configId == sub.trafficConfigId &&
+              rx >= sub.trafficCheckpointRx && tx >= sub.trafficCheckpointTx &&
+              sub.trafficCheckpointRx >= 0 && sub.trafficCheckpointTx >= 0;
+          _lastRx = canResume ? sub.trafficCheckpointRx : rx;
+          _lastTx = canResume ? sub.trafficCheckpointTx : tx;
+        } else if (sessionId.isNotEmpty && _activeSessionId.isNotEmpty &&
+            sessionId != _activeSessionId) {
+          // The backend restarted the tunnel while the same config remained
+          // selected. Its counters belong to a new session.
+          _lastRx = 0;
+          _lastTx = 0;
         }
+        if (sessionId.isNotEmpty) _activeSessionId = sessionId;
         final rxDelta = trafficDelta(_lastRx, rx);
         final txDelta = trafficDelta(_lastTx, tx);
         _lastRx = rx;
         _lastTx = tx;
-        addDirectionalTraffic(ownerId, rxDelta, txDelta);
+        final checkpointChanged = sessionId.isNotEmpty && configId > 0 &&
+            (sessionId != sub.trafficSessionId || configId != sub.trafficConfigId ||
+             rx != sub.trafficCheckpointRx || tx != sub.trafficCheckpointTx);
+        if (rxDelta != 0 || txDelta != 0 || checkpointChanged) {
+          _replace(sub.copyWith(
+            usedBytes: sub.usedBytes + rxDelta + txDelta,
+            receivedBytes: sub.receivedBytes + rxDelta,
+            sentBytes: sub.sentBytes + txDelta,
+            trafficSessionId: checkpointChanged ? sessionId : null,
+            trafficConfigId: checkpointChanged ? configId : null,
+            trafficCheckpointRx: checkpointChanged ? rx : null,
+            trafficCheckpointTx: checkpointChanged ? tx : null,
+          ));
+          _saveSoon();
+        }
       } catch (_) {} finally {
         _tracking = false;
         if (identical(_trackCompletion, completion)) _trackCompletion = null;
@@ -350,6 +383,7 @@ class SubscriptionsNotifier extends StateNotifier<SubscriptionsState> {
       // отключились — следующее подключение начнёт новый учёт
       _activeSubId = null;
       _activeConfigId = null;
+      _activeSessionId = '';
       _lastRx = 0;
       _lastTx = 0;
       _connectionGeneration++;

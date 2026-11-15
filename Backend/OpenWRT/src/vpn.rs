@@ -93,6 +93,8 @@ pub struct VpnRuntime {
     pub connecting: AtomicBool,
     pub rx_bytes: Arc<AtomicU64>,
     pub tx_bytes: Arc<AtomicU64>,
+    pub session_id: Mutex<String>,
+    pub active_config_id: Mutex<i64>,
     pub started_at: Arc<Mutex<Option<Instant>>>,
     pub tun_conf: Arc<Mutex<Option<TunConf>>>,
     pub handle: Mutex<Option<crate::linux_tun::Session>>,
@@ -109,6 +111,8 @@ impl VpnRuntime {
             connecting: AtomicBool::new(false),
             rx_bytes: Arc::new(AtomicU64::new(0)),
             tx_bytes: Arc::new(AtomicU64::new(0)),
+            session_id: Mutex::new(String::new()),
+            active_config_id: Mutex::new(0),
             started_at: Arc::new(Mutex::new(None)),
             tun_conf: Arc::new(Mutex::new(None)),
             handle: Mutex::new(None),
@@ -153,6 +157,8 @@ impl VpnRuntime {
 
     pub async fn stop_tun(&self) {
         self.running.store(false, Ordering::Release);
+        self.session_id.lock().clear();
+        *self.active_config_id.lock() = 0;
         // Remove policy routing/iptables first so no new packet is sent to a
         // TUN that is about to disappear.
         let routing = { self.routing.lock().take() };
@@ -200,6 +206,7 @@ pub fn start_tun(runtime: Arc<VpnRuntime>, tun_ip: String, tun_dns: String, even
     *runtime.routing.lock() = Some(routing);
     *runtime.handle.lock() = Some(session);
     *runtime.started_at.lock() = Some(Instant::now());
+    *runtime.session_id.lock() = uuid::Uuid::new_v4().to_string();
     *runtime.tun_conf.lock() = Some(TunConf { ip: tun_ip.clone(), dns: tun_dns.clone(), mtu: TUN_MTU });
     events.emit(Event::named("tun_ready", serde_json::json!({
         "ip": tun_ip,

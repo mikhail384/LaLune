@@ -488,8 +488,10 @@ class Backend(private val context: Context) {
                 path == "/vpn/stats" && method == "GET" -> {
                     // Real counters from the TUN bridge, rates from the delta
                     // between two consecutive calls.
+                    val sessionBefore = LaLuneVpnService.snapshotSessionId
                     val rx = LaLuneVpnService.tunRxBytes.get()
                     val tx = LaLuneVpnService.tunTxBytes.get()
+                    val sessionAfter = LaLuneVpnService.snapshotSessionId
                     val now = System.currentTimeMillis()
                     val dt = (now - lastStatsAt).coerceAtLeast(1)
                     val rxRate = if (lastStatsAt > 0 && rx >= lastRx) (rx - lastRx) * 1000 / dt else 0L
@@ -497,6 +499,7 @@ class Backend(private val context: Context) {
                     lastStatsAt = now; lastRx = rx; lastTx = tx
                     200 to jsonOk(
                         "rxBytes" to rx, "txBytes" to tx,
+                        "sessionId" to if (sessionBefore == sessionAfter) sessionBefore else "",
                         "rxRate" to rxRate, "txRate" to txRate,
                         "activeSessions" to if (vpnConnected) LaLuneVpnService.snapshotActiveSessions else 0,
                         "socks5Port" to socks5Port

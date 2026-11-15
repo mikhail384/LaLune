@@ -140,6 +140,14 @@ def inside(binary, case):
                 assert not api('/vpn/status')['connected'],'Setup failure reported connected'
             else:
                 wait_for(lambda:api('/vpn/status')['connected'])
+                session_id=wait_for(lambda:api('/vpn/stats').get('sessionId'))
+                assert api('/vpn/stats')['sessionId']==session_id, 'Session ID changed while connected'
+                if case=='reconnect':
+                    other=api('/configs',{'name':'Other profile','protocol':protocol,
+                         'peer':'192.0.2.1:46000','password':'local-test','hashes':'local-test'})
+                    api('/configs/selected',{'id':other['id']},method='PUT')
+                    assert api('/vpn/status')['configId']==conf['id'], 'Selected profile replaced the active tunnel identity'
+                    api('/configs/selected',{'id':conf['id']},method='PUT')
                 assert 'local-test' not in json.dumps(api('/logs'), ensure_ascii=False), \
                     'Core arguments leaked the fixture password or hashes to logs'
                 link=cmd('ip','-details','link','show','dev','csqtt0').stdout
@@ -201,6 +209,9 @@ def inside(binary, case):
                     for _ in range(2):
                         api('/vpn/connect',{'configId':conf['id']})
                         wait_for(lambda:api('/vpn/status')['connected'])
+                        next_session=wait_for(lambda:api('/vpn/stats').get('sessionId'))
+                        assert next_session!=session_id, 'Reconnect reused a tunnel session ID'
+                        session_id=next_session
                         assert 'dev csqtt0' in cmd('ip','route','get','198.51.100.1','uid','0').stdout
                         api('/vpn/disconnect',{},timeout=1)
             wait_for(lambda:cmd('ip','link','show','csqtt0',check=False).returncode!=0)

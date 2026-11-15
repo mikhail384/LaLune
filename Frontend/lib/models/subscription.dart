@@ -205,6 +205,13 @@ class Subscription {
   final int receivedBytes;
   final int sentBytes;
 
+  // Last tunnel snapshot persisted together with the totals. A matching
+  // session can be resumed without either losing or counting bytes twice.
+  final String trafficSessionId;
+  final int trafficConfigId;
+  final int trafficCheckpointRx;
+  final int trafficCheckpointTx;
+
   /// SubConfig.key → id конфига в backend (конфиг создаётся при выборе).
   final Map<String, int> backendIds;
 
@@ -220,6 +227,10 @@ class Subscription {
     this.usedBytes = 0,
     this.receivedBytes = 0,
     this.sentBytes = 0,
+    this.trafficSessionId = '',
+    this.trafficConfigId = 0,
+    this.trafficCheckpointRx = 0,
+    this.trafficCheckpointTx = 0,
     this.backendIds = const {},
   });
 
@@ -237,6 +248,10 @@ class Subscription {
     int? usedBytes,
     int? receivedBytes,
     int? sentBytes,
+    String? trafficSessionId,
+    int? trafficConfigId,
+    int? trafficCheckpointRx,
+    int? trafficCheckpointTx,
     Map<String, int>? backendIds,
   }) =>
       Subscription(
@@ -251,6 +266,10 @@ class Subscription {
         usedBytes: usedBytes ?? this.usedBytes,
         receivedBytes: receivedBytes ?? this.receivedBytes,
         sentBytes: sentBytes ?? this.sentBytes,
+        trafficSessionId: trafficSessionId ?? this.trafficSessionId,
+        trafficConfigId: trafficConfigId ?? this.trafficConfigId,
+        trafficCheckpointRx: trafficCheckpointRx ?? this.trafficCheckpointRx,
+        trafficCheckpointTx: trafficCheckpointTx ?? this.trafficCheckpointTx,
         backendIds: backendIds ?? this.backendIds,
       );
 
@@ -265,6 +284,10 @@ class Subscription {
         'usedBytes': usedBytes,
         'receivedBytes': receivedBytes,
         'sentBytes': sentBytes,
+        'trafficSessionId': trafficSessionId,
+        'trafficConfigId': trafficConfigId,
+        'trafficCheckpointRx': trafficCheckpointRx,
+        'trafficCheckpointTx': trafficCheckpointTx,
         'backendIds': backendIds,
       };
 
@@ -282,6 +305,10 @@ class Subscription {
         usedBytes: (j['usedBytes'] as num?)?.toInt() ?? 0,
         receivedBytes: (j['receivedBytes'] as num?)?.toInt() ?? 0,
         sentBytes: (j['sentBytes'] as num?)?.toInt() ?? 0,
+        trafficSessionId: (j['trafficSessionId'] as String?) ?? '',
+        trafficConfigId: (j['trafficConfigId'] as num?)?.toInt() ?? 0,
+        trafficCheckpointRx: (j['trafficCheckpointRx'] as num?)?.toInt() ?? 0,
+        trafficCheckpointTx: (j['trafficCheckpointTx'] as num?)?.toInt() ?? 0,
         backendIds: ((j['backendIds'] as Map?) ?? const {}).map(
           (k, v) => MapEntry(k.toString(), (v as num).toInt()),
         ),
@@ -353,6 +380,10 @@ Subscription parseLaLuneSub(
     usedBytes: previous?.usedBytes ?? 0,
     receivedBytes: previous?.receivedBytes ?? 0,
     sentBytes: previous?.sentBytes ?? 0,
+    trafficSessionId: previous?.trafficSessionId ?? '',
+    trafficConfigId: previous?.trafficConfigId ?? 0,
+    trafficCheckpointRx: previous?.trafficCheckpointRx ?? 0,
+    trafficCheckpointTx: previous?.trafficCheckpointTx ?? 0,
     // id backend-конфигов сохраняем только для тех, что остались в подписке
     backendIds: {
       for (final c in configs)

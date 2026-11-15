@@ -88,6 +88,7 @@ class LaLuneVpnService : VpnService() {
 
         @Volatile var snapshotConnected: Boolean = false
         @Volatile var snapshotActiveSessions: Int = 0
+        @Volatile var snapshotSessionId: String = ""
         @Volatile var snapshotConfigId: Long = 0
         @Volatile var snapshotState: String = "disconnected"
         @Volatile var snapshotMessage: String = ""
@@ -151,8 +152,12 @@ class LaLuneVpnService : VpnService() {
 
     private fun startFlow() {
         Log.d(TAG, "startFlow")
+        // Empty during counter reset, so a concurrent reader cannot associate
+        // a previous session ID with the next session's counters.
+        snapshotSessionId = ""
         tunTxBytes.set(0)
         tunRxBytes.set(0)
+        snapshotSessionId = java.util.UUID.randomUUID().toString()
         flowJob?.cancel()
         flowJob = scope.launch {
             val logsFile = File(filesDir, "la-lune/logs.log")
@@ -526,6 +531,7 @@ class LaLuneVpnService : VpnService() {
         stopFlow()
         scope.cancel()
         snapshotConnected = false
+        snapshotSessionId = ""
         snapshotConfigId = 0
         snapshotState = "disconnected"
         snapshotMessage = ""

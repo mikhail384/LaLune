@@ -75,6 +75,8 @@ pub struct VpnRuntime {
     pub running: Arc<AtomicBool>,
     pub rx_bytes: Arc<AtomicU64>,
     pub tx_bytes: Arc<AtomicU64>,
+    pub session_id: Mutex<String>,
+    pub active_config_id: Mutex<i64>,
     pub started_at: Arc<Mutex<Option<Instant>>>,
     pub tun_conf: Arc<Mutex<Option<TunConf>>>,
     pub bypass_routes: Arc<Mutex<Vec<String>>>,
@@ -108,6 +110,8 @@ impl VpnRuntime {
             running: Arc::new(AtomicBool::new(false)),
             rx_bytes: Arc::new(AtomicU64::new(0)),
             tx_bytes: Arc::new(AtomicU64::new(0)),
+            session_id: Mutex::new(String::new()),
+            active_config_id: Mutex::new(0),
             started_at: Arc::new(Mutex::new(None)),
             tun_conf: Arc::new(Mutex::new(None)),
             bypass_routes: Arc::new(Mutex::new(Vec::new())),
@@ -178,6 +182,8 @@ impl VpnRuntime {
 
     pub async fn stop_tun(&self) {
         self.running.store(false, Ordering::Release);
+        self.session_id.lock().clear();
+        *self.active_config_id.lock() = 0;
         #[cfg(target_os = "windows")]
         {
             // Invalidate both bridge threads before dropping the Wintun session.
@@ -584,6 +590,7 @@ fn start_tun_windows(
     let generation = runtime.tun_generation.fetch_add(1, Ordering::AcqRel) + 1;
     runtime.running.store(true, Ordering::Release);
     *runtime.started_at.lock() = Some(Instant::now());
+    *runtime.session_id.lock() = uuid::Uuid::new_v4().to_string();
 
     if full_tunnel {
         setup_routes(&runtime, &tun_ip, &tun_dns, &events);
@@ -714,6 +721,7 @@ fn start_tun_linux(
     )?;
     *runtime.handle.lock() = Some(session);
     *runtime.started_at.lock() = Some(Instant::now());
+    *runtime.session_id.lock() = uuid::Uuid::new_v4().to_string();
     *runtime.tun_conf.lock() = Some(TunConf { ip: tun_ip, dns: tun_dns, mtu: TUN_MTU });
     events.emit(Event::log(if full_tunnel {
         "[TUN] bridge started (Linux full tunnel)"
@@ -773,6 +781,7 @@ fn start_tun_macos(
     )?;
     *runtime.handle.lock() = Some(session);
     *runtime.started_at.lock() = Some(Instant::now());
+    *runtime.session_id.lock() = uuid::Uuid::new_v4().to_string();
     *runtime.tun_conf.lock() = Some(TunConf { ip: tun_ip, dns: tun_dns, mtu: TUN_MTU });
     events.emit(Event::log(if full_tunnel {
         "[TUN] bridge started (macOS full tunnel)"

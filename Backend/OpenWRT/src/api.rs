@@ -496,6 +496,7 @@ async fn vpn_connect(State(state): State<Arc<AppState>>, Json(body): Json<Connec
     let readiness = core.readiness();
     *state.core.lock() = Some(core);
     *state.active_vk_calls.lock() = auto_calls;
+    *state.vpn.active_config_id.lock() = config.id;
     *state.selected_config.write() = Some(config);
 
     if settings.share_vpn {
@@ -596,7 +597,9 @@ async fn vpn_disconnect(State(state): State<Arc<AppState>>) -> impl IntoResponse
 }
 
 async fn vpn_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let cfg_id = state.selected_config.read().as_ref().map(|c| c.id).unwrap_or(0);
+    let selected_id = state.selected_config.read().as_ref().map(|c| c.id).unwrap_or(0);
+    let active_id = *state.vpn.active_config_id.lock();
+    let cfg_id = if active_id != 0 { active_id } else { selected_id };
     let mut s = state.vpn.status(cfg_id);
     if !s.connected && (state.vpn.connecting.load(std::sync::atomic::Ordering::Acquire) || !core_stopped(&state)) {
         s.state = "connecting".into();
@@ -621,11 +624,14 @@ async fn vpn_reconnect(state: State<Arc<AppState>>) -> impl IntoResponse {
 }
 
 async fn vpn_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let session_before = state.vpn.session_id.lock().clone();
     let s = state.vpn.stats();
+    let session_after = state.vpn.session_id.lock().clone();
     let socks5_port = *state.socks5_port.read();
     Json(json!({
         "rxBytes": s.rx_bytes,
         "txBytes": s.tx_bytes,
+        "sessionId": if session_before == session_after { session_before } else { String::new() },
         "rxRate": s.rx_rate,
         "txRate": s.tx_rate,
         "activeSessions": s.active_sessions,
