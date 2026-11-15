@@ -1,0 +1,54 @@
+name: Release macOS no-Metal preview
+on:
+  push:
+    branches: [codex/release-macos-nometal-1]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  release:
+    if: github.ref == 'refs/heads/codex/release-macos-nometal-1'
+    runs-on: macos-15-intel
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.5'
+          channel: stable
+          architecture: x64
+      - name: Build and package
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./Mac/NoMetal/build.sh
+          codesign --verify --deep --strict Output/LaLune-NoMetal.app
+          file Output/LaLune-NoMetal.app/Contents/MacOS/LaLune
+          ditto -c -k --sequesterRsrc --keepParent Output/LaLune-NoMetal.app Output/LaLune-macOS-NoMetal-Intel.zip
+          cd Output
+          shasum -a 256 LaLune-macOS-NoMetal-Intel.zip > LaLune-macOS-NoMetal-Intel.sha256
+      - name: Publish preview release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG=0.9.12-macos-nometal.1
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; refusing to overwrite it." >&2
+            exit 1
+          fi
+          cat > "$RUNNER_TEMP/release-notes.md" <<'NOTES'
+          Экспериментальная версия LaLune для Intel Mac с оригинальным интерфейсом, работающая без Metal и без Chrome. Требуется macOS с установленными Apple Command Line Tools (в том числе Python 3). При запуске служба VPN запрашивает пароль администратора.
+
+          Сборка основана на исходниках LaLune 0.9.12 из коммита `412d9b37548a269690dffd214d4218195158516e` и не содержит более поздние изменения, включая ToTS. Приложение не нотариализовано.
+
+          Проверены сборка и запуск интерфейса на Intel Mac. Реальное VPN-подключение, Apple Silicon, подписки и работа с OpenWRT не проверены. Не используйте этот выпуск как замену стабильных сборок для других платформ.
+          NOTES
+          gh release create "$TAG" \
+            Output/LaLune-macOS-NoMetal-Intel.zip \
+            Output/LaLune-macOS-NoMetal-Intel.sha256 \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "LaLune 0.9.12 — macOS без Metal (тестовая версия)" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" --prerelease
