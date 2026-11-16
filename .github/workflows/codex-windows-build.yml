@@ -113,8 +113,10 @@ jobs:
         run: |
           $env:APPDATA = Join-Path $env:RUNNER_TEMP 'lalune-ui-appdata'
           New-Item -ItemType Directory -Force $env:APPDATA | Out-Null
+          New-Item -ItemType Directory -Force "$env:APPDATA/.la-lune" | Out-Null
+          Set-Content -LiteralPath "$env:APPDATA/.la-lune/LaLuneManager.exe" -Value 'old-backend-fixture'
           $release = 'Frontend/build/windows/x64/runner/Release'
-          $runner = Get-ChildItem "$release/*.exe" | Where-Object { $_.Name -ne 'LaLuneManager.exe' } | Select-Object -First 1
+          $runner = Get-Item "$release/lalune.exe" -ErrorAction SilentlyContinue
           if (-not $runner) { throw 'Flutter runner missing' }
           $process = Start-Process -FilePath $runner.FullName -WorkingDirectory $runner.DirectoryName -WindowStyle Hidden -PassThru
           try {
@@ -128,6 +130,7 @@ jobs:
             $process.Refresh()
             if ($process.HasExited -or -not $ready) { throw 'Windows application or bundled backend did not start' }
             if (-not (Test-Path "$env:APPDATA/.la-lune/wintun.dll")) { throw 'Bundled Wintun was not installed' }
+            if (-not ((Get-Content -LiteralPath "$env:APPDATA/.la-lune/LaLuneManager.exe" -Raw).Contains('old-backend-fixture'))) { throw 'Existing backend was unexpectedly overwritten' }
           } finally {
             try { Invoke-RestMethod -Uri 'http://127.0.0.1:1062/shutdown' -Method Post -TimeoutSec 2 | Out-Null } catch {}
             Stop-Process -Id $process.Id -ErrorAction SilentlyContinue

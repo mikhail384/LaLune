@@ -291,7 +291,11 @@ jobs:
           Invoke-WebRequest -Uri 'https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-windows-amd64.zip' -OutFile $archive -TimeoutSec 120
           if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne '99185d75d314a07dbba4a130c8ad986cbeb629a07927975636b341ca61f991df') { throw 'sing-box checksum mismatch' }
           Expand-Archive $archive -DestinationPath (Join-Path $env:RUNNER_TEMP 'sing-box-bundle')
-          python -c "import zipfile,os,pathlib; root=pathlib.Path(os.environ['RUNNER_TEMP'])/'sing-box-bundle'/'sing-box-1.14.4-windows-amd64'; z=zipfile.ZipFile('Output/LaLune-Windows.zip','a',zipfile.ZIP_DEFLATED); z.write(root/'sing-box.exe','sing-box.exe'); z.write(root/'LICENSE','SING-BOX-LICENSE.txt'); z.close()"
+          $wintun = Join-Path $env:RUNNER_TEMP 'wintun-release.zip'
+          Invoke-WebRequest -Uri 'https://www.wintun.net/builds/wintun-0.14.1.zip' -OutFile $wintun -TimeoutSec 90
+          if ((Get-FileHash $wintun -Algorithm SHA256).Hash.ToLowerInvariant() -ne '07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51') { throw 'Wintun checksum mismatch' }
+          Expand-Archive $wintun -DestinationPath (Join-Path $env:RUNNER_TEMP 'wintun-bundle')
+          python -c "import zipfile,os,pathlib; root=pathlib.Path(os.environ['RUNNER_TEMP']); sing=root/'sing-box-bundle'/'sing-box-1.14.4-windows-amd64'; wintun=root/'wintun-bundle'/'wintun'; z=zipfile.ZipFile('Output/LaLune-Windows.zip','a',zipfile.ZIP_DEFLATED); z.write(sing/'sing-box.exe','sing-box.exe'); z.write(sing/'LICENSE','SING-BOX-LICENSE.txt'); z.write(wintun/'bin'/'amd64'/'wintun.dll','wintun.dll'); z.write(wintun/'LICENSE.txt','WINTUN-LICENSE.txt'); z.close()"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - uses: actions/upload-artifact@v4

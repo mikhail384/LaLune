@@ -116,6 +116,16 @@ static bool file_exists(const std::wstring& path) {
   return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
 }
 
+static std::wstring bundled_file(const wchar_t* name) {
+  wchar_t exe_path[MAX_PATH];
+  DWORD n = GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
+  if (n == 0 || n >= MAX_PATH) return L"";
+  std::wstring folder(exe_path, n);
+  size_t slash = folder.find_last_of(L"\\/");
+  if (slash == std::wstring::npos) return L"";
+  return folder.substr(0, slash) + L"\\" + name;
+}
+
 // A portable bundle may carry the backend and signed Wintun DLL next to the
 // runner. Install only missing files; never overwrite an existing installation.
 static void install_bundled_backend() {
@@ -165,7 +175,8 @@ static bool backend_alive() {
 
 static void start_backend() {
   install_bundled_backend();
-  std::wstring mgr = manager_exe();
+  std::wstring bundled = bundled_file(L"LaLuneManager.exe");
+  std::wstring mgr = file_exists(bundled) ? bundled : manager_exe();
 
   if (!file_exists(mgr)) {
     OutputDebugStringW(L"[LaLune] LaLuneManager.exe not found\n");

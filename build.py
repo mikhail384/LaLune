@@ -351,6 +351,9 @@ def package_windows(
     clean_dir(OUTPUT)
 
     # LaLune-Windows.zip ← весь каталог Frontend/build/.../Release/
+    # Keep the backend with the runner so an existing installation cannot
+    # silently launch an older, incompatible backend after updating the UI.
+    shutil.copy2(backend_bin, frontend_dir / "LaLuneManager.exe")
     lalune_zip = OUTPUT / "LaLune-Windows.zip"
     status("INFO", f"packaging {lalune_zip.name}…")
     zip_dir(frontend_dir, lalune_zip)
