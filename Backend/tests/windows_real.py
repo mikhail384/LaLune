@@ -135,7 +135,9 @@ except Exception as error:
         print('Windows backend state:', api('/vpn/status').get('state'), flush=True)
         logs = json.dumps(api('/logs'), ensure_ascii=False).lower()
         print('Windows diagnostic markers:', {word: word in logs for word in
-            ('getconf', 'dtls', 'timeout', 'wintun', 'tun start failed')}, flush=True)
+            ('getconf', 'dtls', 'timeout', 'wintun', 'tun start failed',
+             'captcha', 'капч', 'auth', 'авторизац', 'turn', 'relay',
+             'connection refused', 'network unreachable', 'invalid')}, flush=True)
     except Exception:
         pass
     raise SystemExit(1)
