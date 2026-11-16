@@ -7,10 +7,10 @@ import time
 import urllib.request
 
 
-def api(path, body=None):
+def api(path, body=None, method=None):
     request = urllib.request.Request('http://127.0.0.1:1062' + path,
         data=None if body is None else json.dumps(body).encode(),
-        headers={'Content-Type': 'application/json'})
+        headers={'Content-Type': 'application/json'}, method=method)
     with urllib.request.urlopen(request, timeout=8) as response:
         return json.load(response)
 
@@ -66,6 +66,44 @@ def exercise(config_id, label):
     wait_for(lambda: not api('/vpn/status').get('connected'), timeout=15)
 
 
+def public_address():
+    result = subprocess.run(['curl.exe', '-4', '--noproxy', '*', '-fsS',
+                             '--max-time', '30', 'https://api.ipify.org'],
+                            capture_output=True, text=True, timeout=35)
+    if result.returncode:
+        raise RuntimeError('public address check failed')
+    import ipaddress
+    return str(ipaddress.IPv4Address(result.stdout.strip()))
+
+
+def exercise_split(config_id, baseline, mode, kind):
+    curl = os.path.join(os.environ['SystemRoot'], 'System32', 'curl.exe')
+    settings = {
+        'windowsSplitEnabled': True, 'windowsSplitMode': mode,
+        'windowsSplitPrograms': curl if kind == 'process' else '',
+        'windowsSplitDomains': 'api.ipify.org' if kind == 'domain' else '',
+        'ipRoutingIps': '', 'desktopSocks5Mode': False,
+    }
+    api('/settings', settings, method='PATCH')
+    api('/vpn/connect', {'configId': config_id})
+    wait_for(lambda: api('/vpn/status').get('connected'))
+    before = api('/vpn/stats')
+    actual = public_address()
+    after = api('/vpn/stats')
+    should_use_tunnel = mode == 'whitelist'
+    if should_use_tunnel:
+        if actual == baseline:
+            raise RuntimeError('selected traffic did not change public address')
+        if not (after.get('rxBytes', 0) > before.get('rxBytes', 0) and
+                after.get('txBytes', 0) > before.get('txBytes', 0)):
+            raise RuntimeError('split tunnel counters did not increase')
+    elif actual != baseline:
+        raise RuntimeError('excluded traffic did not use the original route')
+    print('Windows split routing:', mode, kind, 'public route and HTTPS passed', flush=True)
+    api('/vpn/disconnect', {})
+    wait_for(lambda: not api('/vpn/status').get('connected'), timeout=20)
+
+
 secret = os.environ.get('LALUNE_WINDOWS_TEST_LINK', '')
 if not secret:
     raise SystemExit('Missing private test profile')
@@ -79,11 +117,18 @@ try:
     exercise(config['id'], 'initial')
     time.sleep(3)
     exercise(config['id'], 'reconnect')
+    baseline = public_address()
+    for mode in ('whitelist', 'blacklist'):
+        for kind in ('process', 'domain'):
+            exercise_split(config['id'], baseline, mode, kind)
 except Exception as error:
     print('Windows CSQTTR test failed:', type(error).__name__, flush=True)
     allowed = {'connection timeout', 'test profile import failed',
                'test route does not use Wintun', 'HTTPS data test failed',
-               'Wintun traffic counters did not increase'}
+               'Wintun traffic counters did not increase', 'public address check failed',
+               'selected traffic did not change public address',
+               'split tunnel counters did not increase',
+               'excluded traffic did not use the original route'}
     if type(error) is RuntimeError and str(error) in allowed:
         print('Windows test stage:', str(error), flush=True)
     try:
