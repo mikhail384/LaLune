@@ -117,6 +117,15 @@ pub fn alive(runtime: &crate::vpn::VpnRuntime) -> bool {
     runtime.split_router.lock().as_mut().is_some_and(|router| matches!(router.child.try_wait(), Ok(None)))
 }
 
+#[cfg(target_os = "windows")]
+pub fn interface_ready() -> bool {
+    use std::os::windows::process::CommandExt;
+    let script = "if ((Get-NetIPAddress -InterfaceAlias 'LaLune-Routing' -AddressFamily IPv4 -IPAddress '172.29.252.1' -ErrorAction SilentlyContinue | Where-Object AddressState -eq Preferred) -and (Get-NetRoute -InterfaceAlias 'LaLune-Routing' -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.DestinationPrefix -in @('0.0.0.0/0','0.0.0.0/1','128.0.0.0/1') })) { exit 0 } else { exit 1 }";
+    std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .creation_flags(0x08000000).output().is_ok_and(|out| out.status.success())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode { Blacklist, Whitelist }
 
