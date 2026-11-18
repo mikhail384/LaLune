@@ -85,9 +85,12 @@ Widget _glassLayer(
   return RepaintBoundary(
     child: ClipRRect(
       borderRadius: borderRadius,
-      child: BackdropGroup.of(context) == null
-          ? BackdropFilter(filter: filter, child: stack)
-          : BackdropFilter.grouped(filter: filter, child: stack),
+      // Keep modal blur local to the dialog. Joining the app-level
+      // BackdropGroup can wash out the whole route while a modal is open.
+      child: BackdropFilter(
+        filter: filter,
+        child: stack,
+      ),
     ),
   );
 }

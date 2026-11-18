@@ -10,7 +10,7 @@ Future<String?> showQrScannerDialog(BuildContext context) {
   return showDialog<String>(
     context: context,
     barrierDismissible: true,
-    barrierColor: Colors.black.withOpacity(0.64),
+    barrierColor: Colors.transparent,
     useRootNavigator: true,
     builder: (_) => const _QrScannerDialog(),
   );

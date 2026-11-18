@@ -105,7 +105,7 @@ class _InfoPageState extends ConsumerState<InfoPage> {
 
     await showDialog<void>(
       context: context,
-      barrierColor: Colors.black.withOpacity(0.65),
+      barrierColor: Colors.transparent,
       builder: (ctx) => GlassDialog(
         backgroundColor: Colors.transparent,
         insetPadding: const EdgeInsets.all(20),

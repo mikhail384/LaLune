@@ -17,7 +17,7 @@ import '../state/router_notifier.dart';
 Future<RouterInfo?> showRouterModal(BuildContext context) {
   return showDialog<RouterInfo>(
     context: context,
-    barrierColor: Colors.black.withOpacity(0.65),
+    barrierColor: Colors.transparent,
     builder: (_) => const _RouterModal(),
   );
 }

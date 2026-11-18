@@ -39,7 +39,7 @@ Future<AddConfigResult?> showAddConfigDialog(BuildContext context) {
   return showDialog<AddConfigResult>(
     context: context,
     barrierDismissible: true,
-    barrierColor: Colors.black.withOpacity(0.55),
+    barrierColor: Colors.transparent,
     useRootNavigator: true,
     builder: (_) => const _AddConfigDialog(),
   );

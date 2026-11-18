@@ -11,7 +11,7 @@ import '../state/router_scanner.dart';
 Future<String?> showOpenWrtActionDialog(BuildContext context) {
   return showDialog<String>(
     context: context,
-    barrierColor: Colors.black.withOpacity(0.65),
+    barrierColor: Colors.transparent,
     builder: (context) => GlassAlertDialog(
       title: const Text('OpenWRT'),
       content: const Text('Что сделать с роутером?'),
@@ -38,7 +38,7 @@ Future<String?> showOpenWrtActionDialog(BuildContext context) {
 Future<void> showOpenWrtInstallFlow(BuildContext context) async {
   final host = await showDialog<String>(
     context: context,
-    barrierColor: Colors.black.withOpacity(0.65),
+    barrierColor: Colors.transparent,
     builder: (_) => const _SshHostModal(),
   );
   if (host == null || !context.mounted) return;
@@ -56,7 +56,7 @@ Future<void> showOpenWrtInstallFlow(BuildContext context) async {
   await showDialog<void>(
     context: context,
     barrierDismissible: false,
-    barrierColor: Colors.black.withOpacity(0.7),
+    barrierColor: Colors.transparent,
     builder: (_) => _InstallProgressDialog(
       host: host,
       username: credentials.username,
@@ -78,7 +78,7 @@ Future<_SshCredentials?> _showCredentialsDialog(
 ) {
   return showDialog<_SshCredentials>(
     context: context,
-    barrierColor: Colors.black.withOpacity(0.65),
+    barrierColor: Colors.transparent,
     builder: (_) => _SshCredentialsDialog(host: host),
   );
 }

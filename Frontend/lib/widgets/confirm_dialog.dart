@@ -14,7 +14,7 @@ Future<bool?> showConfirmDialog(
 }) {
   return showDialog<bool>(
     context: context,
-    barrierColor: Colors.black.withOpacity(0.55),
+    barrierColor: Colors.transparent,
     builder: (ctx) => GlassAlertDialog(
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),

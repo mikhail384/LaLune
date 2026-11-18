@@ -270,7 +270,7 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
   Future<void> _confirmDelete(int id) async {
     final ok = await showDialog<bool>(
       context: context,
-      barrierColor: Colors.black.withOpacity(0.55),
+      barrierColor: Colors.transparent,
       builder: (ctx) => GlassAlertDialog(
           shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
@@ -357,7 +357,7 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
   Future<void> _confirmDeleteSub(Subscription sub) async {
     final ok = await showDialog<bool>(
       context: context,
-      barrierColor: Colors.black.withOpacity(0.55),
+      barrierColor: Colors.transparent,
       builder: (ctx) => GlassAlertDialog(
           shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
