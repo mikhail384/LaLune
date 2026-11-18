@@ -7,6 +7,7 @@
 import 'package:flutter/material.dart';
 
 import '../widgets/glass_dialog.dart';
+import '../widgets/glass_select.dart';
 import '../widgets/toast.dart';
 
 class AddConfigResult {
@@ -26,7 +27,7 @@ const _protocols = <String>[
 String _placeholderFor(String protocol) {
   switch (protocol) {
     case 'LaLuneSUB':
-      return 'https://… или data:application/json;base64,…';
+      return 'http(s)://… или data:application/json;base64,…';
     case 'ToTS':
       return 'tots://eyJ2ZXJzaW9uIjoxLC4uLn0';
     default:
@@ -104,7 +105,6 @@ class _AddConfigDialogState extends State<_AddConfigDialog>
   Widget build(BuildContext context) {
     final keyboardVisible = MediaQuery.viewInsetsOf(context).bottom > 0;
     return GlassAlertDialog(
-      backgroundColor: const Color(0xFF0F1540),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: BorderSide(color: Colors.white.withOpacity(0.1)),
@@ -131,49 +131,33 @@ class _AddConfigDialogState extends State<_AddConfigDialog>
                 style: TextStyle(fontSize: 12, color: Colors.white70),
               ),
               const SizedBox(height: 6),
-              DropdownButtonFormField<String>(
+              GlassSelectField(
                 value: _protocol,
-                isExpanded: true,
-                dropdownColor: const Color(0xFF0F1540),
-                style: const TextStyle(fontSize: 13, color: Colors.white),
-                decoration: const InputDecoration(
-                  isDense: true,
-                  border: OutlineInputBorder(),
-                ),
-                items: _protocols.map((p) {
-                  final isRisky = p == 'CSQTT 2.5.1';
-                  return DropdownMenuItem<String>(
-                    value: p,
-                    child: Row(
-                      children: [
-                        Expanded(child: Text(p, overflow: TextOverflow.ellipsis)),
-                        if (isRisky)
-                          IconButton(
-                            tooltip: 'Предупреждение о CSQTT 2.5.1',
-                            visualDensity: VisualDensity.compact,
-                            constraints: const BoxConstraints(
-                              minWidth: 32,
-                              minHeight: 32,
-                            ),
-                            onPressed: () => Toast.show(
-                              context,
-                              'CSQTT 2.5.1: возможны проблемы с DTLS, совместимостью соединения и стабильностью туннеля. Если подключение не работает, попробуйте CSQTT 2.1.9.',
-                              duration: const Duration(seconds: 5),
-                            ),
-                            icon: const Icon(
-                              Icons.warning_amber_rounded,
-                              color: Color(0xFFF7E84E),
-                              size: 19,
-                            ),
-                          ),
-                      ],
+                items: _protocols,
+                title: 'Протокол',
+                trailingBuilder: (context, value) {
+                  if (value != 'CSQTT 2.5.1') return null;
+                  return IconButton(
+                    tooltip: 'Предупреждение о CSQTT 2.5.1',
+                    visualDensity: VisualDensity.compact,
+                    constraints: const BoxConstraints(
+                      minWidth: 32,
+                      minHeight: 32,
+                    ),
+                    onPressed: () => Toast.show(
+                      context,
+                      'CSQTT 2.5.1: возможны проблемы с DTLS, совместимостью соединения и стабильностью туннеля. Если подключение не работает, попробуйте CSQTT 2.1.9.',
+                      duration: const Duration(seconds: 5),
+                    ),
+                    icon: const Icon(
+                      Icons.warning_amber_rounded,
+                      color: Color(0xFFE5484D),
+                      size: 19,
                     ),
                   );
-                }).toList(),
+                },
                 onChanged: (value) {
-                  if (value != null && mounted) {
-                    setState(() => _protocol = value);
-                  }
+                  if (mounted) setState(() => _protocol = value);
                 },
               ),
               const SizedBox(height: 14),

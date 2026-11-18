@@ -95,6 +95,7 @@ void main() {
 
   group('helpers', () {
     test('subscription detection', () {
+      expect(looksLikeSubscription('http://a.b/sub'), isTrue);
       expect(looksLikeSubscription('https://a.b/sub'), isTrue);
       expect(looksLikeSubscription('LaLuneSUB:https://a.b/sub'), isTrue);
       expect(looksLikeSubscription('data:application/json,{}'), isTrue);
@@ -215,7 +216,7 @@ void main() {
         return _resp('no', 503);
       });
       expect(
-          jsonDecode(await fetchSubscriptionText('https://x.test/ok',
+          jsonDecode(await fetchSubscriptionText('http://x.test/ok',
               client: client))['traffic'],
           '10TB');
       await expectLater(

@@ -68,9 +68,8 @@ Backend.shared.run()  // запускает HTTP-сервер на 127.0.0.1:106
   сервер ядра и IP-исключения идут через физический шлюз), DNS через `networksetup` с откатом при отключении.
 * Приложение: `Frontend/macos`; `AppDelegate.swift` при старте запускает `Contents/Resources/lalune-backend`
   через штатный диалог пароля администратора и шлёт `POST /shutdown` при выходе. Sandbox отключён.
-* Тестовый workflow `codex-macos-build.yml` собирает универсальный бэкенд,
-  DMG и нативные ядра CSQTT/CSQTTR для Apple Silicon; при отсутствии отдельного
-  пользовательского ядра они используются из пакета. Intel использует x86-64 ядра.
+* Основной workflow `.github/workflows/build.yml` собирает универсальный macOS-бэкенд
+  (x86-64 + Apple Silicon), Flutter-приложение и упаковывает `.app` в ZIP.
 * Облачный Mac проверил запуск приложения, обмен пакетом через utun с локальным
   эхо-ядром для CSQTT и CSQTTR, а также реальный CSQTTR с HTTPS 200, ростом
   счётчиков и восстановлением DNS. Реальный CSQTT и личный Mac не проверены.

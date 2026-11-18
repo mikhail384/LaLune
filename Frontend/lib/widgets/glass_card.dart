@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 import 'dart:ui';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 class GlassCard extends StatelessWidget {
@@ -16,8 +18,8 @@ class GlassCard extends StatelessWidget {
     required this.child,
     this.padding = const EdgeInsets.all(16),
     this.radius = 14,
-    this.opacity = 0.08,
-    this.blur = 14,
+    this.opacity = 0.07,
+    this.blur = 12,
     this.onTap,
   });
 
@@ -33,12 +35,24 @@ class GlassCard extends StatelessWidget {
       decoration: decoration,
       child: child,
     );
-    final filter = ImageFilter.blur(sigmaX: blur, sigmaY: blur);
-    final card = ClipRRect(
-      borderRadius: BorderRadius.circular(radius),
-      child: BackdropGroup.of(context) == null
-          ? BackdropFilter(filter: filter, child: surface)
-          : BackdropFilter.grouped(filter: filter, child: surface),
+
+    // High-sigma backdrop blur is very expensive on Android GPUs. Keep the
+    // desktop look, but cap mobile blur and share filters through BackdropGroup
+    // when the root shell provides one.
+    final effectiveBlur =
+        !kIsWeb && defaultTargetPlatform == TargetPlatform.android && blur > 7
+            ? 7.0
+            : blur;
+    final filter =
+        ImageFilter.blur(sigmaX: effectiveBlur, sigmaY: effectiveBlur);
+    final filtered = BackdropGroup.of(context) == null
+        ? BackdropFilter(filter: filter, child: surface)
+        : BackdropFilter.grouped(filter: filter, child: surface);
+    final card = RepaintBoundary(
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(radius),
+        child: filtered,
+      ),
     );
 
     if (onTap == null) return card;

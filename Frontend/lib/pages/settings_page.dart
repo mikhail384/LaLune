@@ -14,6 +14,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../widgets/glass_dialog.dart';
+import '../widgets/glass_select.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/config_item.dart';
@@ -784,7 +785,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               Switch(
                 value: enabled,
                 onChanged: (v) => _setTotsProviderEnabled(provider, v),
-                activeColor: const Color(0xFFF7E84E),
+                activeColor: const Color(0xFFE5484D),
               ),
             ],
           ),
@@ -1001,7 +1002,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   value: vk.progress / 100.0,
                   backgroundColor: Colors.white.withOpacity(0.1),
                   valueColor:
-                      const AlwaysStoppedAnimation(Color(0xFFF7E84E)),
+                      const AlwaysStoppedAnimation(Color(0xFFE5484D)),
                   minHeight: 4,
                 ),
                 const SizedBox(height: 6),
@@ -1140,7 +1141,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             icon: const Icon(Icons.router, size: 16),
             label: const Text('Подключить OpenWRT'),
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF4A6CF7),
+              backgroundColor: const Color(0xFF2FBF71),
               foregroundColor: Colors.white,
               padding: const EdgeInsets.symmetric(vertical: 12),
               shape: RoundedRectangleBorder(
@@ -1201,12 +1202,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(
                   color: active
-                      ? const Color(0xFF4A6CF7).withOpacity(0.14)
+                      ? const Color(0xFF2FBF71).withOpacity(0.14)
                       : Colors.white.withOpacity(0.03),
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(
                     color: active
-                        ? const Color(0xFF4A6CF7).withOpacity(0.5)
+                        ? const Color(0xFF2FBF71).withOpacity(0.5)
                         : Colors.white.withOpacity(0.08),
                   ),
                 ),
@@ -1266,12 +1267,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             decoration: BoxDecoration(
               color: selected
-                  ? const Color(0xFF4A6CF7).withOpacity(0.18)
+                  ? const Color(0xFF2FBF71).withOpacity(0.18)
                   : Colors.white.withOpacity(0.02),
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
                 color: selected
-                    ? const Color(0xFF4A6CF7).withOpacity(0.55)
+                    ? const Color(0xFF2FBF71).withOpacity(0.55)
                     : Colors.white.withOpacity(0.08),
               ),
             ),
@@ -1283,7 +1284,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       : Icons.radio_button_off,
                   size: 18,
                   color: selected
-                      ? const Color(0xFF4A6CF7)
+                      ? const Color(0xFF2FBF71)
                       : Colors.white.withOpacity(0.4),
                 ),
                 const SizedBox(width: 12),
@@ -1439,16 +1440,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           const SizedBox(width: 8),
           Expanded(
             flex: 3,
-            child: DropdownButtonFormField<String>(
-              isExpanded: true,
+            child: GlassSelectField(
               value: items.contains(value) ? value : items.first,
-              dropdownColor: const Color(0xFF0F1540),
-              items: items
-                  .map((v) => DropdownMenuItem(value: v, child: Text(v, overflow: TextOverflow.ellipsis, maxLines: 1)))
-                  .toList(),
-              onChanged: (v) {
-                if (v != null) onChanged(v);
-              },
+              items: items,
+              title: label,
+              onChanged: onChanged,
             ),
           ),
         ],
@@ -1468,7 +1464,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           Switch(
             value: value,
             onChanged: onChanged,
-            activeColor: const Color(0xFFF7E84E),
+            activeColor: const Color(0xFFE5484D),
           ),
         ],
       ),

@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 import 'dart:ui';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+
+import '../theme/app_theme.dart';
 
 import '../theme/assets.dart';
 
@@ -44,12 +48,14 @@ class NavBar extends StatelessWidget {
         }),
       ),
     );
+    final sigma =
+        !kIsWeb && defaultTargetPlatform == TargetPlatform.android ? 7.0 : 14.0;
+    final filter = ImageFilter.blur(sigmaX: sigma, sigmaY: sigma);
     final content = ClipRRect(
       borderRadius: borderRadius,
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-        child: bar,
-      ),
+      child: BackdropGroup.of(context) == null
+          ? BackdropFilter(filter: filter, child: bar)
+          : BackdropFilter.grouped(filter: filter, child: bar),
     );
 
     return RepaintBoundary(
@@ -89,7 +95,7 @@ class _NavButtonState extends State<_NavButton> {
   Widget build(BuildContext context) {
     final active = widget.selected;
     final scale = _hover ? 0.92 : 1.0;
-    const activeColor = Color(0xFF8FA9FF);
+    const activeColor = kAccentGreen;
 
     final chipColor = active
         ? activeColor.withOpacity(0.12)

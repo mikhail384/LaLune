@@ -21,6 +21,7 @@
 //   Тогда все API-запросы идут на IP роутера. Сверху показывается
 //   зелёный баннер. При отключении — возврат на 127.0.0.1.
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -92,11 +93,18 @@ class _RootShellState extends ConsumerState<RootShell> {
   void _onNavSelect(int i) {
     if (i == _currentPage || i < 0 || i >= 4) return;
     setState(() => _currentPage = i);
-    _pageController.animateToPage(
-      i,
-      duration: _pageTransitionDuration,
-      curve: Curves.easeInOutCubic,
-    );
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      // Sliding four backdrop-heavy pages at once is noticeably expensive on
+      // mobile GPUs. Android gets an immediate tab switch; desktop keeps the
+      // animated transition.
+      _pageController.jumpToPage(i);
+    } else {
+      _pageController.animateToPage(
+        i,
+        duration: _pageTransitionDuration,
+        curve: Curves.easeInOutCubic,
+      );
+    }
   }
 
   @override
@@ -118,50 +126,67 @@ class _RootShellState extends ConsumerState<RootShell> {
             fit: BoxFit.cover,
           ),
         ),
-        child: SafeArea(
-          child: Column(
-            children: [
-              // Глобальный зелёный баннер, если подключены к OpenWRT-роутеру.
-              const RouterBanner(),
-              if (backendStatus == BackendStatus.dead) _BackendOfflineBanner(),
-              Expanded(
-                child: RepaintBoundary(
-                  child: PageView(
-                    controller: _pageController,
-                    physics: const PageScrollPhysics(
-                      parent: ClampingScrollPhysics(),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                kAccent.withOpacity(0.18),
+                Colors.transparent,
+                kAccentRed.withOpacity(0.14),
+              ],
+              stops: const [0, 0.52, 1],
+            ),
+          ),
+          child: BackdropGroup(
+            child: SafeArea(
+              child: Column(
+                children: [
+                  // Глобальный зелёный баннер, если подключены к OpenWRT-роутеру.
+                  const RouterBanner(),
+                  if (backendStatus == BackendStatus.dead)
+                    _BackendOfflineBanner(),
+                  Expanded(
+                    child: RepaintBoundary(
+                      child: PageView(
+                        controller: _pageController,
+                        physics: const PageScrollPhysics(
+                          parent: ClampingScrollPhysics(),
+                        ),
+                        onPageChanged: (i) {
+                          if (_currentPage != i) {
+                            setState(() => _currentPage = i);
+                          }
+                        },
+                        children: [
+                          _RetainedPage(
+                            key: const ValueKey('connection'),
+                            child: ConnectionPage(onReload: _reloadConnection),
+                          ),
+                          const _RetainedPage(
+                            key: ValueKey('settings'),
+                            child: SettingsPage(),
+                          ),
+                          const _RetainedPage(
+                            key: ValueKey('info'),
+                            child: InfoPage(),
+                          ),
+                          const _RetainedPage(
+                            key: ValueKey('logs'),
+                            child: LogsPage(),
+                          ),
+                        ],
+                      ),
                     ),
-                    onPageChanged: (i) {
-                      if (_currentPage != i) {
-                        setState(() => _currentPage = i);
-                      }
-                    },
-                    children: [
-                      _RetainedPage(
-                        key: const ValueKey('connection'),
-                        child: ConnectionPage(onReload: _reloadConnection),
-                      ),
-                      const _RetainedPage(
-                        key: ValueKey('settings'),
-                        child: SettingsPage(),
-                      ),
-                      const _RetainedPage(
-                        key: ValueKey('info'),
-                        child: InfoPage(),
-                      ),
-                      const _RetainedPage(
-                        key: ValueKey('logs'),
-                        child: LogsPage(),
-                      ),
-                    ],
                   ),
-                ),
+                  NavBar(
+                    currentIndex: _currentPage,
+                    onSelect: _onNavSelect,
+                  ),
+                ],
               ),
-              NavBar(
-                currentIndex: _currentPage,
-                onSelect: _onNavSelect,
-              ),
-            ],
+            ),
           ),
         ),
       ),

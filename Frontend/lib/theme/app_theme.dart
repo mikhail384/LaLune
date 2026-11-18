@@ -1,15 +1,18 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //
-// Тема приложения. Использует DialogThemeData — актуальный API
-// Flutter 3.29+. DialogTheme (старый) удалён в Flutter 3.47.
+// Новогодняя палитра: хвойный зелёный + снежный белый + красный акцент.
+// Стеклянные поверхности намеренно полупрозрачные: фактический blur
+// выполняется GlassDialog/GlassCard, а Theme не перекрывает его сплошным цветом.
 
 import 'package:flutter/material.dart';
 
-const Color kAccent = Color(0xFF4A6CF7);
-const Color kAccentYellow = Color(0xFFF7E84E);
-const Color kAccentGreen = Color(0xFF7CFF9A);
-const Color kBackground = Color(0xFF0A0E2A);
-const Color kSurface = Color(0xFF0F1540);
+const Color kAccent = Color(0xFF2FBF71);
+const Color kAccentRed = Color(0xFFE5484D);
+const Color kAccentWhite = Color(0xFFF7FBF8);
+const Color kAccentYellow = Color(0xFFE5484D);
+const Color kAccentGreen = Color(0xFF73E6A6);
+const Color kBackground = Color(0xFF07160F);
+const Color kSurface = Color(0xFF0B2118);
 
 ThemeData buildAppTheme() {
   final base = ThemeData.dark(useMaterial3: true);
@@ -18,24 +21,27 @@ ThemeData buildAppTheme() {
     scaffoldBackgroundColor: Colors.transparent,
     colorScheme: base.colorScheme.copyWith(
       primary: kAccent,
-      secondary: kAccentYellow,
-      surface: kSurface.withOpacity(0.55),
+      onPrimary: Colors.white,
+      secondary: kAccentRed,
+      onSecondary: Colors.white,
+      surface: kSurface.withOpacity(0.34),
+      error: kAccentRed,
     ),
     textTheme: base.textTheme.apply(
       fontFamily: 'Nunito',
-      bodyColor: Colors.white,
-      displayColor: Colors.white,
+      bodyColor: kAccentWhite,
+      displayColor: kAccentWhite,
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
-      fillColor: Colors.white.withOpacity(0.06),
+      fillColor: Colors.white.withOpacity(0.055),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(10),
-        borderSide: BorderSide(color: Colors.white.withOpacity(0.12)),
+        borderSide: BorderSide(color: Colors.white.withOpacity(0.14)),
       ),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(10),
-        borderSide: BorderSide(color: Colors.white.withOpacity(0.12)),
+        borderSide: BorderSide(color: Colors.white.withOpacity(0.14)),
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(10),
@@ -55,9 +61,19 @@ ThemeData buildAppTheme() {
     textButtonTheme: TextButtonThemeData(
       style: TextButton.styleFrom(foregroundColor: Colors.white70),
     ),
-    // DialogThemeData — актуальное имя класса в Flutter 3.29+.
+    switchTheme: SwitchThemeData(
+      thumbColor: WidgetStateProperty.resolveWith(
+        (states) => states.contains(WidgetState.selected) ? kAccentWhite : null,
+      ),
+      trackColor: WidgetStateProperty.resolveWith(
+        (states) => states.contains(WidgetState.selected)
+            ? kAccent.withOpacity(0.72)
+            : null,
+      ),
+    ),
     dialogTheme: const DialogThemeData(
-      backgroundColor: kSurface,
+      backgroundColor: Colors.transparent,
+      surfaceTintColor: Colors.transparent,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.all(Radius.circular(16)),
       ),

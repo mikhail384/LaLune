@@ -197,7 +197,7 @@ class _InfoPageState extends ConsumerState<InfoPage> {
                   style: TextStyle(
                       fontSize: 26,
                       fontWeight: FontWeight.w700,
-                      color: Color(0xFFF7E84E))),
+                      color: Color(0xFFE5484D))),
               const SizedBox(height: 4),
               Text('Client v$_laluneVersion',
                   style: TextStyle(color: Colors.white.withOpacity(0.5))),
@@ -328,7 +328,7 @@ class _InfoPageState extends ConsumerState<InfoPage> {
         child: Row(
           children: [
               if (icon != null) ...[
-                Icon(icon, size: 19, color: const Color(0xFF6C8CFF)),
+                Icon(icon, size: 19, color: const Color(0xFF2FBF71)),
                 const SizedBox(width: 8),
               ],
             Expanded(
@@ -338,10 +338,10 @@ class _InfoPageState extends ConsumerState<InfoPage> {
             Text(label,
                 style: const TextStyle(
                     fontWeight: FontWeight.w600,
-                    color: Color(0xFF6C8CFF),
+                    color: Color(0xFF2FBF71),
                     decoration: TextDecoration.underline)),
             const SizedBox(width: 4),
-            const Icon(Icons.open_in_new, size: 14, color: Color(0xFF6C8CFF)),
+            const Icon(Icons.open_in_new, size: 14, color: Color(0xFF2FBF71)),
           ],
         ),
       ),
@@ -411,7 +411,7 @@ class _InfoPageState extends ConsumerState<InfoPage> {
       child: ElevatedButton(
         onPressed: onTap,
         style: ElevatedButton.styleFrom(
-          backgroundColor: const Color(0xFFF7E84E),
+          backgroundColor: const Color(0xFFE5484D),
           foregroundColor: Colors.black,
           padding: const EdgeInsets.symmetric(vertical: 12),
           shape: RoundedRectangleBorder(

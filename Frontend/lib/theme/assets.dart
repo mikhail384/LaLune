@@ -10,4 +10,6 @@ class Assets {
   static const info = 'assets/info.png';
   static const logs = 'assets/logs.png';
   static const maxQr = 'assets/max_qr.jpg';
+  static const defaultVpn = 'assets/icons/default_vpn.png';
+  static const trash = 'assets/icons/trash.png';
 }

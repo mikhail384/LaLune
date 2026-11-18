@@ -4,13 +4,13 @@
 
 | Файл ↕▾ | Что делает ↕▾ |
 |---|---|
-| −`build.yml` | Desktop (Windows + Linux), Android APK, Token Fetcher, Release |
-| −`build-ios.yml` | iOS IPA (unsigned, для AltStore/Scarlet) |
-⚙
+| `build.yml` | Desktop (Windows + Linux + macOS), OpenWRT, Android APK, Token Fetcher, Release |
+| `build-ios.yml` | iOS IPA (unsigned, для AltStore/Scarlet) |
+| `deploy-site.yml` | Flutter Web → GitHub Pages |
 
 ## Триггеры
 
-Оба workflow запускаются:
+Сборочные workflow запускаются:
 
 - при `push` в `main` / `release` (`build-ios` — ещё `master`)
 - вручную через **Actions → Run workflow**
@@ -24,7 +24,7 @@
 ubuntu-22.04
 ├── python 3.12
 ├── rust stable
-├── flutter 3.24.5
+├── flutter 3.47.5
 ├── apt install gtk3-dev, clang, cmake, ninja, pkg-config
 └── python build.py --ci --target linux
      ├── cargo build --release (Backend/Desktop)
@@ -44,7 +44,7 @@ ubuntu-22.04
 windows-latest
 ├── python 3.12
 ├── rust stable
-├── flutter 3.24.5
+├── flutter 3.47.5
 └── python build.py --ci --target windows
      ├── cargo build --release (Backend/Desktop)
      ├── cargo build --release (Installer/launcher)
@@ -64,7 +64,7 @@ windows-latest
 ```
 ubuntu-latest
 ├── python 3.12
-├── flutter 3.24.5
+├── flutter 3.47.5
 ├── java 17
 ├── Android SDK (preinstalled)
 ├── copy Backend/Android/*.kt → Frontend/android/.../com/lalune/backend/
@@ -104,7 +104,7 @@ GitHub Release с тегом вида `26.10.03.15.30`.
 ```
 macos-14
 ├── Xcode 15.4
-├── flutter stable
+├── flutter 3.29.0
 ├── xcodegen
 ├── copy Backend/iOS/*.swift → Frontend/ios/Runner/ + Tunnel/
 ├── copy Assets/ → Frontend/assets/

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../widgets/glass_dialog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -13,10 +14,12 @@ import '../state/logs_notifier.dart';
 import '../state/providers.dart';
 import '../state/subscriptions_notifier.dart';
 import '../state/vpn_notifier.dart';
+import '../utils/config_input.dart';
 import '../utils/open_url.dart';
 import '../utils/profile_ping.dart';
 import '../widgets/config_selector.dart';
 import '../widgets/moon_button.dart';
+import '../widgets/qr_scanner_dialog.dart';
 import '../widgets/toast.dart';
 import 'add_config_dialog.dart';
 
@@ -214,13 +217,62 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
     }
   }
 
+  Future<void> _showQrScanner() async {
+    final raw = await showQrScannerDialog(context);
+    if (raw == null || !mounted) return;
+
+    final detected = detectConfigInput(raw);
+    if (detected == null) {
+      Toast.show(
+        context,
+        'QR не похож на CSQTT, CSQTTR, ToTS или ссылку подписки',
+        isError: true,
+        duration: const Duration(seconds: 5),
+      );
+      return;
+    }
+
+    if (detected.isSubscription) {
+      final error =
+          await ref.read(subscriptionsProvider.notifier).add(detected.payload);
+      if (!mounted) return;
+      Toast.show(
+        context,
+        error == null ? 'Подписка добавлена из QR' : error,
+        isError: error != null,
+        duration: error == null
+            ? const Duration(seconds: 3)
+            : const Duration(seconds: 6),
+      );
+      return;
+    }
+
+    final ok = await ref
+        .read(configsProvider.notifier)
+        .add(detected.payload, detected.protocol);
+    if (!mounted) return;
+    if (ok) {
+      Toast.show(context, 'Профиль ${detected.protocol} добавлен из QR');
+      widget.onReload?.call();
+    } else {
+      final error = ref.read(configsProvider).error;
+      Toast.show(
+        context,
+        error == null || error.trim().isEmpty
+            ? 'Не удалось добавить профиль из QR'
+            : 'Не удалось добавить: $error',
+        isError: true,
+        duration: const Duration(seconds: 7),
+      );
+    }
+  }
+
   Future<void> _confirmDelete(int id) async {
     final ok = await showDialog<bool>(
       context: context,
       barrierColor: Colors.black.withOpacity(0.55),
       builder: (ctx) => GlassAlertDialog(
-        backgroundColor: const Color(0xFF0F1540),
-        shape: RoundedRectangleBorder(
+          shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
           side: BorderSide(color: Colors.white.withOpacity(0.1)),
         ),
@@ -307,8 +359,7 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
       context: context,
       barrierColor: Colors.black.withOpacity(0.55),
       builder: (ctx) => GlassAlertDialog(
-        backgroundColor: const Color(0xFF0F1540),
-        shape: RoundedRectangleBorder(
+          shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
           side: BorderSide(color: Colors.white.withOpacity(0.1)),
         ),
@@ -380,7 +431,7 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
                                 valueColor: AlwaysStoppedAnimation<Color>(
                                   vpn.state == 'disconnecting'
                                       ? Colors.white70
-                                      : const Color(0xFFF7E84E),
+                                      : const Color(0xFFE5484D),
                                 ),
                               ),
                             ),
@@ -454,9 +505,66 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
         Positioned(
           top: 12,
           right: 16,
-          child: _AddButton(onTap: _showAddDialog),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (!kIsWeb &&
+                  defaultTargetPlatform == TargetPlatform.android) ...[
+                _QrButton(onTap: _showQrScanner),
+                const SizedBox(width: 10),
+              ],
+              _AddButton(onTap: _showAddDialog),
+            ],
+          ),
         ),
       ],
+    );
+  }
+}
+
+class _QrButton extends StatefulWidget {
+  final VoidCallback onTap;
+  const _QrButton({required this.onTap});
+
+  @override
+  State<_QrButton> createState() => _QrButtonState();
+}
+
+class _QrButtonState extends State<_QrButton> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      cursor: SystemMouseCursors.click,
+      child: Semantics(
+        label: 'Сканировать QR-код',
+        button: true,
+        child: GestureDetector(
+          onTap: widget.onTap,
+          behavior: HitTestBehavior.opaque,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.white.withOpacity(_hover ? 0.14 : 0.07),
+              border: Border.all(
+                color: const Color(0xFF2FBF71)
+                    .withOpacity(_hover ? 0.72 : 0.42),
+              ),
+            ),
+            child: const Icon(
+              Icons.qr_code_scanner_rounded,
+              size: 22,
+              color: Color(0xFFF7FBF8),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -502,7 +610,7 @@ class _AddButtonState extends State<_AddButton> {
               ),
               boxShadow: [
                 BoxShadow(
-                  color: const Color(0xFF4A6CF7)
+                  color: const Color(0xFF2FBF71)
                       .withOpacity(_hover ? 0.35 : 0.0),
                   blurRadius: 18,
                   spreadRadius: 2,

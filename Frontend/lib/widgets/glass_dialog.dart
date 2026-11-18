@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 import 'dart:ui';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
-/// Runtime shader used only as a very cheap glass grain/highlight layer.
+/// Runtime shader used as a light glass grain/highlight layer.
 ///
-/// The old dialogs used a sigma=22 backdrop blur over the entire modal on
-/// every frame. That is especially expensive on tile-based mobile GPUs. We
-/// keep a much smaller Android blur for readability, isolate it in a
-/// RepaintBoundary, and let the shader provide most of the visual texture.
+/// On Android the real backdrop blur is intentionally small: large sigma
+/// values over animated content were one of the biggest sources of jank.
 class _GlassShaderOverlay extends StatelessWidget {
   const _GlassShaderOverlay();
 
@@ -56,25 +55,39 @@ class _GlassShaderPainter extends CustomPainter {
 }
 
 double _dialogBlurSigma() {
-  if (kIsWeb) return 12;
-  return defaultTargetPlatform == TargetPlatform.android ? 5.5 : 16;
+  if (kIsWeb) return 10;
+  return defaultTargetPlatform == TargetPlatform.android ? 5.0 : 14;
 }
 
-Widget _glassLayer({required Widget child, required BorderRadius borderRadius}) {
+Color _translucentSurface(Color? requested) {
+  if (requested == null) return Colors.white.withOpacity(0.06);
+  // Never allow a caller to accidentally turn a glass dialog into a solid
+  // Material surface. Existing callers that pass the old navy color still
+  // receive the requested tint, but with glass-safe alpha.
+  return requested.withOpacity(0.12);
+}
+
+Widget _glassLayer(
+  BuildContext context, {
+  required Widget child,
+  required BorderRadius borderRadius,
+}) {
   final blur = _dialogBlurSigma();
+  final filter = ImageFilter.blur(sigmaX: blur, sigmaY: blur);
+  final stack = Stack(
+    fit: StackFit.passthrough,
+    children: [
+      const Positioned.fill(child: _GlassShaderOverlay()),
+      child,
+    ],
+  );
+
   return RepaintBoundary(
     child: ClipRRect(
       borderRadius: borderRadius,
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
-        child: Stack(
-          fit: StackFit.passthrough,
-          children: [
-            Positioned.fill(child: _GlassShaderOverlay()),
-            child,
-          ],
-        ),
-      ),
+      child: BackdropGroup.of(context) == null
+          ? BackdropFilter(filter: filter, child: stack)
+          : BackdropFilter.grouped(filter: filter, child: stack),
     ),
   );
 }
@@ -120,26 +133,30 @@ class GlassAlertDialog extends StatelessWidget {
     final dialogShape = shape ??
         RoundedRectangleBorder(
           borderRadius: radius,
-          side: BorderSide(color: Colors.white.withOpacity(0.12)),
+          side: BorderSide(color: Colors.white.withOpacity(0.14)),
         );
+
     return _glassLayer(
+      context,
       borderRadius: radius,
       child: AlertDialog(
-        backgroundColor: backgroundColor ?? Colors.white.withOpacity(0.068),
+        backgroundColor: _translucentSurface(backgroundColor),
         surfaceTintColor: Colors.transparent,
-        shadowColor: Colors.black.withOpacity(0.18),
+        shadowColor: Colors.black.withOpacity(0.14),
         shape: dialogShape,
         title: title,
         titlePadding: titlePadding,
         content: content,
-        contentPadding: contentPadding ?? const EdgeInsets.fromLTRB(24, 20, 24, 24),
+        contentPadding:
+            contentPadding ?? const EdgeInsets.fromLTRB(24, 20, 24, 24),
         actions: actions,
         actionsPadding: actionsPadding,
         actionsAlignment: actionsAlignment,
         actionsOverflowAlignment: actionsOverflowAlignment,
         actionsOverflowDirection: actionsOverflowDirection,
         actionsOverflowButtonSpacing: actionsOverflowButtonSpacing,
-        insetPadding: insetPadding ?? const EdgeInsets.symmetric(horizontal: 40, vertical: 24),
+        insetPadding: insetPadding ??
+            const EdgeInsets.symmetric(horizontal: 40, vertical: 24),
         scrollable: scrollable,
       ),
     );
@@ -170,12 +187,13 @@ class GlassDialog extends StatelessWidget {
       shadowColor: Colors.transparent,
       insetPadding: insetPadding,
       child: _glassLayer(
+        context,
         borderRadius: radius,
         child: DecoratedBox(
           decoration: BoxDecoration(
-            color: backgroundColor ?? Colors.white.withOpacity(0.068),
+            color: _translucentSurface(backgroundColor),
             borderRadius: radius,
-            border: Border.all(color: Colors.white.withOpacity(0.12)),
+            border: Border.all(color: Colors.white.withOpacity(0.14)),
           ),
           child: child,
         ),

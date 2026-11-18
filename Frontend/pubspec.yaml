@@ -4,8 +4,8 @@ version: 0.9.12
 publish_to: 'none'
 
 environment:
-  sdk: ">=3.4.0 <4.0.0"
-  flutter: ">=3.22.0"
+  sdk: ">=3.7.0 <4.0.0"
+  flutter: ">=3.29.0"
 
 dependencies:
   flutter:
@@ -13,7 +13,7 @@ dependencies:
 
   # HTTP
   http: ^1.2.2
-  flutter_svg: ^2.0.10+1
+  mobile_scanner: ^7.5.0
 
   # SSH installer for OpenWRT
   dartssh2: ^4.1.0
@@ -56,7 +56,7 @@ flutter_launcher_icons:
   image_path: "../Assets/icon.png"
 
   # Адаптивная иконка Android 8+
-  adaptive_icon_background: "#120D1C"
+  adaptive_icon_background: "#07160F"
   adaptive_icon_foreground: "../Assets/icon_foreground.png"
 
   # Убрать alpha у iOS (App Store не принимает прозрачность)

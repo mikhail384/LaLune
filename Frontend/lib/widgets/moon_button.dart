@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../theme/assets.dart';
 
-/// Кнопка-луна. Свечение — два статичных слоя (жёлтый и зелёный), которые
+/// Кнопка-луна. Свечение — два статичных слоя (красный и зелёный), которые
 /// плавно переключаются изменением прозрачности. Так дорогой блюр тени
 /// растеризуется один раз и не пересчитывается на каждом кадре анимации
 /// (раньше анимировался сам BoxShadow с blurRadius 34).
@@ -21,14 +21,14 @@ class MoonButton extends StatefulWidget {
 class _MoonButtonState extends State<MoonButton> {
   bool _hover = false;
 
-  static const _yellow = Color(0xFFF7E84E);
+  static const _red = Color(0xFFE5484D);
   static const _green = Color(0xFF7CFF9A);
 
   @override
   Widget build(BuildContext context) {
     // Те же итоговые яркости, что были у анимированной тени:
-    // жёлтый 0.20 (0.45 при наведении), зелёный 0.55.
-    final yellowOpacity = widget.connected ? 0.0 : (_hover ? 1.0 : 0.20 / 0.45);
+    // красный 0.20 (0.45 при наведении), зелёный 0.55.
+    final redOpacity = widget.connected ? 0.0 : (_hover ? 1.0 : 0.20 / 0.45);
     final greenOpacity = widget.connected ? 1.0 : 0.0;
 
     return MouseRegion(
@@ -46,7 +46,7 @@ class _MoonButtonState extends State<MoonButton> {
               alignment: Alignment.center,
               clipBehavior: Clip.none,
               children: [
-                _Glow(color: _yellow.withOpacity(0.45), opacity: yellowOpacity),
+                _Glow(color: _red.withOpacity(0.45), opacity: redOpacity),
                 _Glow(color: _green.withOpacity(0.55), opacity: greenOpacity),
                 Padding(
                   padding: const EdgeInsets.all(10),
@@ -61,10 +61,10 @@ class _MoonButtonState extends State<MoonButton> {
                       height: 130,
                       decoration: const BoxDecoration(
                         shape: BoxShape.circle,
-                        color: Color(0xFF1A1A3E),
+                        color: Color(0xFF0B2118),
                       ),
                       child: const Icon(Icons.dark_mode,
-                          size: 72, color: Color(0xFFF7E84E)),
+                          size: 72, color: Color(0xFFE5484D)),
                     ),
                   ),
                 ),

@@ -82,7 +82,6 @@ class _RouterModalState extends ConsumerState<_RouterModal> {
       ..sort((a, b) => a.ip.compareTo(b.ip));
 
     return GlassDialog(
-      backgroundColor: const Color(0xFF0F1540),
       insetPadding: const EdgeInsets.all(20),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
@@ -251,12 +250,12 @@ class _RouterTile extends ConsumerWidget {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
           color: active
-              ? const Color(0xFF4A6CF7).withOpacity(0.18)
+              ? const Color(0xFF2FBF71).withOpacity(0.18)
               : Colors.white.withOpacity(0.04),
           borderRadius: BorderRadius.circular(10),
           border: Border.all(
             color: active
-                ? const Color(0xFF4A6CF7).withOpacity(0.55)
+                ? const Color(0xFF2FBF71).withOpacity(0.55)
                 : Colors.white.withOpacity(0.08),
           ),
         ),

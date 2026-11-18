@@ -3,9 +3,9 @@
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
-
 import '../models/config_item.dart';
+import '../theme/app_theme.dart';
+import '../theme/assets.dart';
 import '../models/subscription.dart';
 import '../utils/profile_ping.dart';
 import 'glass_card.dart';
@@ -240,7 +240,7 @@ class _SubGroup extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const accent = Color(0xFF7C9CFF);
+    const accent = kAccent;
     final limit = sub.limitBytes;
     final used = sub.usedBytes;
     final ratio = limit == null ? 0.0 : (used / limit).clamp(0.0, 1.0);
@@ -398,7 +398,7 @@ class _SubConfigRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final expired = config.expired;
-    const accent = Color(0xFF4A6CF7);
+    const accent = kAccent;
     String? expiryText;
     if (config.expires != null) {
       final d = config.expires!;
@@ -489,7 +489,7 @@ class _ConfigRowState extends State<_ConfigRow> {
 
   @override
   Widget build(BuildContext context) {
-    const accent = Color(0xFF4A6CF7);
+    const accent = kAccent;
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
@@ -521,8 +521,20 @@ class _ConfigRowState extends State<_ConfigRow> {
                   color: Colors.white.withOpacity(0.06),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: Icon(Icons.vpn_key_outlined,
-                    size: 17, color: Colors.white.withOpacity(0.65)),
+                child: Padding(
+                  padding: const EdgeInsets.all(4),
+                  child: Image.asset(
+                    Assets.defaultVpn,
+                    fit: BoxFit.contain,
+                    cacheWidth: 96,
+                    filterQuality: FilterQuality.low,
+                    errorBuilder: (_, __, ___) => const Icon(
+                      Icons.shield_outlined,
+                      size: 18,
+                      color: Colors.white70,
+                    ),
+                  ),
+                ),
               ),
               const SizedBox(width: 10),
               Expanded(
@@ -547,12 +559,12 @@ class _ConfigRowState extends State<_ConfigRow> {
                       height: 20,
                       alignment: Alignment.center,
                       decoration: BoxDecoration(
-                        color: const Color(0xFFF7E84E),
+                        color: const Color(0xFFE5484D),
                         borderRadius: BorderRadius.circular(5),
                       ),
                       child: const Text('!',
                           style: TextStyle(
-                              color: Color(0xFF302900),
+                              color: Colors.white,
                               fontSize: 14,
                               fontWeight: FontWeight.w900)),
                     ),
@@ -603,7 +615,7 @@ class _ProtocolPingColumn extends StatelessWidget {
             style: const TextStyle(
               fontSize: 10.5,
               fontWeight: FontWeight.w700,
-              color: Color(0xFF8EA5FF),
+              color: kAccentGreen,
             ),
           ),
           const SizedBox(height: 3),
@@ -722,9 +734,26 @@ class _SubscriptionIcon extends StatelessWidget {
         height: 34,
         color: Colors.white.withOpacity(0.06),
         child: bytes == null
-            ? Icon(Icons.person_outline,
-                size: 19, color: Colors.white.withOpacity(0.62))
-            : Image.memory(bytes, fit: BoxFit.cover, gaplessPlayback: true),
+            ? Padding(
+                padding: const EdgeInsets.all(4),
+                child: Image.asset(
+                  Assets.defaultVpn,
+                  fit: BoxFit.contain,
+                  cacheWidth: 96,
+                  filterQuality: FilterQuality.low,
+                  errorBuilder: (_, __, ___) => const Icon(
+                    Icons.shield_outlined,
+                    size: 18,
+                    color: Colors.white70,
+                  ),
+                ),
+              )
+            : Image.memory(
+                bytes,
+                fit: BoxFit.cover,
+                gaplessPlayback: true,
+                cacheWidth: 96,
+              ),
       ),
     );
   }
@@ -749,13 +778,20 @@ class _TrashButton extends StatelessWidget {
       splashRadius: 16,
       padding: EdgeInsets.zero,
       constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-      icon: SvgPicture.asset(
-        'assets/icons/trash.svg',
-        width: 16,
-        height: 16,
-        colorFilter: ColorFilter.mode(
-          Colors.white.withOpacity(opacity),
-          BlendMode.srcIn,
+      icon: Opacity(
+        opacity: opacity,
+        child: Image.asset(
+          Assets.trash,
+          width: 18,
+          height: 18,
+          fit: BoxFit.contain,
+          cacheWidth: 72,
+          filterQuality: FilterQuality.low,
+          errorBuilder: (_, __, ___) => const Icon(
+            Icons.delete_outline,
+            size: 18,
+            color: Colors.white70,
+          ),
         ),
       ),
     );
