@@ -25,15 +25,45 @@ class GlassCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final borderRadius = BorderRadius.circular(radius);
+    final topAlpha = (opacity + 0.035).clamp(0.0, 1.0);
+    final bottomAlpha = (opacity * 0.68).clamp(0.0, 1.0);
+
     final decoration = BoxDecoration(
-      color: Colors.white.withOpacity(opacity),
-      borderRadius: BorderRadius.circular(radius),
-      border: Border.all(color: Colors.white.withOpacity(0.12), width: 1),
+      gradient: LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          Colors.white.withOpacity(topAlpha),
+          Colors.white.withOpacity(bottomAlpha),
+        ],
+      ),
+      borderRadius: borderRadius,
+      border: Border.all(color: Colors.white.withOpacity(0.14), width: 1),
     );
-    final surface = Container(
+
+    Widget content = Padding(
       padding: padding,
-      decoration: decoration,
       child: child,
+    );
+
+    if (onTap != null) {
+      content = Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          borderRadius: borderRadius,
+          hoverColor: Colors.white.withOpacity(0.06),
+          splashColor: Colors.white.withOpacity(0.08),
+          highlightColor: Colors.white.withOpacity(0.04),
+          onTap: onTap,
+          child: content,
+        ),
+      );
+    }
+
+    final surface = DecoratedBox(
+      decoration: decoration,
+      child: content,
     );
 
     // High-sigma backdrop blur is very expensive on Android GPUs. Keep the
@@ -43,26 +73,25 @@ class GlassCard extends StatelessWidget {
         !kIsWeb && defaultTargetPlatform == TargetPlatform.android && blur > 7
             ? 7.0
             : blur;
-    final filter =
-        ImageFilter.blur(sigmaX: effectiveBlur, sigmaY: effectiveBlur);
-    final filtered = BackdropGroup.of(context) == null
-        ? BackdropFilter(filter: filter, child: surface)
-        : BackdropFilter.grouped(filter: filter, child: surface);
-    final card = RepaintBoundary(
+
+    Widget body;
+    if (effectiveBlur <= 0) {
+      body = surface;
+    } else {
+      final filter = ImageFilter.blur(
+        sigmaX: effectiveBlur,
+        sigmaY: effectiveBlur,
+        tileMode: TileMode.clamp,
+      );
+      body = BackdropGroup.of(context) == null
+          ? BackdropFilter(filter: filter, child: surface)
+          : BackdropFilter.grouped(filter: filter, child: surface);
+    }
+
+    return RepaintBoundary(
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(radius),
-        child: filtered,
-      ),
-    );
-
-    if (onTap == null) return card;
-
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(radius),
-        onTap: onTap,
-        child: card,
+        borderRadius: borderRadius,
+        child: body,
       ),
     );
   }
