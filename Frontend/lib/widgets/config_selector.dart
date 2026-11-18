@@ -522,7 +522,7 @@ class _ConfigRowState extends State<_ConfigRow> {
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Padding(
-                  padding: const EdgeInsets.all(4),
+                  padding: const EdgeInsets.all(2),
                   child: Image.asset(
                     Assets.defaultVpn,
                     fit: BoxFit.contain,
@@ -730,20 +730,20 @@ class _SubscriptionIcon extends StatelessWidget {
     return ClipRRect(
       borderRadius: BorderRadius.circular(8),
       child: Container(
-        width: 34,
-        height: 34,
+        width: 38,
+        height: 38,
         color: Colors.white.withOpacity(0.06),
         child: bytes == null
             ? Padding(
-                padding: const EdgeInsets.all(4),
+                padding: const EdgeInsets.all(2),
                 child: Image.asset(
                   Assets.defaultVpn,
                   fit: BoxFit.contain,
-                  cacheWidth: 96,
-                  filterQuality: FilterQuality.low,
+                  cacheWidth: 128,
+                  filterQuality: FilterQuality.medium,
                   errorBuilder: (_, __, ___) => const Icon(
                     Icons.shield_outlined,
-                    size: 18,
+                    size: 24,
                     color: Colors.white70,
                   ),
                 ),
@@ -777,19 +777,19 @@ class _TrashButton extends StatelessWidget {
       tooltip: tooltip,
       splashRadius: 16,
       padding: EdgeInsets.zero,
-      constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
       icon: Opacity(
         opacity: opacity,
         child: Image.asset(
           Assets.trash,
-          width: 18,
-          height: 18,
+          width: 23,
+          height: 23,
           fit: BoxFit.contain,
           cacheWidth: 72,
           filterQuality: FilterQuality.low,
           errorBuilder: (_, __, ___) => const Icon(
             Icons.delete_outline,
-            size: 18,
+            size: 23,
             color: Colors.white70,
           ),
         ),

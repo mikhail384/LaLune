@@ -143,8 +143,8 @@ class _NavButtonState extends State<_NavButton> {
                     duration: const Duration(milliseconds: 180),
                     child: Image.asset(
                       widget.item.icon,
-                      width: 26,
-                      height: 26,
+                      width: widget.item.icon == Assets.info ? 30 : 26,
+                      height: widget.item.icon == Assets.info ? 30 : 26,
                       fit: BoxFit.contain,
                       filterQuality: FilterQuality.medium,
                       errorBuilder: (_, __, ___) => Icon(
