@@ -73,6 +73,7 @@ flutter:
   # Сюда build.py копирует корневой Assets/.
   assets:
     - assets/
+    - assets/icons/
     - assets/openwrt/
 
   shaders:
