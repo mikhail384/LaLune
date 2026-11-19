@@ -406,7 +406,7 @@ def main() -> int:
 
     # Keep version-bearing deployment/documentation snippets from lying about
     # the current release when somebody follows them manually.
-       if (ROOT / "Backend/iOS/Info-patch.md").exists():
+      if (ROOT / "Backend/iOS/Info-patch.md").exists():
            replace_regex(
             "Backend/iOS/Info-patch.md",
             r'(<key>CFBundleShortVersionString</key>\s*\n<string>)[^<]+(</string>)',
