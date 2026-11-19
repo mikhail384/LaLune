@@ -19,15 +19,15 @@ class GlassCard extends StatelessWidget {
     this.padding = const EdgeInsets.all(16),
     this.radius = 14,
     this.opacity = 0.07,
-    this.blur = 12,
+    this.blur = 16,
     this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
     final borderRadius = BorderRadius.circular(radius);
-    final topAlpha = (0.48 + opacity * 0.5).clamp(0.0, 0.75);
-    final bottomAlpha = (0.38 + opacity * 0.4).clamp(0.0, 0.68);
+    final topAlpha = (0.38 + opacity * 0.45).clamp(0.0, 0.65);
+    final bottomAlpha = (0.28 + opacity * 0.35).clamp(0.0, 0.58);
 
     final decoration = BoxDecoration(
       gradient: LinearGradient(
@@ -39,7 +39,7 @@ class GlassCard extends StatelessWidget {
         ],
       ),
       borderRadius: borderRadius,
-      border: Border.all(color: Colors.white.withOpacity(0.14), width: 1),
+      border: Border.all(color: Colors.white.withOpacity(0.15), width: 1),
     );
 
     Widget content = Padding(
@@ -66,12 +66,9 @@ class GlassCard extends StatelessWidget {
       child: content,
     );
 
-    // High-sigma backdrop blur is very expensive on Android GPUs. Keep the
-    // desktop look, but cap mobile blur and share filters through BackdropGroup
-    // when the root shell provides one.
     final effectiveBlur =
-        !kIsWeb && defaultTargetPlatform == TargetPlatform.android && blur > 7
-            ? 7.0
+        !kIsWeb && defaultTargetPlatform == TargetPlatform.android && blur > 14
+            ? 14.0
             : blur;
 
     Widget body;
