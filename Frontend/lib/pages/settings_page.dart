@@ -454,12 +454,15 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         if (!_isTots) Padding(
           padding: const EdgeInsets.symmetric(vertical: 5),
           child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               SizedBox(
                 width: 130,
-                child: Text('Workers',
+                child:Padding(
+                              padding: const EdgeInsets.only(top: 12),
+                              child:  Text('Workers',
                     style:
-                        TextStyle(color: Colors.white.withOpacity(0.7))),
+                        TextStyle(color: Colors.white.withOpacity(0.7)))),
               ),
               Expanded(
                 child: Builder(builder: (context) {
@@ -473,7 +476,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       helperText: 'Рекомендуется $kDefaultWorkers · допустимо от '
                           '$kMinWorkers до $kMaxWorkers. После сохранения '
                           'переподключитесь; фактическое число согласуется с сервером.',
-                      helperMaxLines: 3,
+                      helperMaxLines: 5,
                       helperStyle: const TextStyle(fontSize: 10.5),
                       suffixIcon: value == kDefaultWorkers
                           ? null
