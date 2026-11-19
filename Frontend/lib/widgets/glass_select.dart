@@ -34,7 +34,7 @@ class GlassSelectField extends StatelessWidget {
     final selected = await showDialog<String>(
       context: context,
       barrierDismissible: true,
-      barrierColor: Colors.black.withOpacity(0.58),
+      barrierColor: Colors.black.withOpacity(0.42),
       builder: (dialogContext) => GlassAlertDialog(
         title: Text(title ?? 'Выберите значение'),
         contentPadding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
