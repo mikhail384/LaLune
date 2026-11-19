@@ -10,10 +10,7 @@ typedef GlassSelectTrailingBuilder = Widget? Function(
   String value,
 );
 
-/// Dropdown replacement whose option list is itself a real glass modal.
-///
-/// Standard DropdownButton routes render their menu on a separate opaque
-/// Material surface, so a blur around the parent dialog cannot affect them.
+/// Dropdown replacement whose option list is itself a dark frosted-glass modal.
 class GlassSelectField extends StatelessWidget {
   final String value;
   final List<String> items;
@@ -37,10 +34,10 @@ class GlassSelectField extends StatelessWidget {
     final selected = await showDialog<String>(
       context: context,
       barrierDismissible: true,
-      barrierColor: Colors.transparent,
+      barrierColor: Colors.black.withOpacity(0.58),
       builder: (dialogContext) => GlassAlertDialog(
         title: Text(title ?? 'Выберите значение'),
-        contentPadding: const EdgeInsets.fromLTRB(12, 4, 12, 10),
+        contentPadding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
         content: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 440, maxHeight: 420),
           child: ListView.separated(
@@ -48,7 +45,7 @@ class GlassSelectField extends StatelessWidget {
             itemCount: items.length,
             separatorBuilder: (_, __) => Divider(
               height: 1,
-              color: Colors.white.withOpacity(0.07),
+              color: Colors.white.withOpacity(0.08),
             ),
             itemBuilder: (context, index) {
               final item = items[index];
@@ -59,18 +56,19 @@ class GlassSelectField extends StatelessWidget {
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(10),
                 ),
-                tileColor: active ? kAccent.withOpacity(0.14) : Colors.transparent,
+                tileColor:
+                    active ? kAccent.withOpacity(0.18) : Colors.transparent,
                 leading: Icon(
                   active ? Icons.radio_button_checked : Icons.radio_button_off,
                   size: 18,
-                  color: active ? kAccent : Colors.white54,
+                  color: active ? kAccentGreen : Colors.white60,
                 ),
                 title: Text(
                   item,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    color: active ? kAccentWhite : Colors.white,
+                    color: active ? kAccentWhite : Colors.white.withOpacity(0.92),
                     fontWeight: active ? FontWeight.w700 : FontWeight.w500,
                   ),
                 ),
@@ -92,7 +90,7 @@ class GlassSelectField extends StatelessWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: enabled ? () => _open(context) : null,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(12),
         child: InputDecorator(
           isEmpty: value.isEmpty,
           decoration: const InputDecoration(
@@ -107,8 +105,8 @@ class GlassSelectField extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: 13,
-                    color: enabled ? Colors.white : Colors.white38,
+                    fontSize: 13.5,
+                    color: enabled ? kAccentWhite : Colors.white38,
                   ),
                 ),
               ),
@@ -120,7 +118,7 @@ class GlassSelectField extends StatelessWidget {
               Icon(
                 Icons.keyboard_arrow_down_rounded,
                 size: 20,
-                color: enabled ? kAccent : Colors.white30,
+                color: enabled ? kAccentGreen : Colors.white30,
               ),
             ],
           ),
