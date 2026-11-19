@@ -34,8 +34,8 @@ class NavBar extends StatelessWidget {
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [
-            Colors.white.withOpacity(0.10),
-            Colors.white.withOpacity(0.045),
+            const Color(0xFF0B2118).withOpacity(0.52),
+            const Color(0xFF07160F).withOpacity(0.42),
           ],
         ),
         borderRadius: borderRadius,
@@ -58,7 +58,7 @@ class NavBar extends StatelessWidget {
     );
 
     final sigma =
-        !kIsWeb && defaultTargetPlatform == TargetPlatform.android ? 7.0 : 14.0;
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android ? 16.0 : 16.0;  
     final filter = ImageFilter.blur(
       sigmaX: sigma,
       sigmaY: sigma,
