@@ -44,6 +44,19 @@ Future<void> main() async {
   runApp(const ProviderScope(child: LaLuneApp()));
 }
 
+class _NoStretchScrollBehavior extends MaterialScrollBehavior {
+  const _NoStretchScrollBehavior();
+
+  @override
+  Widget buildOverscrollIndicator(
+    BuildContext context,
+    Widget child,
+    ScrollableDetails details,
+  ) {
+    return child;
+  }
+}
+
 class LaLuneApp extends StatelessWidget {
   const LaLuneApp({super.key});
 
@@ -53,6 +66,7 @@ class LaLuneApp extends StatelessWidget {
       title: 'LaLune',
       debugShowCheckedModeBanner: false,
       theme: buildAppTheme(),
+      scrollBehavior: const _NoStretchScrollBehavior(),
       home: const RootShell(),
     );
   }
