@@ -406,13 +406,13 @@ def main() -> int:
 
     # Keep version-bearing deployment/documentation snippets from lying about
     # the current release when somebody follows them manually.
-      if (ROOT / "Backend/iOS/Info-patch.md").exists():
-           replace_regex(
-            "Backend/iOS/Info-patch.md",
-            r'(<key>CFBundleShortVersionString</key>\s*\n<string>)[^<]+(</string>)',
-            rf"\g<1>{version}\g<2>",
-            count=1,
-            expected=1,
+    if (ROOT / "Backend/iOS/Info-patch.md").exists():
+        replace_regex(
+           "Backend/iOS/Info-patch.md",
+           r'(<key>CFBundleShortVersionString</key>\s*\n<string>)[^<]+(</string>)',
+           rf"\g<1>{version}\g<2>",
+           count=1,
+           expected=1,
         )
         replace_regex(
             "Backend/iOS/Info-patch.md",
@@ -420,7 +420,7 @@ def main() -> int:
             rf"\g<1>{build_number}\g<2>",
             count=1,
             expected=1,
-        )
+       )
     # Installer/README-OPENWRT.md no longer embeds a literal JSON version.
     # Keeping the README out of release stamping makes workflow_dispatch idempotent
     # and prevents documentation wording changes from breaking the whole build.
