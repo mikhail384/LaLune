@@ -111,7 +111,7 @@ class _RootShellState extends ConsumerState<RootShell> {
       // Sliding four backdrop-heavy pages at once is noticeably expensive on
       // mobile GPUs. Android gets an immediate tab switch; desktop keeps the
       // animated transition.
-      _pageController.jumpToPage(i);
+      _pageController.animateToPage(i, duration: const Duration(milliseconds: 260), curve: Curves.easeOutCubic);
     } else {
       _pageController.animateToPage(
         i,
