@@ -5,97 +5,65 @@ import 'dart:ui';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
-/// Runtime shader used as a light glass grain/highlight layer.
-///
-/// On Android the real backdrop blur is intentionally small: large sigma
-/// values over animated content were one of the biggest sources of jank.
-class _GlassShaderOverlay extends StatelessWidget {
-  const _GlassShaderOverlay();
-
-  static Future<FragmentProgram>? _program;
-
-  static Future<FragmentProgram> _loadProgram() =>
-      _program ??= FragmentProgram.fromAsset('shaders/glass_modal.frag');
-
-  @override
-  Widget build(BuildContext context) {
-    if (kIsWeb) return const SizedBox.expand();
-    return IgnorePointer(
-      child: FutureBuilder<FragmentProgram>(
-        future: _loadProgram(),
-        builder: (context, snapshot) {
-          final program = snapshot.data;
-          if (program == null) return const SizedBox.expand();
-          return CustomPaint(
-            painter: _GlassShaderPainter(program),
-            child: const SizedBox.expand(),
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _GlassShaderPainter extends CustomPainter {
-  final FragmentProgram program;
-  const _GlassShaderPainter(this.program);
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (size.isEmpty) return;
-    final shader = program.fragmentShader()
-      ..setFloat(0, size.width)
-      ..setFloat(1, size.height);
-    canvas.drawRect(Offset.zero & size, Paint()..shader = shader);
-  }
-
-  @override
-  bool shouldRepaint(covariant _GlassShaderPainter oldDelegate) =>
-      oldDelegate.program != program;
-}
-
 double _dialogBlurSigma() {
   if (kIsWeb) return 10;
-  return defaultTargetPlatform == TargetPlatform.android ? 5.0 : 14;
+  return defaultTargetPlatform == TargetPlatform.android ? 6.0 : 14.0;
 }
 
-Color _translucentSurface(Color? requested) {
-  if (requested == null) return Colors.white.withOpacity(0.06);
-  // Never allow a caller to accidentally turn a glass dialog into a solid
-  // Material surface. Existing callers that pass the old navy color still
-  // receive the requested tint, but with glass-safe alpha.
-  return requested.withOpacity(0.12);
+BoxDecoration _dialogGlassDecoration(BorderRadius borderRadius, Color? requested) {
+  final baseTop = requested != null
+      ? requested.withOpacity(0.84)
+      : const Color(0xFF0B2118).withOpacity(0.86);
+  final baseBottom = requested != null
+      ? requested.withOpacity(0.76)
+      : const Color(0xFF07160F).withOpacity(0.82);
+
+  return BoxDecoration(
+    gradient: LinearGradient(
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+      colors: [baseTop, baseBottom],
+    ),
+    borderRadius: borderRadius,
+    border: Border.all(color: Colors.white.withOpacity(0.16), width: 1),
+    boxShadow: [
+      BoxShadow(
+        color: Colors.black.withOpacity(0.45),
+        blurRadius: 28,
+        offset: const Offset(0, 12),
+      ),
+    ],
+  );
 }
 
 Widget _glassLayer(
   BuildContext context, {
   required Widget child,
   required BorderRadius borderRadius,
+  Color? backgroundColor,
 }) {
   final blur = _dialogBlurSigma();
-  final filter = ImageFilter.blur(sigmaX: blur, sigmaY: blur);
-  final stack = Stack(
-    fit: StackFit.passthrough,
-    children: [
-      const Positioned.fill(child: _GlassShaderOverlay()),
-      child,
-    ],
+  final filter = ImageFilter.blur(
+    sigmaX: blur,
+    sigmaY: blur,
+    tileMode: TileMode.clamp,
   );
-
+  final surface = DecoratedBox(
+    decoration: _dialogGlassDecoration(borderRadius, backgroundColor),
+    child: child,
+  );
   return RepaintBoundary(
     child: ClipRRect(
       borderRadius: borderRadius,
-      // Keep modal blur local to the dialog. Joining the app-level
-      // BackdropGroup can wash out the whole route while a modal is open.
       child: BackdropFilter(
         filter: filter,
-        child: stack,
+        child: surface,
       ),
     ),
   );
 }
 
-/// AlertDialog with a translucent surface and mobile-optimized glass effect.
+/// AlertDialog with a dark frosted-glass surface and mobile-safe blur.
 class GlassAlertDialog extends StatelessWidget {
   final Widget? title;
   final Widget? content;
@@ -132,41 +100,84 @@ class GlassAlertDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final radius = BorderRadius.circular(16);
-    final dialogShape = shape ??
-        RoundedRectangleBorder(
-          borderRadius: radius,
-          side: BorderSide(color: Colors.white.withOpacity(0.14)),
-        );
+    final radius = BorderRadius.circular(18);
+    final theme = Theme.of(context);
 
-    return _glassLayer(
-      context,
-      borderRadius: radius,
-      child: AlertDialog(
-        backgroundColor: _translucentSurface(backgroundColor),
-        surfaceTintColor: Colors.transparent,
-        shadowColor: Colors.black.withOpacity(0.14),
-        shape: dialogShape,
-        title: title,
-        titlePadding: titlePadding,
-        content: content,
-        contentPadding:
-            contentPadding ?? const EdgeInsets.fromLTRB(24, 20, 24, 24),
-        actions: actions,
-        actionsPadding: actionsPadding,
-        actionsAlignment: actionsAlignment,
-        actionsOverflowAlignment: actionsOverflowAlignment,
-        actionsOverflowDirection: actionsOverflowDirection,
-        actionsOverflowButtonSpacing: actionsOverflowButtonSpacing,
-        insetPadding: insetPadding ??
-            const EdgeInsets.symmetric(horizontal: 40, vertical: 24),
-        scrollable: scrollable,
+    Widget? titleWidget;
+    if (title != null) {
+      titleWidget = Padding(
+        padding: titlePadding ?? const EdgeInsets.fromLTRB(22, 20, 22, 10),
+        child: DefaultTextStyle(
+          style: (theme.textTheme.titleLarge ?? const TextStyle()).copyWith(
+            color: const Color(0xFFF7FBF8),
+            fontSize: 20,
+            fontWeight: FontWeight.w700,
+          ),
+          child: title!,
+        ),
+      );
+    }
+
+    Widget? contentWidget;
+    if (content != null) {
+      final padded = Padding(
+        padding: contentPadding ?? const EdgeInsets.fromLTRB(22, 8, 22, 18),
+        child: DefaultTextStyle(
+          style: (theme.textTheme.bodyMedium ?? const TextStyle()).copyWith(
+            color: const Color(0xFFF7FBF8),
+          ),
+          child: content!,
+        ),
+      );
+      contentWidget = Flexible(
+        child: scrollable ? SingleChildScrollView(child: padded) : padded,
+      );
+    }
+
+    Widget? actionsWidget;
+    if (actions != null && actions!.isNotEmpty) {
+      actionsWidget = Padding(
+        padding: actionsPadding ?? const EdgeInsets.fromLTRB(16, 4, 16, 16),
+        child: OverflowBar(
+          alignment: actionsAlignment ?? MainAxisAlignment.end,
+          overflowAlignment:
+              actionsOverflowAlignment ?? OverflowBarAlignment.end,
+          overflowDirection: actionsOverflowDirection ?? VerticalDirection.down,
+          spacing: 8,
+          overflowSpacing: actionsOverflowButtonSpacing ?? 8,
+          children: actions!,
+        ),
+      );
+    }
+
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      surfaceTintColor: Colors.transparent,
+      shadowColor: Colors.transparent,
+      insetPadding: insetPadding ??
+          const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minWidth: 280, maxWidth: 460),
+        child: _glassLayer(
+          context,
+          borderRadius: radius,
+          backgroundColor: backgroundColor,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (titleWidget != null) titleWidget,
+              if (contentWidget != null) contentWidget,
+              if (actionsWidget != null) actionsWidget,
+            ],
+          ),
+        ),
       ),
     );
   }
 }
 
-/// Generic transparent blurred Dialog wrapper for custom modal bodies.
+/// Generic dark frosted-glass Dialog wrapper for custom modal bodies.
 class GlassDialog extends StatelessWidget {
   final Widget child;
   final EdgeInsets? insetPadding;
@@ -183,23 +194,18 @@ class GlassDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final radius = BorderRadius.circular(16);
+    final radius = BorderRadius.circular(18);
     return Dialog(
       backgroundColor: Colors.transparent,
       surfaceTintColor: Colors.transparent,
       shadowColor: Colors.transparent,
-      insetPadding: insetPadding,
+      insetPadding: insetPadding ??
+          const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
       child: _glassLayer(
         context,
         borderRadius: radius,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: _translucentSurface(backgroundColor),
-            borderRadius: radius,
-            border: Border.all(color: Colors.white.withOpacity(0.14)),
-          ),
-          child: child,
-        ),
+        backgroundColor: backgroundColor,
+        child: child,
       ),
     );
   }
