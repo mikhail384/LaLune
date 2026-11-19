@@ -6,17 +6,20 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 double _dialogBlurSigma() {
-  if (kIsWeb) return 10;
-  return defaultTargetPlatform == TargetPlatform.android ? 6.0 : 14.0;
+  if (kIsWeb) return 14.0;
+  return defaultTargetPlatform == TargetPlatform.android ? 16.0 : 18.0;
 }
 
-BoxDecoration _dialogGlassDecoration(BorderRadius borderRadius, Color? requested) {
+BoxDecoration _dialogGlassDecoration(
+  BorderRadius borderRadius,
+  Color? requested,
+) {
   final baseTop = requested != null
-      ? requested.withOpacity(0.84)
-      : const Color(0xFF0B2118).withOpacity(0.86);
+      ? requested.withOpacity(0.54)
+      : const Color(0xFF0B2118).withOpacity(0.56);
   final baseBottom = requested != null
-      ? requested.withOpacity(0.76)
-      : const Color(0xFF07160F).withOpacity(0.82);
+      ? requested.withOpacity(0.46)
+      : const Color(0xFF07160F).withOpacity(0.48);
 
   return BoxDecoration(
     gradient: LinearGradient(
@@ -25,10 +28,10 @@ BoxDecoration _dialogGlassDecoration(BorderRadius borderRadius, Color? requested
       colors: [baseTop, baseBottom],
     ),
     borderRadius: borderRadius,
-    border: Border.all(color: Colors.white.withOpacity(0.16), width: 1),
+    border: Border.all(color: Colors.white.withOpacity(0.18), width: 1),
     boxShadow: [
       BoxShadow(
-        color: Colors.black.withOpacity(0.45),
+        color: Colors.black.withOpacity(0.38),
         blurRadius: 28,
         offset: const Offset(0, 12),
       ),
@@ -63,7 +66,7 @@ Widget _glassLayer(
   );
 }
 
-/// AlertDialog with a dark frosted-glass surface and mobile-safe blur.
+/// AlertDialog with a translucent frosted-glass surface.
 class GlassAlertDialog extends StatelessWidget {
   final Widget? title;
   final Widget? content;
@@ -177,7 +180,7 @@ class GlassAlertDialog extends StatelessWidget {
   }
 }
 
-/// Generic dark frosted-glass Dialog wrapper for custom modal bodies.
+/// Generic translucent frosted-glass Dialog wrapper for custom modal bodies.
 class GlassDialog extends StatelessWidget {
   final Widget child;
   final EdgeInsets? insetPadding;
