@@ -26,16 +26,16 @@ class GlassCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final borderRadius = BorderRadius.circular(radius);
-    final topAlpha = (opacity + 0.035).clamp(0.0, 1.0);
-    final bottomAlpha = (opacity * 0.68).clamp(0.0, 1.0);
+    final topAlpha = (0.48 + opacity * 0.5).clamp(0.0, 0.75);
+    final bottomAlpha = (0.38 + opacity * 0.4).clamp(0.0, 0.68);
 
     final decoration = BoxDecoration(
       gradient: LinearGradient(
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
         colors: [
-          Colors.white.withOpacity(topAlpha),
-          Colors.white.withOpacity(bottomAlpha),
+          const Color(0xFF0B2118).withOpacity(topAlpha),
+          const Color(0xFF07160F).withOpacity(bottomAlpha),
         ],
       ),
       borderRadius: borderRadius,
