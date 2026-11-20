@@ -681,16 +681,39 @@ jobs:
       - name: Generate launcher icons (mipmap + AppIcon)
         working-directory: Frontend
         run: flutter pub run flutter_launcher_icons
+      - name: Restore Android signing keystore
+        uses: actions/cache@v4
+        with:
+          path: Frontend/android/keystore
+          key: lalune-android-keystore-v1
 
-      - name: Build Android APK (debug)
+      - name: Prepare Android release keystore
+        run: |
+          mkdir -p Frontend/android/keystore
+          if [ ! -f Frontend/android/keystore/release.jks ]; then
+            keytool -genkeypair -v \
+              -keystore Frontend/android/keystore/release.jks \
+              -alias lalune \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass lalune-ci-store -keypass lalune-ci-store \
+              -dname "CN=LaLune, O=LaLune, C=RU"
+          fi
+          cat > Frontend/android/key.properties <<'EOF'
+          storePassword=lalune-ci-store
+          keyPassword=lalune-ci-store
+          keyAlias=lalune
+          storeFile=keystore/release.jks
+          EOF
+          
+      - name: Build Android APK (release)
         working-directory: Frontend
-        run: flutter build apk --debug
+        run: flutter build apk --release --build-number=${{ github.run_number }}
 
       - name: Verify csqtt-link in APK
         shell: bash
         run: |
           set -euo pipefail
-          APK=$(find Frontend/build/app/outputs/flutter-apk -name "app-debug.apk" -type f | head -n 1)
+          APK=$(find Frontend/build/app/outputs/flutter-apk -name "app-release.apk" -type f | head -n 1)
           echo "APK: $APK"
           unzip -l "$APK" | grep -E 'libcsqtt-link|libclient-android|libcsqttr-android|libtots' || true
 
@@ -699,7 +722,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          APK=$(find Frontend/build/app/outputs/flutter-apk -name "app-debug.apk" -type f | head -n 1)
+          APK=$(find Frontend/build/app/outputs/flutter-apk -name "app-release.apk" -type f | head -n 1)
           [ -z "$APK" ] && exit 1
           mkdir -p Output
           cp "$APK" Output/LaLune-Android.apk
