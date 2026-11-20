@@ -8,6 +8,7 @@ import 'glass_dialog.dart';
 import '../state/openwrt_installer.dart';
 import '../state/router_scanner.dart';
 import '../utils/log_exporter.dart';
+import 'ai_doctor_modal.dart';
 
 Future<String?> showOpenWrtActionDialog(BuildContext context) {
   return showDialog<String>(
@@ -545,6 +546,19 @@ class _InstallProgressDialogState extends State<_InstallProgressDialog> {
                     onPressed: _sharing ? null : () => _shareLog(result),
                     icon: const Icon(Icons.share_outlined, size: 18),
                     label: const Text('Поделиться логом'),
+                  ),
+                if (!result.ok)
+                  OutlinedButton.icon(
+                    onPressed: () => showAiDoctorDialog(
+                      context,
+                      host: widget.host,
+                      username: widget.username,
+                      password: widget.password,
+                      initialLog: result.log,
+                      errorMessage: result.message,
+                    ),
+                    icon: const Icon(Icons.auto_fix_high_outlined, size: 18),
+                    label: const Text('Исправить с ИИ'),
                   ),
                 ElevatedButton(
                   onPressed: () => Navigator.pop(context),
