@@ -60,6 +60,7 @@
                 <option value="manual">Ручной</option>
                 <option value="autoApi">Авто API</option>
                 <option value="autoVk">Авто ВК</option>
+                <option value="externalHashes">Внешние хеши</option>
               </select>
             </label>
             <small id="auth-token-note" hidden>Для подключения загрузите файл токена VK.</small>
@@ -67,6 +68,11 @@
               <label for="default-hashes">Хеши VK по умолчанию</label>
               <textarea id="default-hashes" name="vkHashes" rows="2" spellcheck="false" placeholder="hash1, hash2" aria-describedby="hash-note"></textarea>
               <small id="hash-note">Используются, если в профиле нет своих хешей.</small>
+            </div>
+            <div id="external-hashes-settings" hidden>
+              <label for="external-hashes-url">Публичный ZIP на Яндекс Диске</label>
+              <input id="external-hashes-url" name="externalHashesUrl" type="url" spellcheck="false" placeholder="https://disk.yandex.ru/d/AbCdEf123456">
+              <small>В ZIP должен быть hashes.txt. Архив скачивается заново перед каждым подключением.</small>
             </div>
             <div class="fields">
               <label>Воркеры

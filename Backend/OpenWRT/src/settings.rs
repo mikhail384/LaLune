@@ -24,6 +24,7 @@ pub struct Settings {
     pub fingerprint: String,
     pub client_ids: String,
     pub auth_mode: String,
+    pub external_hashes_url: String,
     pub turn_transport: String,
     pub turn_host: String,
     pub turn_port: String,
@@ -59,6 +60,7 @@ impl Default for Settings {
             fingerprint: "firefox".into(),
             client_ids: "8202606,6287487".into(),
             auth_mode: "manual".into(),
+            external_hashes_url: String::new(),
             turn_transport: "udp".into(),
             turn_host: String::new(),
             turn_port: String::new(),
@@ -87,7 +89,8 @@ impl Settings {
         if self.auto_api_workers < MIN_AUTO_API_WORKERS { self.auto_api_workers = MIN_AUTO_API_WORKERS; }
         if self.auto_api_workers > MAX_AUTO_API_WORKERS { self.auto_api_workers = MAX_AUTO_API_WORKERS; }
 
-        if self.auth_mode.is_empty() { self.auth_mode = "manual".into(); }
+        if !matches!(self.auth_mode.as_str(), "manual" | "autoApi" | "autoVk" | "externalHashes") { self.auth_mode = "manual".into(); }
+        self.external_hashes_url = self.external_hashes_url.trim().to_string();
         if self.turn_transport.is_empty() { self.turn_transport = "udp".into(); }
         if self.obfs.is_empty() { self.obfs = "video".into(); }
         if self.fingerprint.is_empty() { self.fingerprint = "firefox".into(); }

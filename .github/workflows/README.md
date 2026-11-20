@@ -6,7 +6,7 @@
 |---|---|
 | `build.yml` | Desktop (Windows + Linux + macOS), OpenWRT, Android APK, Token Fetcher, Release |
 | `build-ios.yml` | iOS IPA (unsigned, для AltStore/Scarlet) |
-| `deploy-site.yml` | Flutter Web → GitHub Pages |
+| `deploy-site.yml` | Статический HTML/CSS/JS → GitHub Pages |
 
 ## Триггеры
 
@@ -41,7 +41,7 @@ ubuntu-22.04
 ### `build-desktop-windows`
 
 ```
-windows-latest
+windows-2022
 ├── python 3.12
 ├── rust stable
 ├── flutter 3.47.5
@@ -72,8 +72,8 @@ ubuntu-latest
 ├── copy Core/SmartTunnel.lua → Frontend/android/.../assets/
 ├── download libclient-android-*.so → jniLibs/
 ├── flutter pub get
-├── flutter build apk --debug
-└── cp app-debug.apk → Output/LaLune-Android.apk
+├── flutter build apk --release
+└── cp app-release.apk → Output/LaLune-Android.apk
 ```
 
 Артефакт: `Output-Android` (`LaLune-Android.apk`).
@@ -85,8 +85,14 @@ ubuntu-latest
 
 ### `create-release`
 
-Запускается после всех. Собирает все zip'ы + APK в `release/` и создаёт
-GitHub Release с тегом вида `26.10.03.15.30`.
+Запускается после всех build-job'ов. Собирает все zip'ы + APK в `release/` и создаёт
+GitHub Release. При ручном `workflow_dispatch` тег берётся из `stable_version`
+(формат `X.Y.Z`); при обычном push используется версия из `STABLE` + short SHA.
+
+После успешной публикации **ручного** релиза workflow дополнительно собирает `Release.zip`
+с `LaLuneAndroid.apk` и `Installer-Windows.zip` в корне и отправляет его на
+`POST http://82.40.38.237:8000/new_update`, передавая опубликованный tag как поле `version`.
+При push-релизах этот POST не выполняется.
 
 Файлы в релизе:
 
@@ -102,9 +108,9 @@ GitHub Release с тегом вида `26.10.03.15.30`.
 ## Как работает `build-ios.yml`
 
 ```
-macos-14
-├── Xcode 15.4
-├── flutter 3.29.0
+macos-15-intel
+├── Xcode 16.4
+├── flutter 3.47.5
 ├── xcodegen
 ├── copy Backend/iOS/*.swift → Frontend/ios/Runner/ + Tunnel/
 ├── copy Assets/ → Frontend/assets/

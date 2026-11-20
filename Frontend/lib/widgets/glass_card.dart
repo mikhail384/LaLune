@@ -36,18 +36,19 @@ class GlassCard extends StatelessWidget {
       child: child,
     );
 
-    // High-sigma backdrop blur is very expensive on Android GPUs. Keep the
-    // desktop look, but cap mobile blur and share filters through BackdropGroup
-    // when the root shell provides one.
-    final effectiveBlur =
-        !kIsWeb && defaultTargetPlatform == TargetPlatform.android && blur > 7
-            ? 7.0
-            : blur;
-    final filter =
-        ImageFilter.blur(sigmaX: effectiveBlur, sigmaY: effectiveBlur);
-    final filtered = BackdropGroup.of(context) == null
-        ? BackdropFilter(filter: filter, child: surface)
-        : BackdropFilter.grouped(filter: filter, child: surface);
+    // Android uses the translucent surface without backdrop sampling. Settings
+    // contains many cards; removing those offscreen blur passes saves both GPU
+    // bandwidth and frame time while preserving the same layout/tint/border.
+    final isAndroid = !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+    final Widget filtered;
+    if (isAndroid || blur <= 0) {
+      filtered = surface;
+    } else {
+      final filter = ImageFilter.blur(sigmaX: blur, sigmaY: blur);
+      filtered = BackdropGroup.of(context) == null
+          ? BackdropFilter(filter: filter, child: surface)
+          : BackdropFilter.grouped(filter: filter, child: surface);
+    }
     final card = RepaintBoundary(
       child: ClipRRect(
         borderRadius: BorderRadius.circular(radius),

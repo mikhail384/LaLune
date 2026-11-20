@@ -24,6 +24,8 @@ void main() {
     ipRoutingMode: 'blacklist',
     ipRoutingIps: '192.0.2.8\n198.51.100.0/24',
     showCoreLogs: true,
+    authMode: 'externalHashes',
+    externalHashesUrl: 'https://disk.yandex.ru/d/TestPublicArchive',
   );
 
   ProviderContainer containerWith(MockClient client) {
@@ -66,6 +68,8 @@ void main() {
     'desktopSocks5Mode',
     'ipRoutingIps',
     'showCoreLogs',
+    'authMode',
+    'externalHashesUrl',
   ]) {
     test('reports failure when backend acknowledges PUT but drops $key',
         () async {

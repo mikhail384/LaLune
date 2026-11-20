@@ -21,6 +21,7 @@ class Settings {
   final String fingerprint;
   final String clientIds;
   final String authMode;
+  final String externalHashesUrl;
   final String turnTransport;
   final String turnHost;
   final String turnPort;
@@ -77,6 +78,7 @@ class Settings {
     this.fingerprint = 'firefox',
     this.clientIds = '8202606,6287487',
     this.authMode = 'manual',
+    this.externalHashesUrl = '',
     this.turnTransport = 'udp',
     this.turnHost = '',
     this.turnPort = '',
@@ -136,6 +138,7 @@ class Settings {
       fingerprint: (j['fingerprint'] ?? 'firefox') as String,
       clientIds: (j['clientIds'] ?? '8202606,6287487') as String,
       authMode: (j['authMode'] ?? 'manual') as String,
+      externalHashesUrl: (j['externalHashesUrl'] ?? '') as String,
       turnTransport: (j['turnTransport'] ?? 'udp') as String,
       turnHost: (j['turnHost'] ?? '') as String,
       turnPort: (j['turnPort'] ?? '') as String,
@@ -143,7 +146,7 @@ class Settings {
       vkAuthMode: (j['vkAuthMode'] ?? 'vkcalls') as String,
       allowHashRedistribution: (j['allowHashRedistribution'] ?? false) as bool,
       validateVkHashes: (j['validateVkHashes'] ?? false) as bool,
-      totsWorkers: ((j['totsWorkers'] ?? 1) as num).toInt().clamp(1, 127).toInt(),
+      totsWorkers: ((j['totsWorkers'] ?? 1) as num).toInt().clamp(1, 256).toInt(),
       totsMtu: ((j['totsMtu'] ?? 1200) as num).toInt().clamp(576, 1400).toInt(),
       totsRelayOnly: (j['totsRelayOnly'] ?? false) as bool,
       totsVkEnabled: (j['totsVkEnabled'] ?? true) as bool,
@@ -187,6 +190,7 @@ class Settings {
         'fingerprint': fingerprint,
         'clientIds': clientIds,
         'authMode': authMode,
+        'externalHashesUrl': externalHashesUrl,
         'turnTransport': turnTransport,
         'turnHost': turnHost,
         'turnPort': turnPort,
@@ -237,6 +241,7 @@ class Settings {
     String? fingerprint,
     String? clientIds,
     String? authMode,
+    String? externalHashesUrl,
     String? turnTransport,
     String? turnHost,
     String? turnPort,
@@ -286,6 +291,7 @@ class Settings {
         fingerprint: fingerprint ?? this.fingerprint,
         clientIds: clientIds ?? this.clientIds,
         authMode: authMode ?? this.authMode,
+        externalHashesUrl: externalHashesUrl ?? this.externalHashesUrl,
         turnTransport: turnTransport ?? this.turnTransport,
         turnHost: turnHost ?? this.turnHost,
         turnPort: turnPort ?? this.turnPort,

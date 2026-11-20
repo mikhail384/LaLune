@@ -48,6 +48,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
   final _peerCtl = TextEditingController();
   final _vkHashesCtl = TextEditingController();
+  final _externalHashesUrlCtl = TextEditingController();
   final _passwordCtl = TextEditingController();
   final _workersCtl = TextEditingController();
   final _autoApiWorkersCtl = TextEditingController();
@@ -100,6 +101,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   void dispose() {
     _peerCtl.dispose();
     _vkHashesCtl.dispose();
+    _externalHashesUrlCtl.dispose();
     _passwordCtl.dispose();
     _workersCtl.dispose();
     _autoApiWorkersCtl.dispose();
@@ -152,6 +154,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     _clientIdsCtl.text = s.clientIds;
     _deviceIdCtl.text = s.deviceId;
     _authMode = s.authMode.isEmpty ? 'manual' : s.authMode;
+    _externalHashesUrlCtl.text = s.externalHashesUrl;
     _enableSmartTunnel = s.enableSmartTunnel;
     _showCoreLogs = s.showCoreLogs;
     _shareVpn = s.shareVpn;
@@ -235,6 +238,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       clientIds: _clientIdsCtl.text.trim(),
       deviceId: _deviceIdCtl.text.trim(),
       authMode: _authMode,
+      externalHashesUrl: _externalHashesUrlCtl.text.trim(),
       enableSmartTunnel: _enableSmartTunnel,
       showCoreLogs: _showCoreLogs,
       shareVpn: _shareVpn,
@@ -243,7 +247,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       ipRoutingIps: _ipRoutingIpsCtl.text.trim(),
       androidAppRoutingMode: _androidAppRoutingMode,
       androidVpnApps: _androidVpnApps.toList()..sort(),
-      totsWorkers: (int.tryParse(_totsWorkersCtl.text.trim()) ?? 1).clamp(1, 127).toInt(),
+      totsWorkers: (int.tryParse(_totsWorkersCtl.text.trim()) ?? 1).clamp(1, 256).toInt(),
       totsMtu: (int.tryParse(_totsMtuCtl.text.trim()) ?? 1200).clamp(576, 1400).toInt(),
       totsVkCallLinks: _totsVkLinksCtl.text.trim(),
       totsJazzRoomName: _totsJazzRoomCtl.text.trim(),
@@ -657,7 +661,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       while (payload.length % 4 != 0) { payload += '='; }
       final decoded = jsonDecode(utf8.decode(base64Decode(payload)));
       if (decoded is Map && decoded['provider_data'] is Map) {
-        return Map<String, dynamic>.from(decoded['provider_data'] as Map);
+        final data = Map<String, dynamic>.from(decoded['provider_data'] as Map);
+        const providerKeys = {'vk', 'jazz', 'ya-docs', 'mail-docs', 'cups'};
+        if (data.keys.any(providerKeys.contains)) return data;
+        final primary = (decoded['provider'] ?? 'vk').toString();
+        return <String, dynamic>{primary: data};
       }
     } catch (_) {}
     return const {};
@@ -991,12 +999,17 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               _authOption('autoVk', 'Авто ВК',
                   'Ядро само авторизуется через VK',
                   enabled: hasToken, vk: vk),
-              const SizedBox(height: 12),
-              if (!hasToken)
-                _buildLoginButton(vk)
-              else
-                _buildTokenActiveBadge(),
-              if (vk.fetching) ...[
+              _authOption('externalHashes', 'Внешние хеши',
+                  'Скачивать hashes.txt из публичного ZIP на Яндекс Диске при каждом запуске VPN',
+                  enabled: true, vk: vk),
+              if (_authMode == 'autoApi' || _authMode == 'autoVk') ...[
+                const SizedBox(height: 12),
+                if (!hasToken)
+                  _buildLoginButton(vk)
+                else
+                  _buildTokenActiveBadge(),
+              ],
+              if (vk.fetching && (_authMode == 'autoApi' || _authMode == 'autoVk')) ...[
                 const SizedBox(height: 10),
                 LinearProgressIndicator(
                   value: vk.progress / 100.0,
@@ -1026,6 +1039,30 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   style: const TextStyle(fontSize: 13),
                   decoration:
                       const InputDecoration(hintText: 'hash1,hash2,hash3'),
+                  onChanged: (_) => _markDirty(),
+                ),
+              ],
+              if (_authMode == 'externalHashes') ...[
+                const SizedBox(height: 14),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Text('Публичный ZIP на Яндекс Диске',
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.white.withOpacity(0.65))),
+                ),
+                TextField(
+                  controller: _externalHashesUrlCtl,
+                  keyboardType: TextInputType.url,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  style: const TextStyle(fontSize: 13),
+                  decoration: const InputDecoration(
+                    hintText: 'https://disk.yandex.ru/d/AbCdEf123456',
+                    helperText: 'В ZIP должен находиться hashes.txt. Архив скачивается заново перед каждым подключением.',
+                    helperMaxLines: 3,
+                    helperStyle: TextStyle(fontSize: 10.5),
+                  ),
                   onChanged: (_) => _markDirty(),
                 ),
               ],

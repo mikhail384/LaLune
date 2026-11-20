@@ -145,6 +145,7 @@ function showProfiles() {
 
 function updateAuthFields() {
   byId("manual-settings").hidden = authMode.value !== "manual";
+  byId("external-hashes-settings").hidden = authMode.value !== "externalHashes";
   byId("auto-api-settings").hidden = authMode.value !== "autoApi";
   settingsForm.elements.autoApiWorkers.disabled = authMode.value !== "autoApi";
   refreshControls();

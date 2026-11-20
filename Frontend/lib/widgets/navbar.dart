@@ -48,14 +48,19 @@ class NavBar extends StatelessWidget {
         }),
       ),
     );
-    final sigma =
-        !kIsWeb && defaultTargetPlatform == TargetPlatform.android ? 7.0 : 14.0;
-    final filter = ImageFilter.blur(sigmaX: sigma, sigmaY: sigma);
+    final isAndroid = !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+    final Widget navSurface;
+    if (isAndroid) {
+      navSurface = bar;
+    } else {
+      final filter = ImageFilter.blur(sigmaX: 14, sigmaY: 14);
+      navSurface = BackdropGroup.of(context) == null
+          ? BackdropFilter(filter: filter, child: bar)
+          : BackdropFilter.grouped(filter: filter, child: bar);
+    }
     final content = ClipRRect(
       borderRadius: borderRadius,
-      child: BackdropGroup.of(context) == null
-          ? BackdropFilter(filter: filter, child: bar)
-          : BackdropFilter.grouped(filter: filter, child: bar),
+      child: navSurface,
     );
 
     return RepaintBoundary(

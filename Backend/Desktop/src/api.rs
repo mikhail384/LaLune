@@ -26,6 +26,7 @@ use futures::stream::Stream;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::convert::Infallible;
+use std::io::{Cursor, Read};
 use std::sync::Arc;
 use std::time::Duration;
 use tower_http::cors::{Any, CorsLayer};
@@ -486,6 +487,102 @@ async fn device_info(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 //  VPN
 // ============================================================
 
+
+async fn fetch_external_hashes(public_url: &str) -> Result<String, String> {
+    let key = public_url.trim();
+    let lower = key.to_ascii_lowercase();
+    if !(lower.starts_with("https://disk.yandex.ru/") || lower.starts_with("https://disk.yandex.com/")) {
+        return Err("external hashes must use a public https://disk.yandex.ru/d/... link".into());
+    }
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(60))
+        .build()
+        .map_err(|e| format!("cannot create HTTP client: {e}"))?;
+
+    let api = client
+        .get("https://cloud-api.yandex.net/v1/disk/public/resources/download")
+        .query(&[("public_key", key)])
+        .send()
+        .await
+        .map_err(|e| format!("Yandex Disk API request failed: {e}"))?;
+    let status = api.status();
+    let body = api
+        .text()
+        .await
+        .map_err(|e| format!("cannot read Yandex Disk API response: {e}"))?;
+    if !status.is_success() {
+        return Err(format!("Yandex Disk API HTTP {}", status.as_u16()));
+    }
+    let json: Value = serde_json::from_str(&body)
+        .map_err(|e| format!("invalid Yandex Disk API response: {e}"))?;
+    let href = json.get("href").and_then(Value::as_str).unwrap_or("").trim();
+    if !href.starts_with("https://") {
+        return Err("Yandex Disk did not return a secure download URL".into());
+    }
+
+    let response = client
+        .get(href)
+        .send()
+        .await
+        .map_err(|e| format!("hash archive request failed: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("hash archive HTTP {}", response.status().as_u16()));
+    }
+    const MAX_ARCHIVE: u64 = 32 * 1024 * 1024;
+    if response.content_length().is_some_and(|n| n > MAX_ARCHIVE) {
+        return Err("hash archive is too large".into());
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| format!("cannot download hash archive: {e}"))?;
+    if bytes.len() as u64 > MAX_ARCHIVE {
+        return Err("hash archive is too large".into());
+    }
+
+    let mut zip = zip::ZipArchive::new(Cursor::new(bytes))
+        .map_err(|e| format!("invalid ZIP archive: {e}"))?;
+    let mut text = None;
+    for i in 0..zip.len() {
+        let mut entry = zip.by_index(i).map_err(|e| format!("cannot read ZIP entry: {e}"))?;
+        if entry.is_dir() { continue; }
+        let name = entry.name().replace('\\', "/");
+        if !name.rsplit('/').next().unwrap_or("").eq_ignore_ascii_case("hashes.txt") {
+            continue;
+        }
+        if entry.size() > 1024 * 1024 {
+            return Err("hashes.txt is too large".into());
+        }
+        let mut value = String::new();
+        entry
+            .read_to_string(&mut value)
+            .map_err(|e| format!("cannot read hashes.txt: {e}"))?;
+        if value.len() > 1024 * 1024 {
+            return Err("hashes.txt is too large".into());
+        }
+        text = Some(value);
+        break;
+    }
+    let text = text.ok_or_else(|| "hashes.txt not found in ZIP".to_string())?;
+    let mut hashes = Vec::new();
+    for item in text
+        .split(|c: char| c == ',' || c == '+' || c.is_whitespace())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        if !hashes.iter().any(|existing: &String| existing == item) {
+            hashes.push(item.to_string());
+        }
+        if hashes.len() >= 6 { break; }
+    }
+    if hashes.is_empty() {
+        return Err("hashes.txt does not contain hashes".into());
+    }
+    Ok(hashes.join(","))
+}
+
 #[derive(Deserialize)]
 struct ConnectBody {
     #[serde(rename = "configId")]
@@ -625,6 +722,27 @@ async fn vpn_connect(
 
     let mut settings = state.settings.read().clone();
     let mut auto_api_call_ids: Vec<String> = Vec::new();
+
+    if matches!(kind, ProtocolKind::Csqtt | ProtocolKind::Csqttr)
+        && settings.auth_mode == "externalHashes"
+    {
+        if settings.external_hashes_url.trim().is_empty() {
+            return err(400, "external hashes URL is empty");
+        }
+        state.log("[VPN] downloading external hashes from Yandex Disk");
+        match fetch_external_hashes(&settings.external_hashes_url).await {
+            Ok(hashes) => {
+                let count = hashes.split(',').filter(|v| !v.is_empty()).count();
+                settings.vk_hashes = hashes;
+                config.hashes.clear();
+                state.log(format!("[VPN] external hashes loaded ({count})"));
+            }
+            Err(message) => {
+                state.log(format!("[VPN] external hashes failed: {message}"));
+                return err(502, message);
+            }
+        }
+    }
 
     let tots_auto_api = kind == ProtocolKind::Tots
         && settings.tots_vk_enabled

@@ -19,7 +19,7 @@ class _GlassShaderOverlay extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (kIsWeb) return const SizedBox.expand();
+    if (kIsWeb || defaultTargetPlatform == TargetPlatform.android) return const SizedBox.expand();
     return IgnorePointer(
       child: FutureBuilder<FragmentProgram>(
         future: _loadProgram(),
@@ -72,25 +72,34 @@ Widget _glassLayer(
   required Widget child,
   required BorderRadius borderRadius,
 }) {
-  final blur = _dialogBlurSigma();
-  final filter = ImageFilter.blur(sigmaX: blur, sigmaY: blur);
+  final isAndroid = !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
   final stack = Stack(
     fit: StackFit.passthrough,
     children: [
-      const Positioned.fill(child: _GlassShaderOverlay()),
+      if (!isAndroid) const Positioned.fill(child: _GlassShaderOverlay()),
       child,
     ],
   );
 
+  // Android: avoid BackdropFilter entirely for modal surfaces. Even a small
+  // sigma forces repeated offscreen backdrop captures while lists/keyboard are
+  // moving and was causing visible jank on phones. The translucent dialog
+  // surface itself is retained, so the modal stays glass-like without changing
+  // the page behind it or paying the blur cost.
+  if (isAndroid) {
+    return RepaintBoundary(
+      child: ClipRRect(borderRadius: borderRadius, child: stack),
+    );
+  }
+
+  final blur = _dialogBlurSigma();
+  final filter = ImageFilter.blur(sigmaX: blur, sigmaY: blur);
   return RepaintBoundary(
     child: ClipRRect(
       borderRadius: borderRadius,
       // Keep modal blur local to the dialog. Joining the app-level
       // BackdropGroup can wash out the whole route while a modal is open.
-      child: BackdropFilter(
-        filter: filter,
-        child: stack,
-      ),
+      child: BackdropFilter(filter: filter, child: stack),
     ),
   );
 }

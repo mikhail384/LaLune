@@ -114,7 +114,9 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
             persistedMode != s.desktopSocks5Mode ||
             savedSettings.ipRoutingMode != s.ipRoutingMode ||
             savedSettings.ipRoutingIps != s.ipRoutingIps ||
-            savedSettings.showCoreLogs != s.showCoreLogs) {
+            savedSettings.showCoreLogs != s.showCoreLogs ||
+            savedSettings.authMode != s.authMode ||
+            savedSettings.externalHashesUrl != s.externalHashesUrl) {
           throw StateError('Настройки не подтверждены бэкендом');
         }
       }

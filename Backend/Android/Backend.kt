@@ -41,6 +41,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.zip.ZipFile
 import kotlin.concurrent.thread
 
 class Backend(private val context: Context) {
@@ -812,7 +813,7 @@ class Backend(private val context: Context) {
                 })
                 val keys = JSONArray(listOf(
                     "peer", "vkHashes", "password", "workers", "autoApiWorkers",
-                    "authMode", "obfs", "fingerprint", "clientIds",
+                    "authMode", "externalHashesUrl", "obfs", "fingerprint", "clientIds",
                     "captchaMode", "vkAuthMode", "turnTransport",
                     "allowHashRedistribution", "validateVkHashes",
                     "shareVpn", "showCoreLogs"
@@ -974,6 +975,7 @@ class Backend(private val context: Context) {
         put("fingerprint", "firefox")
         put("clientIds", "8202606,6287487")
         put("authMode", "manual")
+        put("externalHashesUrl", "")
         put("turnTransport", "udp")
         put("turnHost", "")
         put("turnPort", "")
@@ -1033,12 +1035,17 @@ class Backend(private val context: Context) {
             .coerceIn(MIN_AUTO_API_WORKERS, MAX_AUTO_API_WORKERS)
         s.put("workers", w)
         s.put("autoApiWorkers", aw)
-        s.put("totsWorkers", s.optInt("totsWorkers", 1).coerceIn(1, 127))
+        s.put("totsWorkers", s.optInt("totsWorkers", 1).coerceIn(1, 256))
         s.put("totsMtu", s.optInt("totsMtu", 1200).coerceIn(576, 1400))
         listOf("totsVkPercent", "totsJazzPercent", "totsYaDocsPercent", "totsMailDocsPercent", "totsCupsPercent").forEach { key ->
             s.put(key, s.optInt(key, if (key == "totsVkPercent") 100 else 0).coerceIn(0, 100))
         }
         if (s.optString("totsVkAuthMode", "manual") != "autoApi") s.put("totsVkAuthMode", "manual")
+        val authMode = s.optString("authMode", "manual")
+        if (authMode !in setOf("manual", "autoApi", "autoVk", "externalHashes")) {
+            s.put("authMode", "manual")
+        }
+        s.put("externalHashesUrl", s.optString("externalHashesUrl", "").trim())
         s.put("deviceId", ensureDeviceId())
         try { settingsFile.writeText(s.toString()) } catch (_: Exception) {}
     }
@@ -1417,9 +1424,24 @@ class Backend(private val context: Context) {
         val password = sel.optString("password", settings.optString("password", ""))
 
         // Fallback: если в конфиге хешей нет — берём из settings.vkHashes.
+        // В режиме externalHashes хеши всегда скачиваются заново прямо перед
+        // запуском ядра и не сохраняются на диск как постоянное значение.
         val cfgHashes = sel.optString("hashes", "")
-        val hashes = if (cfgHashes.isNotEmpty()) cfgHashes
-                     else settings.optString("vkHashes", "")
+        val authMode = settings.optString("authMode", "manual")
+        val hashes = if (authMode.equals("externalHashes", ignoreCase = true)) {
+            val publicUrl = settings.optString("externalHashesUrl", "").trim()
+            if (publicUrl.isEmpty()) return 400 to jsonErr("external hashes URL is empty")
+            try {
+                addLog("[VPN] downloading external hashes from Yandex Disk")
+                downloadExternalHashes(publicUrl).also {
+                    addLog("[VPN] external hashes loaded (${it.split(',').size})")
+                }
+            } catch (e: Exception) {
+                addLog("[VPN] external hashes failed: ${e.message.orEmpty()}")
+                return 502 to jsonErr(e.message ?: "cannot download external hashes")
+            }
+        } else if (cfgHashes.isNotEmpty()) cfgHashes
+        else settings.optString("vkHashes", "")
 
         val started = cm.startCore(
             protocol = protocol,
@@ -1446,12 +1468,29 @@ class Backend(private val context: Context) {
     }
 
     private fun buildTotsRuntime(rawLink: String, settings: JSONObject): JSONObject {
-        // Parse the URI on every connection. We intentionally never pass --config to ToTS.
+        // Keep the native Android core responsible for decoding/validating the
+        // effective tots:// config. This tracks upstream ToTS more closely than
+        // expanding the URI into a long set of legacy CLI flags ourselves.
         val parsed = parseTots(rawLink)
-        val cfg = parsed.getJSONObject("totsConfig")
-        val providerData = JSONObject((cfg.optJSONObject("provider_data") ?: JSONObject()).toString())
+        val cfg = JSONObject(parsed.getJSONObject("totsConfig").toString())
+        val providerNames = listOf("vk", "jazz", "ya-docs", "mail-docs", "cups")
+        val primaryFromConfig = cfg.optString("provider", "vk").trim().ifEmpty { "vk" }
+        val rawProviderData = JSONObject((cfg.optJSONObject("provider_data") ?: JSONObject()).toString())
+        val isKeyedProviderData = providerNames.any { rawProviderData.has(it) }
+        val providerData = if (isKeyedProviderData) {
+            rawProviderData
+        } else {
+            // ToTS still accepts old single-provider configs. Normalize them to
+            // the new keyed provider_data shape before applying LaLune overrides.
+            JSONObject().apply { put(primaryFromConfig, rawProviderData) }
+        }
 
-        data class ProviderSetting(val name: String, val enabledKey: String, val percentKey: String, val defaultPercent: Int)
+        data class ProviderSetting(
+            val name: String,
+            val enabledKey: String,
+            val percentKey: String,
+            val defaultPercent: Int,
+        )
         val providers = listOf(
             ProviderSetting("vk", "totsVkEnabled", "totsVkPercent", 100),
             ProviderSetting("jazz", "totsJazzEnabled", "totsJazzPercent", 0),
@@ -1459,8 +1498,6 @@ class Backend(private val context: Context) {
             ProviderSetting("mail-docs", "totsMailDocsEnabled", "totsMailDocsPercent", 0),
             ProviderSetting("cups", "totsCupsEnabled", "totsCupsPercent", 0),
         )
-        providers.filter { !settings.optBoolean(it.enabledKey, true) }.forEach { providerData.remove(it.name) }
-
         fun overrideProvider(name: String, key: String) {
             val text = settings.optString(key, "").trim()
             if (text.isNotEmpty()) {
@@ -1475,6 +1512,12 @@ class Backend(private val context: Context) {
         overrideProvider("mail-docs", "totsMailDocsData")
         overrideProvider("cups", "totsCupsData")
 
+        // ToTS treats every configured provider as a possible fallback. Remove
+        // disabled providers *after* applying overrides so a stale override
+        // cannot silently re-enable a provider that the user switched off.
+        providers.filter { !settings.optBoolean(it.enabledKey, true) }
+            .forEach { providerData.remove(it.name) }
+
         if (settings.optBoolean("totsVkEnabled", true)) {
             var links = settings.optString("totsVkCallLinks", "")
                 .split(Regex("[\\s,+;]+"))
@@ -1485,8 +1528,11 @@ class Backend(private val context: Context) {
                 }
             if (settings.optString("totsVkAuthMode", "manual") == "autoApi") {
                 val token = readVkToken() ?: throw IllegalArgumentException("Auto API requires VK token")
-                val workers = settings.optInt("totsWorkers", 1).coerceIn(1, 127)
-                val count = callCountForWorkers(workers, settings.optInt("autoApiWorkers", DEFAULT_AUTO_API_WORKERS))
+                val workers = settings.optInt("totsWorkers", 1).coerceIn(1, 256)
+                val count = callCountForWorkers(
+                    workers,
+                    settings.optInt("autoApiWorkers", DEFAULT_AUTO_API_WORKERS),
+                )
                 val generated = mutableListOf<String>()
                 for (slot in 0 until count) {
                     if (slot > 0) Thread.sleep(if (count <= 4) 80L else 202L)
@@ -1514,7 +1560,7 @@ class Backend(private val context: Context) {
                 val names = listOf(
                     "Иван", "Владимир", "Алексей", "Михаил", "Александр", "Дмитрий",
                     "Николай", "Сергей", "Андрей", "Павел", "Мария", "Анна",
-                    "Елена", "Ольга", "Наталья", "Ирина", "Дарья", "София"
+                    "Елена", "Ольга", "Наталья", "Ирина", "Дарья", "София",
                 )
                 names[(System.nanoTime().ushr(4) % names.size).toInt()]
             } else settings.optString("totsJazzRoomName", "").trim()
@@ -1522,12 +1568,16 @@ class Backend(private val context: Context) {
             providerData.put("jazz", jazz)
         }
 
-        val available = providers.filter { settings.optBoolean(it.enabledKey, true) && providerData.has(it.name) }
+        val available = providers.filter {
+            settings.optBoolean(it.enabledKey, true) && providerData.has(it.name)
+        }
         require(available.isNotEmpty()) { "ToTS: no enabled provider data" }
-        var primary = cfg.optString("provider", "vk")
+        var primary = primaryFromConfig
         if (available.none { it.name == primary }) primary = available.first().name
 
-        val rawWeights = available.associate { it.name to settings.optInt(it.percentKey, it.defaultPercent).coerceIn(0, 100) }
+        val rawWeights = available.associate {
+            it.name to settings.optInt(it.percentKey, it.defaultPercent).coerceIn(0, 100)
+        }
         val positiveSum = rawWeights.values.sum()
         val weights = linkedMapOf<String, Int>()
         if (positiveSum <= 0) {
@@ -1535,8 +1585,11 @@ class Backend(private val context: Context) {
         } else {
             var used = 0
             available.forEachIndexed { index, p ->
-                val value = if (index == available.lastIndex) 100 - used
-                    else ((rawWeights[p.name] ?: 0) * 100 / positiveSum).coerceIn(0, 100 - used)
+                val value = if (index == available.lastIndex) {
+                    100 - used
+                } else {
+                    ((rawWeights[p.name] ?: 0) * 100 / positiveSum).coerceIn(0, 100 - used)
+                }
                 weights[p.name] = value
                 used += value
             }
@@ -1547,30 +1600,59 @@ class Backend(private val context: Context) {
         val turnPort = cfg.optInt("turn_port", 0)
         val password = cfg.optString("password", "")
         val deviceId = cfg.optString("device_id", "").trim()
-        require(peer.isNotEmpty() && webrtcPort > 0 && turnPort > 0 && password.isNotEmpty() && deviceId.isNotEmpty()) {
-            "ToTS config is missing connection fields"
+        require(peer.isNotEmpty() && webrtcPort > 0 && turnPort > 0 && password.length >= 8 && deviceId.isNotEmpty()) {
+            "ToTS config is missing or has invalid connection fields"
         }
+        try { java.util.UUID.fromString(deviceId) } catch (_: Exception) {
+            throw IllegalArgumentException("ToTS config has invalid device_id")
+        }
+
         val mtu = settings.optInt("totsMtu", cfg.optInt("mtu", 1200)).coerceIn(576, 1400)
+        val virtualIp = totsVirtualIpFromConfig(cfg) ?: totsVirtualIp(deviceId)
+        cfg.put("provider", primary)
+        cfg.put("provider_data", providerData)
+        cfg.put("mtu", mtu)
+        val effectiveLink = "tots://" + Base64.encodeToString(
+            cfg.toString().toByteArray(Charsets.UTF_8),
+            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+        )
+
         val args = JSONArray().apply {
-            put("--peer"); put(peer)
-            put("--webrtc-port"); put(webrtcPort.toString())
-            put("--turn-port"); put(turnPort.toString())
-            put("--password"); put(password)
-            put("--device-id"); put(deviceId)
-            put("--provider"); put(primary)
-            put("--provider-data"); put(providerData.toString())
-            put("--n"); put(settings.optInt("totsWorkers", 1).coerceIn(1, 127).toString())
-            put("--workers_percent"); put(JSONObject().apply { weights.forEach { (k, v) -> put(k, v) } }.toString())
-            put("--mtu"); put(mtu.toString())
+            put("--config"); put(effectiveLink)
+            put("--n"); put(settings.optInt("totsWorkers", 1).coerceIn(1, 256).toString())
+            put("--workers_percent")
+            put(JSONObject().apply { weights.forEach { (k, v) -> put(k, v) } }.toString())
             if (settings.optBoolean("totsRelayOnly", false)) put("--relay-only")
         }
 
         return JSONObject().apply {
             put("protocol", PROTO_TOTS)
-            put("virtualIp", totsVirtualIp(deviceId))
+            // Current ToTS Android requires VpnService to configure the same
+            // virtual IPv4 address carried by the server-issued tots:// config.
+            // Older links did not expose it, so retain the legacy deterministic
+            // 10.77/16 derivation only as a compatibility fallback.
+            put("virtualIp", virtualIp)
             put("mtu", mtu)
             put("args", args)
         }
+    }
+
+    private fun totsVirtualIpFromConfig(cfg: JSONObject): String? {
+        val keys = listOf(
+            "virtual_ip", "virtualIp", "virtual_ipv4", "virtualIpv4",
+            "tun_ip", "tunIp", "vpn_ip", "vpnIp", "client_ip", "clientIp",
+        )
+        for (key in keys) {
+            val raw = cfg.optString(key, "").trim().substringBefore('/').trim()
+            val parts = raw.split('.')
+            if (parts.size == 4 && parts.all { part ->
+                    part.isNotEmpty() && part.all { ch -> ch.isDigit() } &&
+                        part.toIntOrNull()?.let { it in 0..255 } == true
+                }) {
+                return raw
+            }
+        }
+        return null
     }
 
     private fun totsVirtualIp(deviceId: String): String {
@@ -1581,6 +1663,93 @@ class Backend(private val context: Context) {
         val a = 1 + ((digest[0].toInt() and 0xff) % 253)
         val b = 1 + ((digest[1].toInt() and 0xff) % 253)
         return "10.77.$a.$b"
+    }
+
+    private fun downloadExternalHashes(publicUrl: String): String {
+        val key = publicUrl.trim()
+        val lower = key.lowercase(Locale.US)
+        require(lower.startsWith("https://disk.yandex.ru/") || lower.startsWith("https://disk.yandex.com/")) {
+            "external hashes must use a public https://disk.yandex.ru/d/... link"
+        }
+
+        fun open(url: String, readTimeout: Int): HttpURLConnection {
+            val conn = URL(url).openConnection() as HttpURLConnection
+            conn.instanceFollowRedirects = true
+            conn.connectTimeout = 15_000
+            conn.readTimeout = readTimeout
+            conn.setRequestProperty("User-Agent", UA_BROWSER)
+            conn.setRequestProperty("Accept", "application/json, application/zip, */*")
+            return conn
+        }
+
+        val apiUrl = "https://cloud-api.yandex.net/v1/disk/public/resources/download?public_key=" +
+            URLEncoder.encode(key, "UTF-8")
+        val directUrl = open(apiUrl, 20_000).let { conn ->
+            try {
+                val code = conn.responseCode
+                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+                val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+                if (code !in 200..299) throw IllegalArgumentException("Yandex Disk API HTTP $code")
+                JSONObject(text).optString("href", "").trim().also { href ->
+                    require(href.startsWith("https://", ignoreCase = true)) {
+                        "Yandex Disk did not return a secure download URL"
+                    }
+                }
+            } finally {
+                conn.disconnect()
+            }
+        }
+
+        val tmp = File(appDir, "external-hashes.zip.tmp")
+        try {
+            val conn = open(directUrl, 60_000)
+            try {
+                val code = conn.responseCode
+                if (code !in 200..299) throw IllegalArgumentException("hash archive HTTP $code")
+                val declared = conn.contentLengthLong
+                val maxArchive = 32L * 1024L * 1024L
+                if (declared > maxArchive) throw IllegalArgumentException("hash archive is too large")
+                conn.inputStream.use { input ->
+                    tmp.outputStream().use { output ->
+                        val buffer = ByteArray(16 * 1024)
+                        var total = 0L
+                        while (true) {
+                            val n = input.read(buffer)
+                            if (n <= 0) break
+                            total += n
+                            if (total > maxArchive) throw IllegalArgumentException("hash archive is too large")
+                            output.write(buffer, 0, n)
+                        }
+                    }
+                }
+            } finally {
+                conn.disconnect()
+            }
+
+            val text = ZipFile(tmp).use { zip ->
+                val entry = zip.entries().asSequence().firstOrNull { entry ->
+                    !entry.isDirectory && entry.name.replace('\\', '/').substringAfterLast('/').equals("hashes.txt", ignoreCase = true)
+                } ?: throw IllegalArgumentException("hashes.txt not found in ZIP")
+                if (entry.size > 1024L * 1024L) throw IllegalArgumentException("hashes.txt is too large")
+                zip.getInputStream(entry).bufferedReader(Charsets.UTF_8).use { reader ->
+                    val value = reader.readText()
+                    if (value.length > 1024 * 1024) throw IllegalArgumentException("hashes.txt is too large")
+                    value
+                }
+            }
+
+            val hashes = text
+                .replace('\r', ',').replace('\n', ',').replace('\t', ',').replace(' ', ',').replace('+', ',')
+                .split(',')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .distinct()
+                .take(6)
+            require(hashes.isNotEmpty()) { "hashes.txt does not contain hashes" }
+            return hashes.joinToString(",")
+        } finally {
+            try { tmp.delete() } catch (_: Exception) {}
+        }
     }
 
     private fun markVpnConnecting() {

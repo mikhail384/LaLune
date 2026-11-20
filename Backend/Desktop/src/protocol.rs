@@ -121,7 +121,7 @@ pub fn settings_keys_for(kind: ProtocolKind) -> Vec<&'static str> {
     match kind {
         ProtocolKind::Csqtt => vec![
             "peer", "vkHashes", "password", "workers", "autoApiWorkers",
-            "authMode", "obfs", "fingerprint", "clientIds",
+            "authMode", "externalHashesUrl", "obfs", "fingerprint", "clientIds",
             "captchaMode", "vkAuthMode", "turnTransport",
             "allowHashRedistribution", "validateVkHashes",
             "shareVpn", "desktopSocks5Mode", "showCoreLogs",
@@ -129,7 +129,7 @@ pub fn settings_keys_for(kind: ProtocolKind) -> Vec<&'static str> {
         ],
         ProtocolKind::Csqttr => vec![
             "peer", "vkHashes", "password", "workers", "autoApiWorkers",
-            "authMode", "obfs", "fingerprint", "clientIds",
+            "authMode", "externalHashesUrl", "obfs", "fingerprint", "clientIds",
             "captchaMode", "vkAuthMode", "turnTransport",
             "allowHashRedistribution", "validateVkHashes",
             "shareVpn", "desktopSocks5Mode", "showCoreLogs",
@@ -317,7 +317,7 @@ fn build_tots_args(config: &ConfigItem, settings: &Settings) -> Result<Vec<Strin
         "--device-id".into(), parsed.device_id,
         "--provider".into(), provider,
         "--provider-data".into(), Value::Object(provider_data).to_string(),
-        "--n".into(), settings.tots_workers.clamp(1, 127).to_string(),
+        "--n".into(), settings.tots_workers.clamp(1, 256).to_string(),
         "--mtu".into(), settings.tots_mtu.clamp(576, 1400).to_string(),
     ];
     if let Some(pct) = percentages {

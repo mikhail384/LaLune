@@ -145,7 +145,9 @@ jobs:
   build-desktop-macos:
     name: Desktop macOS
     needs: prepare-version
-    runs-on: macos-latest
+    # Pin the Intel image: macos-latest moved to macOS 26/Arm64 in 2026,
+    # while this job explicitly cross-builds/lipos x86_64 + arm64 artifacts.
+    runs-on: macos-15-intel
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -211,7 +213,7 @@ jobs:
   build-desktop-windows:
     name: Desktop Windows
     needs: prepare-version
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
         with:
@@ -231,23 +233,6 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Install VS2022 Community (Native Desktop C++)
-        shell: pwsh
-        run: |
-          choco install visualstudio2022community -y --no-progress `
-            --package-parameters "--quiet --wait --norestart --nocache --add Microsoft.VisualStudio.Workload.NativeDesktop --includeRecommended"
-      - name: Hide VS2026 from vswhere (optional)
-        shell: pwsh
-        continue-on-error: true
-        run: |
-          foreach ($p in @(
-            "C:\Program Files\Microsoft Visual Studio\18",
-            "C:\Program Files (x86)\Microsoft Visual Studio\18"
-          )) {
-            if (Test-Path $p) {
-              Rename-Item -Path $p -NewName "18.hidden" -Force -ErrorAction SilentlyContinue
-            }
-          }
       - name: Verify vswhere
         shell: pwsh
         run: |
@@ -682,15 +667,15 @@ jobs:
         working-directory: Frontend
         run: flutter pub run flutter_launcher_icons
 
-      - name: Build Android APK (debug)
+      - name: Build Android APK (release)
         working-directory: Frontend
-        run: flutter build apk --debug
+        run: flutter build apk --release
 
       - name: Verify csqtt-link in APK
         shell: bash
         run: |
           set -euo pipefail
-          APK=$(find Frontend/build/app/outputs/flutter-apk -name "app-debug.apk" -type f | head -n 1)
+          APK=$(find Frontend/build/app/outputs/flutter-apk -name "app-release.apk" -type f | head -n 1)
           echo "APK: $APK"
           unzip -l "$APK" | grep -E 'libcsqtt-link|libclient-android|libcsqttr-android|libtots' || true
 
@@ -699,7 +684,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          APK=$(find Frontend/build/app/outputs/flutter-apk -name "app-debug.apk" -type f | head -n 1)
+          APK=$(find Frontend/build/app/outputs/flutter-apk -name "app-release.apk" -type f | head -n 1)
           [ -z "$APK" ] && exit 1
           mkdir -p Output
           cp "$APK" Output/LaLune-Android.apk
@@ -971,7 +956,39 @@ jobs:
 
       - name: Attach macOS build (optional)
         if: hashFiles('release/assets/LaLune-macOS.zip') != ''
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "${{ steps.version.outputs.tag }}" release/assets/LaLune-macOS.zip --clobber
+
+      - name: Build update notification bundle
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf release/update-bundle release/Release.zip
+          mkdir -p release/update-bundle
+
+          # Keep update-server names stable even if GitHub release asset names
+          # change in the future. Add future platform packages here as needed.
+          cp release/assets/LaLune-Android.apk release/update-bundle/LaLuneAndroid.apk
+          cp release/assets/Installer-Windows.zip release/update-bundle/Installer-Windows.zip
+
+          (
+            cd release/update-bundle
+            zip -9 ../Release.zip LaLuneAndroid.apk Installer-Windows.zip
+          )
+
+          unzip -l release/Release.zip
+          test -s release/Release.zip
+
+      - name: Notify update server after release
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --show-error --silent \
+            -X POST http://82.40.38.237:8000/new_update \
+            -F "version=${{ steps.version.outputs.tag }}" \
+            -F "file=@release/Release.zip;type=application/zip"
 

@@ -410,12 +410,29 @@ class LaLuneVpnService : VpnService() {
                 .filter { !isTots || it != packageName }
                 .distinct()
             if (appMode == "whitelist") {
+                // With an allow-list Android cannot simultaneously add the VPN
+                // host to the disallow-list. Therefore at least one *other* app
+                // must be allowed for ToTS; otherwise an empty allow-list means
+                // "all apps" and the native ToTS transport would recurse into
+                // its own TUN.
+                if (isTots && selectedPackages.isEmpty()) {
+                    Log.e(TAG, "ToTS app whitelist is empty after excluding the LaLune package")
+                    notifyLog(this@LaLuneVpnService, "[VPN] ToTS: выберите хотя бы одно приложение для whitelist")
+                    return@withLock false
+                }
+                var allowedCount = 0
                 selectedPackages.forEach { packageName ->
                     try {
                         builder.addAllowedApplication(packageName)
+                        allowedCount++
                     } catch (e: Exception) {
                         Log.w(TAG, "Cannot allow app '$packageName': ${e.message}")
                     }
+                }
+                if (isTots && allowedCount == 0) {
+                    Log.e(TAG, "ToTS app whitelist has no valid applications")
+                    notifyLog(this@LaLuneVpnService, "[VPN] ToTS: whitelist не содержит доступных приложений")
+                    return@withLock false
                 }
             } else {
                 selectedPackages.forEach { packageName ->

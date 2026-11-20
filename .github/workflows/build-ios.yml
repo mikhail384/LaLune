@@ -25,8 +25,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  FLUTTER_VERSION: "3.29.0"
-  XCODE_APP: /Applications/Xcode_15.4.app
+  FLUTTER_VERSION: "3.47.5"
+  XCODE_APP: /Applications/Xcode_16.4.app
   CSQTT_IOS_CORE_URL: https://github.com/Endlad2/csqtt-core/releases/latest/download/libcsqtt_ios_core.a
   CSQTTR_IOS_CORE_URL: https://github.com/Endlad2/csqttr-core/releases/latest/download/libcsqttr_ios_core.a
 
@@ -92,7 +92,9 @@ jobs:
   build-ios:
     name: Build unsigned IPA
     needs: prepare-version
-    runs-on: macos-14
+    # macos-14 was retired from GitHub Actions in Nov 2026. Pin to the
+    # still-supported macOS 15 image instead of relying on a removed label.
+    runs-on: macos-15-intel
     timeout-minutes: 60
 
     steps:
