@@ -67,6 +67,7 @@ ubuntu-latest
 ├── flutter 3.47.5
 ├── java 17
 ├── Android SDK (preinstalled)
+├── patch Flutter included-build plugin repositories (Google + Maven Central + Plugin Portal fallback)
 ├── copy Backend/Android/*.kt → Frontend/android/.../com/lalune/backend/
 ├── copy Assets/ → Frontend/assets/
 ├── copy Core/SmartTunnel.lua → Frontend/android/.../assets/

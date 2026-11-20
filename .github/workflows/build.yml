@@ -474,6 +474,14 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Fix Flutter included-build Maven repositories
+        shell: bash
+        run: |
+          set -euo pipefail
+          FLUTTER_BIN="$(command -v flutter)"
+          FLUTTER_ROOT="$(cd "$(dirname "$FLUTTER_BIN")/.." && pwd)"
+          python .github/scripts/patch_flutter_gradle_repositories.py "$FLUTTER_ROOT"
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ env.RUST_VERSION }}
