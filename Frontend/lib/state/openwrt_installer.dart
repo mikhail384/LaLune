@@ -63,7 +63,8 @@ class OpenWrtInstaller {
       return null;
     }
   }
-
+  static Future<Uint8List?> _obtainReleaseFile(String fileName, void Function(String message)? onProgress) async { final asset = await _loadAsset('assets/openwrt/$fileName'); if (asset != null) return asset; onProgress?.call('Скачивание $fileName...'); final client = HttpClient()..connectionTimeout = const Duration(seconds: 15); try { final req = await client.getUrl(Uri.parse('$backendBaseUrl/$fileName')).timeout(const Duration(seconds: 15)); final resp = await req.close().timeout(const Duration(seconds: 15)); if (resp.statusCode != 200) return null; final builder = BytesBuilder(copy: false); await for (final chunk in resp.timeout(const Duration(seconds: 120))) { builder.add(chunk); } final data = builder.takeBytes(); if (data.length <= 100000) return null; return data; } catch (_) { return null; } finally { client.close(force: true); } }
+  
   /// Загружает файл на роутер порциями (`cat >>`) с sync и сбросом кэша: роутеры с 64 МБ ОЗУ
   /// не переживают один длинный поток. Если файл нужного размера уже лежит — пропускает.
   /// Возвращает текст ошибки или null при успехе.
@@ -326,8 +327,7 @@ class OpenWrtInstaller {
           // (19,5 МБ) такой роутер не вмещает ни backend, ни распакованное ядро.
           onProgress?.call('Роутер с малой памятью: загружаю лёгкую сборку...');
           final leanBackend =
-              await _loadAsset('assets/openwrt/lalune-openwrt-backend-$abi-lean');
-          final leanCore = await _loadAsset('assets/openwrt/csqttr-client-$abi');
+            await _obtainReleaseFile('lalune-openwrt-backend-$abi-lean', onProgress); final leanCore = await _obtainReleaseFile('csqttr-client-$abi', onProgress);
           if (leanBackend == null || leanCore == null) {
             logTrace('Lean assets missing for abi=$abi');
             final diag = await _collectRouterDiagnostics(client);
@@ -736,7 +736,12 @@ USE_PROCD=1
 
 start_service() {
   mkdir -p "$DATA_DIR"
-  procd_open_instance
+  sysctl -w net.core.rmem_max=2097152 >/dev/null 2>&1 || true
+  sysctl -w net.core.wmem_max=2097152 >/dev/null 2>&1 || true
+sysctl -w net.core.rmem_default=262144 >/dev/null 2>&1 || true
+sysctl -w net.core.wmem_default=262144 >/dev/null 2>&1 || true
+sysctl -w net.core.netdev_max_backlog=2000 >/dev/null 2>&1 || true
+procd_open_instance
   procd_set_param command "$BACKEND_PATH"
   procd_set_param env HOME="$HOME" PATH="$COMPAT_BIN:/usr/sbin:/usr/bin:/sbin:/bin"
   procd_set_param cwd "$INSTALL_DIR"
