@@ -489,7 +489,7 @@ jobs:
           echo "ANDROID_HOME=$ANDROID_HOME"
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
 
-      - name: Install Android NDK 27 (verified)
+      - name: Install Android NDK 28.2 (verified)
         shell: bash
         run: |
           set -euo pipefail
@@ -503,10 +503,10 @@ jobs:
           # Accept licenses (non-fatal if already accepted)
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           # Install NDK WITHOUT suppressing errors
-          "$SDKMANAGER" "ndk;27.0.12077973"
-          NDK_DIR="$ANDROID_HOME/ndk/27.0.12077973"
+          "$SDKMANAGER" "ndk;28.2.13676358"
+          NDK_DIR="$ANDROID_HOME/ndk/28.2.13676358"
           if [ ! -x "$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang" ]; then
-            echo "::error::NDK 27.0.12077973 not found or incomplete at $NDK_DIR"
+            echo "::error::NDK 28.2.13676358 not found or incomplete at $NDK_DIR"
             ls -la "$ANDROID_HOME/ndk/" || true
             exit 1
           fi
@@ -523,7 +523,7 @@ jobs:
         working-directory: Core/csqtt-link
         run: |
           set -euo pipefail
-          NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_HOME/ndk/27.0.12077973}"
+          NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_HOME/ndk/28.2.13676358}"
           TOOLCHAIN="$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
           test -x "$TOOLCHAIN/bin/aarch64-linux-android24-clang" \
             || { echo "::error::clang not found in $TOOLCHAIN/bin"; ls -la "$TOOLCHAIN/bin" || true; exit 1; }
@@ -610,7 +610,7 @@ jobs:
             rm -f "$DEST/arm64-v8a/libcsqttr-android-arm64-v8a.so" "$DEST/armeabi-v7a/libcsqttr-android-armeabi-v7a.so" "$DEST/x86_64/libcsqttr-android-x86_64.so"
             git clone --depth 1 --branch feat/csqttr-ci-ios-latest https://github.com/Endlad2/csqttr-core.git /tmp/csqttr-core
             cargo install cargo-ndk --locked
-            export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_HOME/ndk/27.0.12077973}"
+            export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_HOME/ndk/28.2.13676358}"
             export NDK_HOME="$ANDROID_NDK_HOME"
             cd /tmp/csqttr-core/rust-client
 

@@ -1677,7 +1677,7 @@ class Backend(private val context: Context) {
             conn.instanceFollowRedirects = true
             conn.connectTimeout = 15_000
             conn.readTimeout = readTimeout
-            conn.setRequestProperty("User-Agent", UA_BROWSER)
+            conn.setRequestProperty("User-Agent", CoreManager.UA_BROWSER)
             conn.setRequestProperty("Accept", "application/json, application/zip, */*")
             return conn
         }
