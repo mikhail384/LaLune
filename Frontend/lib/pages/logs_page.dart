@@ -70,9 +70,9 @@ report.writeln('Time: ${DateTime.now().toIso8601String()}');
 report.writeln('OS: ${Platform.operatingSystem} ${Platform.operatingSystemVersion}');
 report.writeln('API: ${api.host}:${api.port}');
 report.writeln();
-  report.writeln('=== API /status ===');
+  report.writeln('=== API /vpn/status ===');
 try {
-final status = await api.getJson('/status');
+final status = await api.getJson('/vpn/status');
 report.writeln(const JsonEncoder.withIndent('  ').convert(status));
 } catch (e) {
 report.writeln('error: $e');
