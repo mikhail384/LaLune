@@ -174,7 +174,8 @@ IconButton(
 onPressed: _sharing ? null : () => _shareFullLogs(logs, digest),
 tooltip: 'Поделиться логом (.txt)',
 icon: const Icon(Icons.share_outlined, size: 20),
-),
+visualDensity: VisualDensity.compact, padding: const EdgeInsets.all(6), constraints: const BoxConstraints(minWidth: 34, minHeight: 34), ),
+                  
                   IconButton(
                     onPressed: logs.lines.isEmpty
                         ? null
@@ -206,11 +207,13 @@ icon: const Icon(Icons.share_outlined, size: 20),
                           },
                     tooltip: 'Копировать все логи',
                     icon: const Icon(Icons.copy_all_outlined, size: 20),
+                  visualDensity: VisualDensity.compact, padding: const EdgeInsets.all(6), constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
                   ),
                   IconButton(
                     onPressed: () => ref.read(logsProvider.notifier).clear(),
                     tooltip: 'Очистить',
                     icon: const Icon(Icons.delete_outline, size: 20),
+                  visualDensity: VisualDensity.compact, padding: const EdgeInsets.all(6), constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
                   ),
                 ],
               ),
