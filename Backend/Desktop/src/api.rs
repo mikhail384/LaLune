@@ -140,7 +140,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 async fn ping(State(state): State<Arc<AppState>>) -> Json<Value> {
     Json(json!({
         "ok": true,
-        "version": "0.9.14",
+        "version": "0.9.13",
         "os": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
         "hostname": hostname::get()
@@ -956,9 +956,13 @@ async fn vpn_connect(
         let mut tun_started = false;
         let mut previous_logs_cleared = false;
         let mut tots_ready = false;
+        let mut core_exited_before_ready = false;
 
         while tokio::time::Instant::now() < deadline && !tun_started {
-            if core_stopped(&state2) { break; }
+            if core_stopped(&state2) {
+                core_exited_before_ready = true;
+                break;
+            }
 
             if let Ok(meta) = tokio::fs::metadata(&state2.logs_path).await {
                 if meta.len() > last_size {
@@ -1126,13 +1130,20 @@ async fn vpn_connect(
         }
 
         if !tun_started {
-            state2.log(format!("[VPN] timeout waiting for {} readiness", kind_for_watchdog.id()));
-            state2.vpn.set_phase("error", "Таймаут проверки подключения");
-            state2.events.emit(Event::status_detail(
-                false,
-                "error",
-                "Таймаут проверки подключения",
-            ));
+            let (message, phase_message) = if core_exited_before_ready {
+                (
+                    format!("[VPN] {} process exited before reporting TUN readiness; see the preceding [CORE] error", kind_for_watchdog.id()),
+                    "Ядро завершилось до поднятия TUN",
+                )
+            } else {
+                (
+                    format!("[VPN] timeout waiting for {} readiness", kind_for_watchdog.id()),
+                    "Таймаут проверки подключения",
+                )
+            };
+            state2.log(message);
+            state2.vpn.set_phase("error", phase_message);
+            state2.events.emit(Event::status_detail(false, "error", phase_message));
         }
 
         if tun_started {

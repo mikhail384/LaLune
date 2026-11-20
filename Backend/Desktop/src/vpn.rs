@@ -1019,7 +1019,10 @@ pub fn parse_tots_status(line: &str) -> Option<TotsMetrics> {
 /// as the actual tunnel comes up.
 pub fn parse_tots_worker_status(line: &str) -> Option<(u64, u64)> {
     let lower = line.to_ascii_lowercase();
-    if !lower.contains("tots worker pool ready") && !lower.contains("tots tun connected") {
+    if !lower.contains("tots worker pool ready")
+        && !lower.contains("tots tun connected")
+        && !lower.contains("tots windows full-tunnel connected")
+    {
         return None;
     }
     let workers = tracing_field(line, "workers")?.trim_end_matches(',').parse::<u64>().ok()?;
@@ -1032,7 +1035,9 @@ pub fn parse_tots_worker_status(line: &str) -> Option<(u64, u64)> {
 /// The pool-ready log is not enough: TUN and default routes are established
 /// only after tots-client emits this explicit message.
 pub fn is_tots_tun_connected(line: &str) -> bool {
-    line.to_ascii_lowercase().contains("tots tun connected")
+    let lower = line.to_ascii_lowercase();
+    lower.contains("tots tun connected")
+        || lower.contains("tots windows full-tunnel connected")
 }
 
 pub fn extract_ipv4_addrs(line: &str) -> Vec<String> {
@@ -1149,5 +1154,12 @@ mod tots_log_tests {
     fn does_not_mark_worker_pool_ready_as_tun_connected() {
         assert!(!is_tots_tun_connected("ToTS worker pool ready workers=10"));
         assert!(is_tots_tun_connected("ToTS TUN connected workers=10"));
+    }
+
+    #[test]
+    fn recognizes_windows_full_tunnel_readiness_and_worker_counts() {
+        let line = "ToTS Windows full-tunnel connected workers=10 workers_target=10";
+        assert!(is_tots_tun_connected(line));
+        assert_eq!(parse_tots_worker_status(line), Some((10, 10)));
     }
 }

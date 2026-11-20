@@ -1,6 +1,6 @@
 name: lalune_web
 description: LaLune — кроссплатформенный VPN-клиент (веб-версия)
-version: 0.9.14
+version: 0.9.13
 publish_to: 'none'
 
 environment:
