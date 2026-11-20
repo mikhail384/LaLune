@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -7,29 +6,30 @@ import 'package:lalune/widgets/glass_dialog.dart';
 import 'package:lalune/widgets/navbar.dart';
 
 void main() {
-  tearDown(() {
-    debugDefaultTargetPlatformOverride = null;
-  });
-
-  testWidgets('Android uses blur-free glass surfaces for smooth scrolling',
+  testWidgets('Android keeps glass blur on cards and the navigation bar',
       (tester) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.android;
     await tester.pumpWidget(MaterialApp(
+      theme: ThemeData(platform: TargetPlatform.android),
       home: Scaffold(
         body: Column(children: [
           const GlassCard(child: Text('Card')),
-          const GlassAlertDialog(title: Text('Modal'), content: Text('Body')),
           NavBar(currentIndex: 0, onSelect: (_) {}),
         ]),
       ),
     ));
 
-    expect(find.byType(BackdropFilter), findsNothing);
+    expect(
+        find.descendant(
+            of: find.byType(GlassCard), matching: find.byType(BackdropFilter)),
+        findsOneWidget);
+    expect(
+        find.descendant(
+            of: find.byType(NavBar), matching: find.byType(BackdropFilter)),
+        findsOneWidget);
   });
 
-  testWidgets('desktop cards share a blur only inside an explicit group',
+  testWidgets('cards share a blur only inside an explicit group',
       (tester) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
     await tester.pumpWidget(MaterialApp(
       home: Scaffold(
         body: Column(children: [
@@ -54,9 +54,8 @@ void main() {
     expect(independent.backdropKey, isNull);
   });
 
-  testWidgets('desktop modal glass stays independent from app backdrop group',
+  testWidgets('modal glass stays independent from the app backdrop group',
       (tester) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -78,4 +77,5 @@ void main() {
     );
     expect(filter.backdropKey, isNull);
   });
+
 }

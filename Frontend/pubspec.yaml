@@ -1,6 +1,6 @@
 name: lalune
 description: LaLune — native Flutter client for CSQTT VPN
-version: 0.9.12
+version: 0.9.13
 publish_to: 'none'
 
 environment:
@@ -23,7 +23,9 @@ dependencies:
 
   # Utils
   shared_preferences: ^2.3.2
-
+  path_provider: ^2.1.5
+  share_plus: ^10.1.4
+  
 dev_dependencies:
   flutter_test:
     sdk: flutter

@@ -458,12 +458,15 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         if (!_isTots) Padding(
           padding: const EdgeInsets.symmetric(vertical: 5),
           child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               SizedBox(
                 width: 130,
-                child: Text('Workers',
+                child:Padding(
+                              padding: const EdgeInsets.only(top: 12),
+                              child:  Text('Workers',
                     style:
-                        TextStyle(color: Colors.white.withOpacity(0.7))),
+                        TextStyle(color: Colors.white.withOpacity(0.7)))),
               ),
               Expanded(
                 child: Builder(builder: (context) {
@@ -477,7 +480,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       helperText: 'Рекомендуется $kDefaultWorkers · допустимо от '
                           '$kMinWorkers до $kMaxWorkers. После сохранения '
                           'переподключитесь; фактическое число согласуется с сервером.',
-                      helperMaxLines: 3,
+                      helperMaxLines: 8,
                       helperStyle: const TextStyle(fontSize: 10.5),
                       suffixIcon: value == kDefaultWorkers
                           ? null
@@ -532,42 +535,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       await _loadInstalledApps();
       if (_installedApps.isEmpty || !mounted) return;
     }
-    final selected = Set<String>.from(_androidVpnApps);
     final result = await showDialog<Set<String>>(
       context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => GlassAlertDialog(
-          title: const Text('Приложения для маршрутизации'),
-          content: SizedBox(
-            width: 460,
-            height: 480,
-            child: ListView.builder(
-              itemCount: _installedApps.length,
-              itemBuilder: (context, index) {
-                final app = _installedApps[index];
-                final packageName = app['packageName'].toString();
-                final label = (app['label'] ?? packageName).toString();
-                return CheckboxListTile(
-                  value: selected.contains(packageName),
-                  title: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
-                  subtitle: Text(packageName, maxLines: 1, overflow: TextOverflow.ellipsis),
-                  dense: true,
-                  onChanged: (checked) => setDialogState(() {
-                    if (checked == true) {
-                      selected.add(packageName);
-                    } else {
-                      selected.remove(packageName);
-                    }
-                  }),
-                );
-              },
-            ),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Отмена')),
-            ElevatedButton(onPressed: () => Navigator.pop(dialogContext, selected), child: const Text('Применить')),
-          ],
-        ),
+      barrierColor: Colors.black.withOpacity(0.45),
+      builder: (_) => _AndroidAppsPickerDialog(
+        installedApps: _installedApps,
+        initialSelected: _androidVpnApps,
       ),
     );
     if (result != null && mounted) {
@@ -1522,6 +1495,148 @@ class _SubHeader extends StatelessWidget {
               letterSpacing: 0.7,
               fontWeight: FontWeight.w700,
               color: Colors.white.withOpacity(0.4))),
+    );
+  }
+}
+
+class _AndroidAppsPickerDialog extends StatefulWidget {
+  final List<Map<String, dynamic>> installedApps;
+  final Set<String> initialSelected;
+
+  const _AndroidAppsPickerDialog({
+    required this.installedApps,
+    required this.initialSelected,
+  });
+
+  @override
+  State<_AndroidAppsPickerDialog> createState() => _AndroidAppsPickerDialogState();
+}
+
+class _AndroidAppsPickerDialogState extends State<_AndroidAppsPickerDialog> {
+  final _searchCtl = TextEditingController();
+  late final Set<String> _selected = Set<String>.from(widget.initialSelected);
+  String _query = '';
+  bool _onlySelected = false;
+
+  @override
+  void dispose() {
+    _searchCtl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final q = _query.trim().toLowerCase();
+    final filteredApps = widget.installedApps.where((app) {
+      final packageName = app['packageName'].toString();
+      if (_onlySelected && !_selected.contains(packageName)) {
+        return false;
+      }
+      if (q.isEmpty) return true;
+      final label = (app['label'] ?? packageName).toString().toLowerCase();
+      return label.contains(q) || packageName.toLowerCase().contains(q);
+    }).toList();
+
+    return GlassAlertDialog(
+      title: const Text('Приложения для маршрутизации'),
+      content: SizedBox(
+        width: 460,
+        height: 480,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: _searchCtl,
+              onChanged: (value) => setState(() => _query = value),
+              style: const TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                hintText: 'Поиск по названию или package name',
+                hintStyle: TextStyle(color: Colors.white.withOpacity(0.45)),
+                prefixIcon: const Icon(Icons.search, color: Colors.white54),
+                suffixIcon: _query.isEmpty
+                    ? null
+                    : IconButton(
+                        icon: const Icon(Icons.clear, color: Colors.white54),
+                        onPressed: () {
+                          _searchCtl.clear();
+                          setState(() => _query = '');
+                        },
+                      ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Text(
+                  'Выбрано: ${_selected.length}',
+                  style: TextStyle(color: Colors.white.withOpacity(0.65), fontSize: 12),
+                ),
+                const Spacer(),
+                FilterChip(
+                  label: const Text('Выбранные'),
+                  selected: _onlySelected,
+                  onSelected: (value) => setState(() => _onlySelected = value),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: filteredApps.isEmpty
+                  ? Center(
+                      child: Text(
+                        'Приложения не найдены',
+                        style: TextStyle(color: Colors.white.withOpacity(0.55)),
+                      ),
+                    )
+                  : ListView.builder(
+                      itemCount: filteredApps.length,
+                      itemBuilder: (_, index) {
+                        final app = filteredApps[index];
+                        final packageName = app['packageName'].toString();
+                        final label = (app['label'] ?? packageName).toString();
+                        final isSystem = app['isSystem'] == true;
+                        final checked = _selected.contains(packageName);
+                        return CheckboxListTile(
+                          value: checked,
+                          dense: true,
+                          controlAffinity: ListTileControlAffinity.leading,
+                          activeColor: const Color(0xFFE5484D),
+                          title: Text(
+                            label,
+                            style: const TextStyle(color: Colors.white, fontSize: 13),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: Text(
+                            isSystem ? '$packageName • системное' : packageName,
+                            style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 11),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          onChanged: (value) {
+                            setState(() {
+                              if (value == true) {
+                                _selected.add(packageName);
+                              } else {
+                                _selected.remove(packageName);
+                              }
+                            });
+                          },
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Отмена'),
+        ),
+        ElevatedButton(
+          onPressed: () => Navigator.pop(context, _selected),
+          child: const Text('Применить'),
+        ),
+      ],
     );
   }
 }

@@ -211,6 +211,8 @@ def verify_stamped_version(version: str, build_number: int, windows_version: str
     if read("STABLE").strip() != version:
         fail("STABLE: version did not persist")
     require_text("Frontend/pubspec.yaml", f"version: {version}")
+    require_text("Site/pubspec.yaml", f"version: {version}")
+    require_text("Site/lib/constants.dart", f"latestVersion    = '{version}'")
 
     # Android manifests must explicitly carry the selected manual version.
     for manifest in (
@@ -282,15 +284,23 @@ def main() -> int:
     build_number = major * 1_000_000 + minor * 1_000 + patch
     windows_version = f"{major}.{minor}.{patch}.0"
 
-    # Canonical release marker and application UI metadata.
+    # Canonical release marker and Flutter/UI metadata.
     write("STABLE", version + "\n")
     set_pubspec_version("Frontend/pubspec.yaml", version)
+    set_pubspec_version("Site/pubspec.yaml", version)
     for manifest in (
         "Frontend/android/app/src/main/AndroidManifest.xml",
         "Frontend/android/app/src/debug/AndroidManifest.xml",
         "Frontend/android/app/src/profile/AndroidManifest.xml",
     ):
         set_android_manifest_versions(manifest, version, build_number)
+    replace_regex(
+        "Site/lib/constants.dart",
+        r"(static const String latestVersion\s*=\s*')[^']+(';\s*)",
+        rf"\g<1>{version}\2",
+        count=1,
+        expected=1,
+    )
 
     # App/backend package versions.
     set_package_version("Backend/Desktop/Cargo.toml", version)
@@ -392,8 +402,8 @@ def main() -> int:
     set_project_yml(version, build_number)
     set_xcode_project(version, build_number)
 
-    # Legacy Backend/iOS/Info-patch.md was removed; platform plist files above
-    # are now the only iOS version sources stamped by this script.
+    # Keep version-bearing deployment/documentation snippets from lying about
+    # the current release when somebody follows them manually.
     # Installer/README-OPENWRT.md no longer embeds a literal JSON version.
     # Keeping the README out of release stamping makes workflow_dispatch idempotent
     # and prevents documentation wording changes from breaking the whole build.

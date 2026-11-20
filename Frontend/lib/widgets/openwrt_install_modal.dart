@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'glass_dialog.dart';
 import '../state/openwrt_installer.dart';
 import '../state/router_scanner.dart';
+import '../utils/log_exporter.dart';
 
 Future<String?> showOpenWrtActionDialog(BuildContext context) {
   return showDialog<String>(
@@ -445,6 +446,27 @@ class _InstallProgressDialog extends StatefulWidget {
 class _InstallProgressDialogState extends State<_InstallProgressDialog> {
   String _status = 'Подготовка...';
   OpenWrtInstallResult? _result;
+  bool _sharing = false;
+
+  Future<void> _shareLog(OpenWrtInstallResult result) async {
+    if (_sharing || result.log.isEmpty) return;
+    setState(() => _sharing = true);
+    try {
+      await shareLogAsTxtFile(
+        content: result.log,
+        prefix: 'lalune_openwrt_install',
+        subject: 'LaLune OpenWRT install log (${widget.host})',
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Не удалось поделиться логом: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _sharing = false);
+    }
+  }
 
   @override
   void initState() {
@@ -518,6 +540,12 @@ class _InstallProgressDialogState extends State<_InstallProgressDialog> {
         actions: result == null
             ? null
             : [
+                if (result.log.isNotEmpty)
+                  OutlinedButton.icon(
+                    onPressed: _sharing ? null : () => _shareLog(result),
+                    icon: const Icon(Icons.share_outlined, size: 18),
+                    label: const Text('Поделиться логом'),
+                  ),
                 ElevatedButton(
                   onPressed: () => Navigator.pop(context),
                   child: const Text('Готово'),

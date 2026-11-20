@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -6,6 +8,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/log_digest.dart';
 import '../state/logs_notifier.dart';
+import '../state/providers.dart';
+import '../utils/log_exporter.dart';
 import '../widgets/glass_card.dart';
 
 const _maxVisibleLogs = 150;
@@ -19,7 +23,8 @@ class LogsPage extends ConsumerStatefulWidget {
 
 class _LogsPageState extends ConsumerState<LogsPage> {
   final _scroll = ScrollController();
-
+  bool _sharing = false;
+  
   /// false — короткий читаемый лог (по умолчанию), true — все сырые строки.
   bool _detailed = false;
 
@@ -54,7 +59,80 @@ class _LogsPageState extends ConsumerState<LogsPage> {
     _scroll.dispose();
     super.dispose();
   }
-
+  Future<void> _shareFullLogs(LogsState logs, List<DigestEntry> digest) async {
+    if (_sharing) return;
+setState(() => _sharing = true);
+try {
+final api = ref.read(apiClientProvider);
+final report = StringBuffer();
+report.writeln('=== LALUNE FULL DIAGNOSTIC LOG ===');
+report.writeln('Time: ${DateTime.now().toIso8601String()}');
+report.writeln('OS: ${Platform.operatingSystem} ${Platform.operatingSystemVersion}');
+report.writeln('API: ${api.host}:${api.port}');
+report.writeln();
+  report.writeln('=== API /vpn/status ===');
+try {
+final status = await api.getJson('/vpn/status');
+report.writeln(const JsonEncoder.withIndent('  ').convert(status));
+} catch (e) {
+report.writeln('error: $e');
+}
+report.writeln();
+report.writeln('=== SHORT DIGEST ===');
+if (digest.isEmpty) {
+report.writeln('(пусто)');
+} else {
+for (final e in digest) {
+final rep = e.showRepeat ? ' ×${e.count}' : '';
+final at = e.time.isEmpty ? '' : '${e.time} ';
+report.writeln('$at${_levelMark(e.level)} ${e.text}$rep');
+}
+}
+report.writeln();
+  report.writeln();
+  report.writeln('=== BACKEND & CORE LOGS (ALL) ===');
+try {
+final tail = await api.getJsonList('/logs/tail', query: {'lines': '5000', 'source': 'all'});
+for (final item in tail) {
+if (item is Map) {
+final t = (item['time'] ?? item['ts'] ?? '').toString();
+final l = (item['line'] ?? item['text'] ?? item['msg'] ?? item.toString()).toString();
+report.writeln(t.isNotEmpty ? '[$t] $l' : l);
+} else {
+report.writeln(item.toString());
+}
+}
+} catch (e) {
+for (var i = 0; i < logs.allLines.length; i++) {
+final t = i < logs.allTimes.length && logs.allTimes[i].isNotEmpty ? '[${logs.allTimes[i]}] ' : '';
+report.writeln('$t${logs.allLines[i]}');
+}
+}
+report.writeln();
+report.writeln('=== OPENWRT INSTALL & ROUTER DIAGNOSTICS ===');
+final owrt = await OpenWrtDiagnosticStore.load();
+if (owrt != null && owrt.log.isNotEmpty) {
+report.writeln('savedAt: ${owrt.savedAt}');
+report.writeln(owrt.log);
+} else {
+report.writeln('(нет сохранённых логов установки OpenWRT)');
+}
+await shareLogAsTxtFile(
+content: report.toString(),
+prefix: 'lalune_full_log',
+subject: 'LaLune full diagnostic log',
+);
+} catch (e) {
+if (mounted) {
+ScaffoldMessenger.of(context).showSnackBar(
+SnackBar(content: Text('Не удалось экспортировать лог: $e')),
+);
+}
+} finally {
+if (mounted) setState(() => _sharing = false);
+}
+  }
+  
   @override
   Widget build(BuildContext context) {
     final logs = ref.watch(logsProvider);
@@ -92,6 +170,11 @@ class _LogsPageState extends ConsumerState<LogsPage> {
                     onSelected: (v) => setState(() => _detailed = v),
                     visualDensity: VisualDensity.compact,
                   ),
+IconButton(
+onPressed: _sharing ? null : () => _shareFullLogs(logs, digest),
+tooltip: 'Поделиться логом (.txt)',
+icon: const Icon(Icons.share_outlined, size: 20),
+),
                   IconButton(
                     onPressed: logs.lines.isEmpty
                         ? null

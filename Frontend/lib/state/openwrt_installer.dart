@@ -11,6 +11,7 @@ import 'package:flutter/services.dart' show rootBundle;
 
 import '../api/api_client.dart';
 import '../utils/keep_awake.dart';
+import '../utils/log_exporter.dart';
 
 class OpenWrtInstallResult {
   final bool ok;
@@ -185,7 +186,36 @@ class OpenWrtInstaller {
       SSHCipherType.aes128cbc,
     ],
   );
+  static Future<String> _collectRouterDiagnostics(SSHClient client) async {
+    final buf = StringBuffer();
+    buf.writeln('=== ROUTER DIAGNOSTICS ===');
+    final cmds = <(String, String)>[
+      ('uname & release', 'uname -a; cat /etc/openwrt_release 2>/dev/null'),
+      ('memory & disk', 'free -m 2>/dev/null || free 2>/dev/null; df -h 2>/dev/null'),
+      ('lalune files', r'ls -la "$HOME/la-lune" "$HOME/.la-lune" /usr/lib/lalune-run /etc/init.d/lalune 2>&1'),
+      ('processes', 'ps w 2>/dev/null || ps 2>/dev/null'),
+      ('listening sockets', 'netstat -tulnp 2>/dev/null || ss -tulnp 2>/dev/null || true'),
+      ('tun & network', 'ls -la /dev/net/tun 2>&1; ip -4 addr show 2>&1; ip -4 route show 2>&1; ip -4 rule show 2>&1'),
+      ('firewall & dns', 'iptables --version 2>&1 || true; nft --version 2>&1 || true; cat /etc/resolv.conf 2>&1 || true'),
+      ('pkg log', 'tail -n 120 /tmp/lalune-pkg.log 2>/dev/null || true'),
+      ('manager log', r'tail -n 200 "$HOME/.la-lune/LaLuneManager.log" 2>/dev/null || true'),
+      ('logread', "logread 2>/dev/null | grep -iE 'lalune|csqtt|oom|kill|tun|dropbear|procd' | tail -n 80 || true"),
+      ('dmesg', "dmesg 2>/dev/null | grep -iE 'killed process|out of memory|oom|tun|segfault' | tail -n 30 || true"),
+    ];
+    for (final (label, cmd) in cmds) {
+      buf.writeln('--- [$label] ---');
+      try {
+        final out = await client.run(cmd).timeout(const Duration(seconds: 8));
+        final text = utf8.decode(out, allowMalformed: true).trim();
+        buf.writeln(text.isEmpty ? '(empty)' : text);
+      } catch (e) {
+        buf.writeln('(command failed: $e)');
+      }
+    }
+    return buf.toString();
+  }
 
+  
   static Future<OpenWrtInstallResult> install({
     required String host,
     required String username,
@@ -194,6 +224,34 @@ class OpenWrtInstaller {
   }) async {
     SSHClient? client;
     var stage = 'подключение к SSH';
+    final trace = StringBuffer();
+    void logTrace(String msg) {
+      trace.writeln('[${DateTime.now().toIso8601String()}] $msg');
+    }
+    logTrace('=== LaLune OpenWRT Install ===');
+    logTrace('Host: $host, User: $username, Client OS: ${Platform.operatingSystem} (${Platform.operatingSystemVersion})');
+    logTrace('Backend URL: $backendBaseUrl');
+
+    Future<String> buildAndSaveLog({
+      String stdout = '',
+      String stderr = '',
+      String diag = '',
+    }) async {
+      final full = StringBuffer();
+      full.writeln(trace.toString().trimRight());
+      if (stdout.trim().isNotEmpty) {
+        full.writeln('\n=== SCRIPT STDOUT ===\n${stdout.trimRight()}');
+      }
+      if (stderr.trim().isNotEmpty) {
+        full.writeln('\n=== SCRIPT STDERR ===\n${stderr.trimRight()}');
+      }
+      if (diag.trim().isNotEmpty) {
+        full.writeln('\n$diag');
+      }
+      final resultStr = full.toString();
+      await OpenWrtDiagnosticStore.save(resultStr);
+      return resultStr;
+    }
     await setKeepScreenOn(true);
     try {
       onProgress?.call('Подключение к SSH $host:22...');
@@ -211,6 +269,7 @@ class OpenWrtInstaller {
         authTimeout: const Duration(seconds: 12),
       );
       await client.authenticated;
+      logTrace('SSH connected & authenticated');
 
       // Освобождаем ОЗУ до запуска скрипта: запущенный старый backend с ядром (до 30 воркеров)
       // съедает почти всю память, и OOM-killer убивает уже сам скрипт установки.
@@ -222,6 +281,7 @@ class OpenWrtInstaller {
             'killall csqtt-client csqttr-client >/dev/null 2>&1; sleep 2; '
             'echo 3 > /proc/sys/vm/drop_caches 2>/dev/null; true');
       } catch (_) {}
+      logTrace('Old backend stopped & caches dropped');
 
       stage = 'выполнение скрипта установки';
       onProgress?.call('Установка backend и зависимостей...');
@@ -231,6 +291,7 @@ class OpenWrtInstaller {
       var stderr = utf8.decode(result.stderr, allowMalformed: true);
       var combined =
           [stdout.trim(), stderr.trim()].where((s) => s.isNotEmpty).join('\n');
+      logTrace('Install script finished: exitCode=${result.exitCode}, stdoutLen=${stdout.length}, stderrLen=${stderr.length}');
 
       // Роутер не смог скачать backend (GitHub недоступен) или у него мало памяти: тогда
       // загружаем файлы с телефона (из приложения) по SSH.
@@ -239,11 +300,15 @@ class OpenWrtInstaller {
             .firstMatch(stderr)
             ?.group(1);
         final lean = stderr.contains('lean=1');
+        logTrace('Upload fallback requested: abi=$abi, lean=$lean');
         if (abi == null) {
+          logTrace('ABI detection failed');
+          final diag = await _collectRouterDiagnostics(client);
+          final fullLog = await buildAndSaveLog(stdout: stdout, stderr: stderr, diag: diag);
           return OpenWrtInstallResult(
             ok: false,
             message: 'Роутер не скачал backend, архитектура не определена',
-            log: combined,
+            log: fullLog, // ombined,
           );
         }
         stage = 'подготовка роутера к загрузке';
@@ -264,11 +329,14 @@ class OpenWrtInstaller {
               await _loadAsset('assets/openwrt/lalune-openwrt-backend-$abi-lean');
           final leanCore = await _loadAsset('assets/openwrt/csqttr-client-$abi');
           if (leanBackend == null || leanCore == null) {
+            logTrace('Lean assets missing for abi=$abi');
+            final diag = await _collectRouterDiagnostics(client);
+            final fullLog = await buildAndSaveLog(stdout: stdout, stderr: stderr, diag: diag);
             return OpenWrtInstallResult(
               ok: false,
               message: 'Роутеру ($abi) не хватает памяти для полной сборки, а лёгкой '
                   'сборки для него в приложении нет.',
-              log: combined,
+              log: fullLog,
             );
           }
           // Освобождаем флеш: старый полный backend занимает ~20 МБ из 23.
@@ -278,31 +346,43 @@ class OpenWrtInstaller {
           final coreError = await _pushFile(client, leanCore,
               '/usr/lib/lalune-run/csqttr-client', 'ядро', onProgress, setStage);
           if (coreError != null) {
+logTrace('Lean core upload failed: $coreError');
+            final diag = await _collectRouterDiagnostics(client);
+final fullLog = await buildAndSaveLog(stdout: stdout, stderr: stderr, diag: diag);
             return OpenWrtInstallResult(
-                ok: false, message: coreError, log: combined);
+                ok: false, message: coreError, log: fullLog);
           }
           final backendError = await _pushFile(
               client, leanBackend, target, 'backend', onProgress, setStage);
           if (backendError != null) {
+logTrace('Lean backend upload failed: $backendError');
+final diag = await _collectRouterDiagnostics(client);
+final fullLog = await buildAndSaveLog(stdout: stdout, stderr: stderr, diag: diag);
             return OpenWrtInstallResult(
-                ok: false, message: backendError, log: combined);
+                ok: false, message: backendError, log: fullLog);
           }
         } else {
           onProgress?.call('Роутер не достучался до GitHub. Загружаю backend с телефона...');
           final bytes = await _obtainBackend(abi, onProgress);
           if (bytes == null) {
+logTrace('Full backend asset missing for abi=$abi');
+final diag = await _collectRouterDiagnostics(client);
+final fullLog = await buildAndSaveLog(stdout: stdout, stderr: stderr, diag: diag);
             return OpenWrtInstallResult(
               ok: false,
               message:
                   'Роутер не может скачать backend, а телефон не смог получить файл для $abi. '
                   'Подключите телефон к сети, где доступен GitHub (VPN/другая сеть), и повторите.',
-              log: combined,
+              log: fullLog,
             );
           }
           final error = await _pushFile(
               client, bytes, target, 'backend', onProgress, setStage);
           if (error != null) {
-            return OpenWrtInstallResult(ok: false, message: error, log: combined);
+logTrace('Full backend upload failed: $error');
+final diag = await _collectRouterDiagnostics(client);
+final fullLog = await buildAndSaveLog(stdout: stdout, stderr: stderr, diag: diag);
+            return OpenWrtInstallResult(ok: false, message: error, log: fullLog);
           }
         }        stage = 'запуск backend после загрузки';
         onProgress?.call('Установка backend и зависимостей...');
@@ -312,6 +392,7 @@ class OpenWrtInstaller {
         combined = [combined, stdout.trim(), stderr.trim()]
             .where((s) => s.isNotEmpty)
             .join('\n');
+        logTrace('Re-run script finished: exitCode=${result.exitCode}, stdoutLen=${stdout.length}, stderrLen=${stderr.length}');
       }
 
       if (result.exitCode != 0 || !stdout.contains('LALUNE_INSTALL_OK')) {
@@ -327,10 +408,12 @@ class OpenWrtInstaller {
               .trim();
           if (k.isNotEmpty) extra += '\n$k';
         } catch (_) {}
+        final diag = await _collectRouterDiagnostics(client);
+        final fullLog = await buildAndSaveLog(stdout: stdout, stderr: stderr, diag: '$extra\n$diag');
         return OpenWrtInstallResult(
           ok: false,
           message: 'Установка по SSH завершилась с ошибкой',
-          log: [combined, extra].where((s) => s.isNotEmpty).join('\n'),
+          log:fullLog, //  [combined, extra].where((s) => s.isNotEmpty).join('\n'),
         );
       }
 
@@ -343,25 +426,42 @@ class OpenWrtInstaller {
         if (ping != null &&
             ping['ok'] == true &&
             (ping['platform'] ?? '').toString().toLowerCase() == 'openwrt') {
+        logTrace('Ping #$attempt OK: $ping');
+        final diag = await _collectRouterDiagnostics(client);
+        final fullLog = await buildAndSaveLog(stdout: stdout, stderr: stderr, diag: diag);
           return OpenWrtInstallResult(
             ok: true,
             message: 'Установлено. Теперь выполните соединение с роутером.',
-            log: combined,
+            log: fullLog,
           );
         }
         await Future<void>.delayed(const Duration(milliseconds: 500));
       }
-
+      logTrace('API did not respond on $host:1062 after ping attempts');
+      final diag = await _collectRouterDiagnostics(client);
+      final fullLog = await buildAndSaveLog(stdout: stdout, stderr: stderr, diag: diag);
+      
       return OpenWrtInstallResult(
         ok: false,
         message:
             'Файлы установлены, но API на $host:1062 не ответил. Проверьте лог backend.',
-        log: combined,
+        log: fullLog,
       );
-    } catch (e) {
+    } catch (e, st) {
+      logTrace('Exception at stage "$stage": $e\n$st');
+      var diag = '';
+      if (client != null) {
+        try {
+          diag = await _collectRouterDiagnostics(client);
+        } catch (diagErr) {
+          diag = 'diagnostics failed: $diagErr';
+        }
+      }
+      final fullLog = await buildAndSaveLog(diag: diag);
       return OpenWrtInstallResult(
         ok: false,
         message: 'Не удалось установить OpenWRT backend на шаге «$stage»: $e',
+        log: fullLog,
       );
     } finally {
       await setKeepScreenOn(false);

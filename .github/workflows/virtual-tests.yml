@@ -1,0 +1,76 @@
+name: Virtual Tests (macOS & OpenWRT)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ui-optimization]
+  
+jobs:
+  macos-tests:
+    name: macOS Virtual Tests (Flutter & Rust)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.5"
+          channel: stable
+          cache: true
+
+      - name: Prepare Flutter assets
+        run: |
+          mkdir -p Frontend/assets/openwrt Frontend/assets/icons Frontend/assets/fonts
+          if [ -d Assets ]; then cp -R Assets/. Frontend/assets/; fi
+      - name: Flutter pub get & analyze
+        working-directory: Frontend
+        run: |
+          flutter pub get
+          flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - name: Flutter unit & widget tests on macOS
+        working-directory: Frontend
+        run: flutter test --reporter expanded
+
+      - name: Rust Desktop backend tests on macOS
+        working-directory: Backend/Desktop
+        run: cargo test
+
+  openwrt-tests:
+    name: OpenWRT Virtual Tests (Backend, BusyBox & Installer)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: OpenWRT Rust backend tests (cargo test)
+        working-directory: Backend/OpenWRT
+        run: cargo test
+
+      - name: BusyBox ash & ABI mapping checks
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y busybox-static
+          sh -n Installer/openwrt.sh
+          sh Installer/test-abi.sh Installer/openwrt.sh
+          busybox ash -n Installer/openwrt.sh
+          busybox ash Installer/test-abi.sh Installer/openwrt.sh
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.5"
+          channel: stable
+          cache: true
+      - name: Prepare Flutter assets
+        run: |
+          mkdir -p Frontend/assets/openwrt Frontend/assets/icons Frontend/assets/fonts
+          if [ -d Assets ]; then cp -R Assets/. Frontend/assets/; fi
+          
+      - name: OpenWRT installer Dart tests
+        working-directory: Frontend
+        run: |
+          flutter pub get
+          flutter test test/openwrt_installer_test.dart --reporter expanded

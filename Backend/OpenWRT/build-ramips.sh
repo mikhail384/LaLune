@@ -45,7 +45,7 @@ gcc_eh=$("$CC_mipsel_unknown_linux_musl" -print-file-name=libgcc_eh.a)
 gcc_lib=$("$CC_mipsel_unknown_linux_musl" -print-libgcc-file-name)
 test -f "$gcc_eh" && test -f "$gcc_lib"
 printf 'GROUP ( "%s" "%s" )\n' "$gcc_eh" "$gcc_lib" > "$unwind_dir/libunwind.a"
-printf -v rustflags '%s\037' -C target-feature=+crt-static -C link-self-contained=no -L "native=$unwind_dir"
+printf -v rustflags '%s\037' -C target-cpu=24kc -C target-feature=+crt-static -C link-self-contained=no -L "native=$unwind_dir"
 export CARGO_ENCODED_RUSTFLAGS="${rustflags%$'\037'}"
 
 rust_toolchain=nightly-2026-11-06

@@ -6,7 +6,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
-
 import '../theme/assets.dart';
 
 class NavBar extends StatelessWidget {
@@ -28,45 +27,69 @@ class NavBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final borderRadius = BorderRadius.circular(18);
-    final bar = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+    final borderRadius = BorderRadius.circular(20);
+    final bar = DecoratedBox(
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.06),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            const Color(0xFF0B2118).withOpacity(0.52),
+            const Color(0xFF07160F).withOpacity(0.42),
+          ],
+        ),
         borderRadius: borderRadius,
-        border: Border.all(color: Colors.white.withOpacity(0.12), width: 1),
+        border: Border.all(color: Colors.white.withOpacity(0.15), width: 1),
       ),
-      child: Row(
-        children: List.generate(_items.length, (i) {
-          return Expanded(
-            child: _NavButton(
-              item: _items[i],
-              selected: i == currentIndex,
-              onTap: () => onSelect(i),
-            ),
-          );
-        }),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        child: Row(
+          children: List.generate(_items.length, (i) {
+            return Expanded(
+              child: _NavButton(
+                item: _items[i],
+                selected: i == currentIndex,
+                onTap: () => onSelect(i),
+              ),
+            );
+          }),
+        ),
       ),
-    );
-    final isAndroid = !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
-    final Widget navSurface;
-    if (isAndroid) {
-      navSurface = bar;
-    } else {
-      final filter = ImageFilter.blur(sigmaX: 14, sigmaY: 14);
-      navSurface = BackdropGroup.of(context) == null
-          ? BackdropFilter(filter: filter, child: bar)
-          : BackdropFilter.grouped(filter: filter, child: bar);
-    }
-    final content = ClipRRect(
-      borderRadius: borderRadius,
-      child: navSurface,
     );
 
-    return RepaintBoundary(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
-        child: content,
+    final sigma =
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android ? 16.0 : 16.0;  
+    final filter = ImageFilter.blur(
+      sigmaX: sigma,
+      sigmaY: sigma,
+      tileMode: TileMode.clamp,
+    );
+    final content = DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: borderRadius,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.28),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: borderRadius,
+        child: BackdropGroup.of(context) == null
+            ? BackdropFilter(filter: filter, child: bar)
+            : BackdropFilter.grouped(filter: filter, child: bar),
+      ),
+    );
+
+    return SafeArea(
+      top: false,
+      child: RepaintBoundary(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+          child: content,
+        ),
       ),
     );
   }
@@ -95,90 +118,120 @@ class _NavButton extends StatefulWidget {
 
 class _NavButtonState extends State<_NavButton> {
   bool _hover = false;
+  bool _pressed = false;
 
   @override
   Widget build(BuildContext context) {
     final active = widget.selected;
-    final scale = _hover ? 0.92 : 1.0;
+    final scale = _pressed ? 0.90 : (_hover ? 0.96 : 1.0);
     const activeColor = kAccentGreen;
 
     final chipColor = active
-        ? activeColor.withOpacity(0.12)
-        : (_hover ? Colors.white.withOpacity(0.10) : Colors.transparent);
+        ? activeColor.withOpacity(0.16)
+        : (_hover ? Colors.white.withOpacity(0.09) : Colors.transparent);
 
     final chipBorder = active
-        ? Colors.transparent
-        : (_hover ? Colors.white.withOpacity(0.22) : Colors.transparent);
+        ? activeColor.withOpacity(0.32)
+        : (_hover ? Colors.white.withOpacity(0.20) : Colors.transparent);
 
     final labelColor =
-        active ? activeColor : Colors.white.withOpacity(_hover ? 0.95 : 0.55);
+        active ? activeColor : Colors.white.withOpacity(_hover ? 0.94 : 0.60);
 
-    final iconOpacity = active ? 1.0 : (_hover ? 1.0 : 0.85);
+    final iconOpacity = active ? 1.0 : (_hover ? 0.98 : 0.80);
+    final iconSize = widget.item.icon == Assets.info ? 28.0 : 25.0;
 
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: widget.onTap,
-        behavior: HitTestBehavior.opaque,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOut,
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 4),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              AnimatedScale(
-                scale: scale,
-                duration: const Duration(milliseconds: 160),
-                curve: Curves.easeOut,
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: chipColor,
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: chipBorder, width: 1),
-                  ),
-                  child: AnimatedOpacity(
-                    opacity: iconOpacity,
-                    duration: const Duration(milliseconds: 180),
-                    child: Image.asset(
-                      widget.item.icon,
-                      width: widget.item.icon == Assets.info ? 30 : 26,
-                      height: widget.item.icon == Assets.info ? 30 : 26,
-                      fit: BoxFit.contain,
-                      filterQuality: FilterQuality.medium,
-                      errorBuilder: (_, __, ___) => Icon(
-                        Icons.circle_outlined,
-                        size: 26,
-                        color: active
-                            ? activeColor
-                            : Colors.white.withOpacity(0.7),
+    return Semantics(
+      button: true,
+      selected: active,
+      label: widget.item.label,
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() {
+          _hover = false;
+          _pressed = false;
+        }),
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTapDown: (_) => setState(() => _pressed = true),
+          onTapUp: (_) => setState(() => _pressed = false),
+          onTapCancel: () => setState(() => _pressed = false),
+          onTap: widget.onTap,
+          behavior: HitTestBehavior.opaque,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 3),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                AnimatedScale(
+                  scale: scale,
+                  duration: const Duration(milliseconds: 140),
+                  curve: Curves.easeOutCubic,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    curve: Curves.easeOut,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: chipColor,
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(color: chipBorder, width: 1),
+                    ),
+                    child: SizedBox(
+                      width: 28,
+                      height: 28,
+                      child: Center(
+                        child: AnimatedOpacity(
+                          opacity: iconOpacity,
+                          duration: const Duration(milliseconds: 180),
+                          child: Image.asset(
+                            widget.item.icon,
+                            width: iconSize,
+                            height: iconSize,
+                            cacheWidth: 96,
+                            fit: BoxFit.contain,
+                            filterQuality: FilterQuality.medium,
+                            errorBuilder: (_, __, ___) => Icon(
+                              Icons.circle_outlined,
+                              size: 24,
+                              color: active
+                                  ? activeColor
+                                  : Colors.white.withOpacity(0.7),
+                            ),
+                          ),
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 3),
-              AnimatedDefaultTextStyle(
-                duration: const Duration(milliseconds: 200),
-                style: TextStyle(
-                  fontSize: 10.5,
-                  fontWeight: active ? FontWeight.w700 : FontWeight.w600,
-                  color: labelColor,
+                const SizedBox(height: 3),
+                AnimatedDefaultTextStyle(
+                  duration: const Duration(milliseconds: 200),
+                  style: TextStyle(
+                    fontFamily: 'Nunito',
+                    fontSize: 10.5,
+                    fontWeight: active ? FontWeight.w700 : FontWeight.w600,
+                    color: labelColor,
+                  ),
+                  child: Text(
+                    widget.item.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                  ),
                 ),
-                child: Text(
-                  widget.item.label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
+                const SizedBox(height: 2),
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  curve: Curves.easeOut,
+                  width: active ? 16 : 0,
+                  height: 2.5,
+                  decoration: BoxDecoration(
+                    color: activeColor,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
