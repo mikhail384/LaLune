@@ -45,6 +45,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   ConfigItem? _selectedConfig;
   bool _loading = true;
   bool _busy = false;
+  bool _obscurePassword = true;
 
   final _peerCtl = TextEditingController();
   final _vkHashesCtl = TextEditingController();
@@ -121,7 +122,31 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     _ipRoutingIpsCtl.dispose();
     super.dispose();
   }
+  String _extractLinkField(String rawLink, List<String> keys) {
+    final params = Uri.tryParse(rawLink.trim())?.queryParameters;
+if (params == null) return '';
+for (final k in keys) {
+  final v = params[k]?.trim() ?? '';
+if (v.isNotEmpty) return v;
+}
+return '';
+}
 
+void _syncFromConfig(ConfigItem? cfg) {
+_selectedConfig = cfg;
+final peer = cfg != null
+? (cfg.peer.isNotEmpty ? cfg.peer : _extractLinkField(cfg.rawLink, ['peer', 'host']))
+: _s.peer;
+final password = cfg != null
+? (cfg.password.isNotEmpty ? cfg.password : _extractLinkField(cfg.rawLink, ['password', 'pass', 'pwd']))
+: _s.password;
+_peerCtl.text = peer;
+_passwordCtl.text = password;
+if (_vkHashesCtl.text.isEmpty && cfg != null && cfg.hashes.isNotEmpty) {
+_vkHashesCtl.text = cfg.hashes;
+}
+}
+  
   Future<void> _load() async {
     await Future.wait([
       ref.read(settingsProvider.notifier).reload(),
@@ -133,19 +158,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     final cfg = ref.read(configsProvider).selected;
 
     _s = s;
-    _selectedConfig = cfg;
-
-    if (cfg != null) {
-      _peerCtl.text = cfg.peer;
-      _passwordCtl.text = cfg.password;
-      // Хеши в настройках — самостоятельное значение. Не перезаписываем
-      // сохранённый пользовательский ввод хешами выбранного конфига.
-      _vkHashesCtl.text = s.vkHashes.isNotEmpty ? s.vkHashes : cfg.hashes;
-    } else {
-      _peerCtl.text = s.peer;
-      _passwordCtl.text = s.password;
-      _vkHashesCtl.text = s.vkHashes;
-    }
+    _vkHashesCtl.text = s.vkHashes;
+_syncFromConfig(cfg);
 
     _workersCtl.text = s.workers.toString();
     _autoApiWorkersCtl.text = s.autoApiWorkers.toString();
@@ -357,6 +371,14 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<ConfigsState>(configsProvider, (prev, next) {
+if (prev?.selected?.id != next.selected?.id ||
+prev?.selected?.peer != next.selected?.peer ||
+prev?.selected?.password != next.selected?.password ||
+prev?.selected?.rawLink != next.selected?.rawLink) {
+setState(() => _syncFromConfig(next.selected));
+}
+});
     if (_loading) return const Center(child: CircularProgressIndicator());
 
     final vk = ref.watch(vkProvider);
@@ -442,13 +464,22 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           ),
 
         if (!_isTots) ...[
-          InputRow(label: 'Peer', controller: _peerCtl, readOnly: true),
-          InputRow(
-            label: 'Password',
-            controller: _passwordCtl,
-            readOnly: true,
-            obscureText: true,
-          ),
+      InputRow(label: 'Peer', controller: _peerCtl, readOnly: true, labelWidth: 96),
+InputRow(
+label: 'Password',
+controller: _passwordCtl,
+readOnly: true,
+labelWidth: 96,
+obscureText: _obscurePassword,
+suffixIcon: IconButton(
+icon: Icon(
+_obscurePassword ? Icons.visibility : Icons.visibility_off,
+size: 18,
+color: Colors.white54,
+),
+onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+),
+),
         ],
 
         if (!_isTots) Padding(
