@@ -2,7 +2,9 @@ name: Virtual Tests (macOS & OpenWRT)
 
 on:
   workflow_dispatch:
-
+  push:
+  branches: [ui-optimization]
+  
 jobs:
   macos-tests:
     name: macOS Virtual Tests (Flutter & Rust)
