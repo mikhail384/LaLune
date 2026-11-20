@@ -3,7 +3,7 @@ name: Virtual Tests (macOS & OpenWRT)
 on:
   workflow_dispatch:
   push:
-  branches: [ui-optimization]
+    branches: [ui-optimization]
   
 jobs:
   macos-tests:
