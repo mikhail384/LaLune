@@ -10,6 +10,7 @@ class InputRow extends StatelessWidget {
   final bool obscureText;
   final int labelWidth;
   final ValueChanged<String>? onChanged;
+  final Widget? suffixIcon;
 
   const InputRow({
     super.key,
@@ -20,6 +21,7 @@ class InputRow extends StatelessWidget {
     this.obscureText = false,
     this.labelWidth = 130,
     this.onChanged,
+    this.suffixIcon,
   });
 
   @override
@@ -31,7 +33,7 @@ class InputRow extends StatelessWidget {
           SizedBox(
             width: labelWidth.toDouble(),
             child: Text(label,
-                style: TextStyle(color: Colors.white.withOpacity(0.7))),
+                style: TextStyle(color: Colors.white.withOpacity(0.8))),
           ),
           Expanded(
             child: TextField(
@@ -41,6 +43,7 @@ class InputRow extends StatelessWidget {
               obscureText: obscureText,
               style: const TextStyle(fontSize: 13.5),
               onChanged: onChanged,
+              decoration: suffixIcon == null ? null : InputDecoration(suffixIcon: suffixIcon),
             ),
           ),
         ],
