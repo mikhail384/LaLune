@@ -27,15 +27,15 @@ class NavBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final borderRadius = BorderRadius.circular(20);
+    final isAndroid = !kIsWeb && defaultTargetPlatform == TargetPlatform.android; final borderRadius = BorderRadius.circular(20);
     final bar = DecoratedBox(
       decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [
-            const Color(0xFF0B2118).withOpacity(0.52),
-            const Color(0xFF07160F).withOpacity(0.42),
+            const Color(0xFF0B2118).withOpacity(isAndroid ? 0.68 : 0.52),
+            const Color(0xFF07160F).withOpacity(isAndroid ? 0.58 : 0.42),
           ],
         ),
         borderRadius: borderRadius,
@@ -58,7 +58,7 @@ class NavBar extends StatelessWidget {
     );
 
     final sigma =
-      !kIsWeb && defaultTargetPlatform == TargetPlatform.android ? 16.0 : 16.0;  
+      isAndroid ? 4.0 : 14.0;  
     final filter = ImageFilter.blur(
       sigmaX: sigma,
       sigmaY: sigma,
@@ -70,7 +70,7 @@ class NavBar extends StatelessWidget {
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.28),
-            blurRadius: 20,
+            blurRadius: isAndroid ? 10 : 18,
             offset: const Offset(0, 8),
           ),
         ],
