@@ -8,18 +8,11 @@
 // keepDebugSymbols для libcsqtt-link.so, чтобы файл шёл в APK без сжатия.
 //
 // LuaJ — чистый Java Lua 5.2 интерпретатор, используется в LuaRuntime.kt.
-import java.io.FileInputStream
-import java.util.Properties
 
 plugins {
     id("com.android.application")
     id("kotlin-android")
     id("dev.flutter.flutter-gradle-plugin")
-}
-val keystoreProperties = Properties()
-val keystorePropertiesFile = rootProject.file("key.properties")
-if (keystorePropertiesFile.exists()) {
-    FileInputStream(keystorePropertiesFile).use { keystoreProperties.load(it) }
 }
 
 android {
@@ -43,24 +36,10 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
-    signingConfigs {
-        create("release") {
-            if (keystorePropertiesFile.exists()) {
-                keyAlias = keystoreProperties.getProperty("keyAlias")
-                keyPassword = keystoreProperties.getProperty("keyPassword")
-                storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
-                storePassword = keystoreProperties.getProperty("storePassword")
-            }
-        }
-    }
 
     buildTypes {
         release {
-            signingConfig = if (keystorePropertiesFile.exists()) {
-                signingConfigs.getByName("release")
-            } else {
-                signingConfigs.getByName("debug")
-            }
+            signingConfig = signingConfigs.getByName("debug")
             // LuaJ is used through reflective library registration; R8 removed
             // an inner LuaJ class in the release APK on Android 7.
             isMinifyEnabled = false
