@@ -285,7 +285,15 @@ async fn configs_update(
         Err(e) => return err(400, e),
     };
     match state.configs.update(id, &config) {
-        Ok(_) => Json(json!({"ok": true})).into_response(),
+        Ok(_) => {
+            let selected = state.selected_config.read().as_ref().map(|c| c.id) == Some(id);
+            if selected {
+                if let Ok(Some(updated)) = state.configs.get(id) {
+                    *state.selected_config.write() = Some(updated);
+                }
+            }
+            Json(json!({"ok": true})).into_response()
+        }
         Err(e) => err(500, e.to_string()),
     }
 }
@@ -294,8 +302,19 @@ async fn configs_delete(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> axum::response::Response {
+    let was_selected = state.selected_config.read().as_ref().map(|c| c.id) == Some(id);
     match state.configs.delete(id) {
-        Ok(_) => Json(json!({"ok": true})).into_response(),
+        Ok(_) => {
+            if was_selected {
+                *state.selected_config.write() = None;
+                if let Err(e) = std::fs::remove_file(&state.selected_config_path) {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        return err(500, e.to_string());
+                    }
+                }
+            }
+            Json(json!({"ok": true})).into_response()
+        }
         Err(e) => err(500, e.to_string()),
     }
 }
@@ -334,6 +353,9 @@ async fn selected_set(
     if let Some(id) = body.id {
         match state.configs.get(id) {
             Ok(Some(c)) => {
+                if let Err(e) = std::fs::write(&state.selected_config_path, id.to_string()) {
+                    return err(500, e.to_string());
+                }
                 *state.selected_config.write() = Some(c);
                 Json(json!({"ok": true})).into_response()
             }
@@ -341,6 +363,11 @@ async fn selected_set(
             Err(e) => err(500, e.to_string()),
         }
     } else {
+        match std::fs::remove_file(&state.selected_config_path) {
+            Ok(()) => {},
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+            Err(e) => return err(500, e.to_string()),
+        }
         *state.selected_config.write() = None;
         Json(json!({"ok": true})).into_response()
     }
@@ -623,6 +650,29 @@ async fn stop_active_vk_calls(state: &Arc<AppState>) -> usize {
     stop_vk_calls(state, call_ids).await
 }
 
+fn update_tots_metrics_from_line(state: &AppState, line: &str) {
+    if let Some((workers, workers_target)) = vpn::parse_tots_worker_status(line) {
+        state.vpn.update_tots_worker_counts(workers, workers_target);
+    }
+    if let Some(metrics) = vpn::parse_tots_status(line) {
+        state.vpn.update_tots_metrics(metrics);
+        state.events.emit(Event::named(
+            "tots_stats",
+            json!({
+                "rxBytes": metrics.rx_bytes,
+                "txBytes": metrics.tx_bytes,
+                "workers": metrics.workers,
+                "workersTarget": metrics.workers_target,
+                "workersVk": metrics.workers_vk,
+                "workersJazz": metrics.workers_jazz,
+                "workersYaDocs": metrics.workers_ya_docs,
+                "workersMailDocs": metrics.workers_mail_docs,
+                "workersCups": metrics.workers_cups,
+            }),
+        ));
+    }
+}
+
 async fn vpn_connect(
     State(state): State<Arc<AppState>>,
     Json(body): Json<ConnectBody>,
@@ -641,6 +691,7 @@ async fn vpn_connect(
 
     state.vpn.stop().await;
     finish_vpn(&state).await;
+    state.vpn.reset_stats();
     // Remember how many backend log lines belonged to earlier sessions. They
     // are removed only after the new core proves that it is actually alive
     // (first "Активных > 0"), so failed connection attempts remain visible.
@@ -889,8 +940,15 @@ async fn vpn_connect(
 
     let state2 = state.clone();
     let kind_for_watchdog = kind;
+    let watchdog_timeout = if kind == ProtocolKind::Tots {
+        // tots-client waits up to 45s + 5s per requested worker before its
+        // own healthy-pool deadline. Give the subsequent TUN/route setup room.
+        Duration::from_secs((45 + settings.tots_workers.max(1) as u64 * 5).min(300) + 30)
+    } else {
+        Duration::from_secs(90)
+    };
     let watchdog = tokio::spawn(async move {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
+        let deadline = tokio::time::Instant::now() + watchdog_timeout;
         let mut last_size = 0u64;
         let mut tun_ip: Option<String> = None;
         let mut tun_dns: Option<String> = None;
@@ -907,15 +965,18 @@ async fn vpn_connect(
                     if let Ok(content) = tokio::fs::read_to_string(&state2.logs_path).await {
                         let start = (last_size as usize).min(content.len());
                         let new_part = &content[start..];
-                        for line in new_part.lines() {
+                        // The core log writer appends the line and newline in
+                        // separate writes. Consume only complete lines so a
+                        // poll cannot discard half of a ToTS status record.
+                        let complete_len = new_part.rfind('\n').map(|idx| idx + 1).unwrap_or(0);
+                        for line in new_part[..complete_len].lines() {
                             if kind_for_watchdog == ProtocolKind::Tots {
-                                let lower = line.to_ascii_lowercase();
-                                if (lower.contains("tun") && (lower.contains("connected") || lower.contains("ready")))
-                                    || (lower.contains("worker") && lower.contains("ready"))
-                                    || lower.contains("worker pool ready")
-                                {
+                                // Do not treat a healthy worker pool as a live VPN:
+                                // ToTS still has to open TUN and install its routes.
+                                if vpn::is_tots_tun_connected(line) {
                                     tots_ready = true;
                                 }
+                                update_tots_metrics_from_line(&state2, line);
                             }
                             if let Some((ip, dns)) = vpn::parse_tunconf(line) {
                                 tun_ip = Some(ip);
@@ -962,7 +1023,9 @@ async fn vpn_connect(
                                 }
                             }
                         }
-                        last_size = meta.len();
+                        if complete_len > 0 {
+                            last_size = start as u64 + complete_len as u64;
+                        }
                     }
                 }
             }
@@ -972,7 +1035,7 @@ async fn vpn_connect(
                 ProtocolKind::Tots => tots_ready,
             };
 
-            if ready {
+            if ready && !core_stopped(&state2) {
                 if kind_for_watchdog == ProtocolKind::Tots {
                     state2.vpn.running.store(true, std::sync::atomic::Ordering::Release);
                     *state2.vpn.started_at.lock() = Some(std::time::Instant::now());
@@ -1076,6 +1139,30 @@ async fn vpn_connect(
             while !core_stopped(&state2)
                 && state2.vpn.running.load(std::sync::atomic::Ordering::Acquire)
             {
+                // ToTS owns the TUN process, so its periodic structured status
+                // lines are the source of byte counters and healthy worker count.
+                // Keep tailing after connect; the old watchdog stopped reading
+                // logs as soon as TUN became ready, leaving stats permanently 0.
+                if kind_for_watchdog == ProtocolKind::Tots {
+                    if let Ok(meta) = tokio::fs::metadata(&state2.logs_path).await {
+                        if meta.len() < last_size {
+                            last_size = 0;
+                        }
+                        if meta.len() > last_size {
+                            if let Ok(content) = tokio::fs::read_to_string(&state2.logs_path).await {
+                                let start = (last_size as usize).min(content.len());
+                                let new_part = &content[start..];
+                                let complete_len = new_part.rfind('\n').map(|idx| idx + 1).unwrap_or(0);
+                                for line in new_part[..complete_len].lines() {
+                                    update_tots_metrics_from_line(&state2, line);
+                                }
+                                if complete_len > 0 {
+                                    last_size = start as u64 + complete_len as u64;
+                                }
+                            }
+                        }
+                    }
+                }
                 tokio::time::sleep(Duration::from_millis(250)).await;
             }
         }
@@ -1130,6 +1217,7 @@ async fn vpn_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let active_id = *state.vpn.active_config_id.lock();
     let cfg_id = if active_id != 0 { active_id } else { selected_id };
     let s = state.vpn.status(cfg_id);
+    let stats = state.vpn.stats();
     let socks5_port = *state.socks5_port.read();
     let settings = state.settings.read();
     let socks5_host = if socks5_port == 0 {
@@ -1146,6 +1234,18 @@ async fn vpn_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "configId": s.config_id,
         "message": s.message,
         "since": s.since,
+        "rxBytes": stats.rx_bytes,
+        "txBytes": stats.tx_bytes,
+        "rxRate": stats.rx_rate,
+        "txRate": stats.tx_rate,
+        "workers": stats.workers,
+        "workersTarget": stats.workers_target,
+        "workersVk": stats.workers_vk,
+        "workersJazz": stats.workers_jazz,
+        "workersYaDocs": stats.workers_ya_docs,
+        "workersMailDocs": stats.workers_mail_docs,
+        "workersCups": stats.workers_cups,
+        "activeSessions": stats.active_sessions,
         "socks5Port": socks5_port,
         "socks5Host": socks5_host,
         "socks5Mode": settings.desktop_socks5_mode,
@@ -1171,6 +1271,13 @@ async fn vpn_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "rxRate": s.rx_rate,
         "txRate": s.tx_rate,
         "activeSessions": s.active_sessions,
+        "workers": s.workers,
+        "workersTarget": s.workers_target,
+        "workersVk": s.workers_vk,
+        "workersJazz": s.workers_jazz,
+        "workersYaDocs": s.workers_ya_docs,
+        "workersMailDocs": s.workers_mail_docs,
+        "workersCups": s.workers_cups,
         "socks5Port": socks5_port,
     }))
 }

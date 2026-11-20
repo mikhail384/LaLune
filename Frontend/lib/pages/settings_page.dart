@@ -45,6 +45,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   ConfigItem? _selectedConfig;
   bool _loading = true;
   bool _busy = false;
+  bool _hashesDirty = false;
 
   final _peerCtl = TextEditingController();
   final _vkHashesCtl = TextEditingController();
@@ -136,6 +137,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
     _s = s;
     _selectedConfig = cfg;
+    _hashesDirty = false;
 
     if (cfg != null) {
       _peerCtl.text = cfg.peer;
@@ -191,6 +193,34 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
 
     setState(() => _loading = false);
+  }
+
+  void _syncSelectedConfigAfterFrame() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final cfg = ref.read(configsProvider).selected;
+      if (_selectedConfig?.id == cfg?.id) return;
+      final settings = ref.read(settingsProvider).data;
+      setState(() {
+        _selectedConfig = cfg;
+        // These fields describe the selected profile, not the profile that
+        // happened to be selected when SettingsPage was first constructed.
+        _peerCtl.text = cfg?.peer ?? settings.peer;
+        _passwordCtl.text = cfg?.password ?? settings.password;
+        // Preserve an unsaved manual hash edit; otherwise resolve the current
+        // profile's hashes with the global settings fallback.
+        if (!_hashesDirty) {
+          _vkHashesCtl.text = settings.vkHashes.isNotEmpty
+              ? settings.vkHashes
+              : (cfg?.hashes ?? '');
+        }
+      });
+    });
+  }
+
+  void _markHashesDirty() {
+    _hashesDirty = true;
+    _markDirty();
   }
 
   void _markDirty() {
@@ -268,6 +298,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     setState(() {
       _busy = false;
       _s = s;
+      if (ok) _hashesDirty = false;
     });
     final saveError = ref.read(settingsProvider).error;
     Toast.show(
@@ -361,6 +392,14 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
+    // SettingsPage is kept alive inside the desktop/mobile PageView. Listen to
+    // profile changes so switching configs on the Connection page immediately
+    // updates protocol-specific settings without restarting the app.
+    ref.listen<ConfigsState>(configsProvider, (previous, next) {
+      if (previous?.selectedId != next.selectedId) {
+        _syncSelectedConfigAfterFrame();
+      }
+    });
     if (_loading) return const Center(child: CircularProgressIndicator());
 
     final vk = ref.watch(vkProvider);
@@ -1012,7 +1051,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   style: const TextStyle(fontSize: 13),
                   decoration:
                       const InputDecoration(hintText: 'hash1,hash2,hash3'),
-                  onChanged: (_) => _markDirty(),
+                  onChanged: (_) => _markHashesDirty(),
                 ),
               ],
               if (_authMode == 'externalHashes') ...[

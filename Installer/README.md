@@ -6,6 +6,7 @@
 |---|---|
 | −`install.ps1` | Установщик для Windows (PowerShell) |
 | −`install.sh` | Установщик для Linux (bash) |
+| −`install-macos.sh` | Установщик macOS (DMG, curl \| bash) |
 | −`launcher/` | Rust GUI-инсталлятор для Windows (опционально) |
 ⚙
 
@@ -79,6 +80,16 @@
 - симлинк `~/.local/bin/lalune` → `~/.la-lune/app/LaLune`
 4. Чистит временные файлы
 5. Выходит
+
+## install-macos.sh — macOS
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Endlad2/LaLune/main/Installer/install-macos.sh | bash
+```
+
+Сначала скачивает DMG и совместимые ядра, затем монтирует DMG через
+`hdiutil`, копирует `LaLune.app` в `/Applications` и устанавливает ядра
+в `~/.la-lune/`. Для записи в `/Applications` нужен пароль администратора.
 
 ## launcher (Rust, только Windows)
 

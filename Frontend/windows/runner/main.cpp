@@ -14,10 +14,13 @@
 #include <winhttp.h>
 
 #include <cstdio>
+#include <cstring>
+#include <cwchar>
 #include <initializer_list>
 #include <string>
 
 #include "flutter_window.h"
+#include "resource.h"
 #include "utils.h"
 
 #pragma comment(lib, "winhttp.lib")
@@ -281,19 +284,182 @@ static void stop_backend() {
 }
 
 // ============================================================
-//  WndProc hook: ловим WM_CLOSE
+//  Windows notification-area icon and menu
 // ============================================================
 
 namespace {
-  FlutterWindow* g_window = nullptr;
+  constexpr UINT kTrayCallbackMessage = WM_APP + 0x51;
+  constexpr UINT kTrayIconId = 1;
+  constexpr UINT kTrayConnectSelected = 0x7A01;
+  constexpr UINT kTrayDisconnect = 0x7A02;
+  constexpr UINT kTrayReconnect = 0x7A03;
+  constexpr UINT kTrayExit = 0x7A04;
+
   WNDPROC g_original_wndproc = nullptr;
   HWND g_main_hwnd = nullptr;
+  NOTIFYICONDATAW g_tray_data = {};
+  bool g_tray_added = false;
+  bool g_exit_requested = false;
+  UINT g_taskbar_created_message = 0;
+
+  bool post_backend_action(const wchar_t* path, const char* body) {
+    HINTERNET session = WinHttpOpen(L"LaLune-Tray/0.9",
+                                    WINHTTP_ACCESS_TYPE_NO_PROXY,
+                                    WINHTTP_NO_PROXY_NAME,
+                                    WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!session) return false;
+    WinHttpSetTimeouts(session, 1000, 1000, 1000, 2500);
+
+    HINTERNET connection = WinHttpConnect(session, L"127.0.0.1", 1062, 0);
+    if (!connection) {
+      WinHttpCloseHandle(session);
+      return false;
+    }
+
+    HINTERNET request = WinHttpOpenRequest(
+        connection, L"POST", path, nullptr, WINHTTP_NO_REFERER,
+        WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
+    bool ok = false;
+    if (request) {
+      const DWORD body_size = static_cast<DWORD>(strlen(body));
+      const wchar_t* headers = L"Content-Type: application/json\r\n";
+      if (WinHttpSendRequest(request, headers, static_cast<DWORD>(-1),
+                             const_cast<char*>(body), body_size, body_size, 0) &&
+          WinHttpReceiveResponse(request, nullptr)) {
+        DWORD status = 0;
+        DWORD status_size = sizeof(status);
+        if (WinHttpQueryHeaders(request,
+                                WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                                WINHTTP_HEADER_NAME_BY_INDEX, &status,
+                                &status_size, WINHTTP_NO_HEADER_INDEX)) {
+          ok = status >= 200 && status < 300;
+        }
+      }
+      WinHttpCloseHandle(request);
+    }
+    WinHttpCloseHandle(connection);
+    WinHttpCloseHandle(session);
+    return ok;
+  }
+
+  void remove_tray_icon() {
+    if (g_tray_added) {
+      Shell_NotifyIconW(NIM_DELETE, &g_tray_data);
+      g_tray_added = false;
+    }
+  }
+
+  void add_tray_icon(HWND hwnd) {
+    if (!hwnd) return;
+    g_tray_data = {};
+    g_tray_data.cbSize = sizeof(g_tray_data);
+    g_tray_data.hWnd = hwnd;
+    g_tray_data.uID = kTrayIconId;
+    g_tray_data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+    g_tray_data.uCallbackMessage = kTrayCallbackMessage;
+    g_tray_data.hIcon = LoadIconW(GetModuleHandleW(nullptr),
+                                  MAKEINTRESOURCEW(IDI_APP_ICON));
+    if (!g_tray_data.hIcon) g_tray_data.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    wcscpy_s(g_tray_data.szTip, L"LaLune VPN");
+    if (Shell_NotifyIconW(NIM_ADD, &g_tray_data)) {
+      g_tray_added = true;
+      g_tray_data.uVersion = NOTIFYICON_VERSION;
+      Shell_NotifyIconW(NIM_SETVERSION, &g_tray_data);
+    } else {
+      OutputDebugStringW(L"[LaLune] Shell_NotifyIcon(NIM_ADD) failed\n");
+    }
+  }
+
+  void show_main_window(HWND hwnd) {
+    if (!hwnd) return;
+    ShowWindow(hwnd, SW_RESTORE);
+    SetForegroundWindow(hwnd);
+  }
+
+  void show_tray_menu(HWND hwnd) {
+    HMENU menu = CreatePopupMenu();
+    if (!menu) return;
+    AppendMenuW(menu, MF_STRING, kTrayConnectSelected, L"Connect selected");
+    AppendMenuW(menu, MF_STRING, kTrayDisconnect, L"Disconnect");
+    AppendMenuW(menu, MF_STRING, kTrayReconnect, L"Reconnect");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, kTrayExit, L"Exit");
+
+    POINT point = {};
+    GetCursorPos(&point);
+    SetForegroundWindow(hwnd);
+    TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_BOTTOMALIGN,
+                   point.x, point.y, 0, hwnd, nullptr);
+    PostMessageW(hwnd, WM_NULL, 0, 0);
+    DestroyMenu(menu);
+  }
+
+  void handle_tray_command(HWND hwnd, UINT command) {
+    switch (command) {
+      case kTrayConnectSelected:
+        post_backend_action(L"/vpn/connect", "{}");
+        break;
+      case kTrayDisconnect:
+        post_backend_action(L"/vpn/disconnect", "{}");
+        break;
+      case kTrayReconnect:
+        post_backend_action(L"/vpn/reconnect", "{}");
+        break;
+      case kTrayExit:
+        g_exit_requested = true;
+        stop_backend();
+        remove_tray_icon();
+        PostMessageW(hwnd, WM_CLOSE, 0, 0);
+        break;
+      default:
+        break;
+    }
+  }
 
   LRESULT CALLBACK MainWndProcHook(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
-    if (msg == WM_CLOSE) {
-      OutputDebugStringW(L"[LaLune] WM_CLOSE — stopping backend\n");
-      stop_backend();
+    if (g_taskbar_created_message != 0 && msg == g_taskbar_created_message) {
+      add_tray_icon(hwnd);
+      return 0;
     }
+
+    if (msg == kTrayCallbackMessage) {
+      const UINT tray_event = static_cast<UINT>(l);
+      if (tray_event == WM_RBUTTONUP || tray_event == WM_CONTEXTMENU) {
+        show_tray_menu(hwnd);
+      } else if (tray_event == WM_LBUTTONUP || tray_event == WM_LBUTTONDBLCLK) {
+        show_main_window(hwnd);
+      }
+      return 0;
+    }
+
+    if (msg == WM_COMMAND) {
+      const UINT command = LOWORD(w);
+      if (l == 0 && HIWORD(w) == 0 &&
+          command >= kTrayConnectSelected && command <= kTrayExit) {
+        handle_tray_command(hwnd, command);
+        return 0;
+      }
+    }
+
+    // Closing the window hides the UI but deliberately leaves the backend and
+    // notification-area icon alive. The tray's Exit command performs shutdown.
+    if (msg == WM_CLOSE && !g_exit_requested) {
+      ShowWindow(hwnd, SW_HIDE);
+      OutputDebugStringW(L"[LaLune] window hidden to notification area\n");
+      return 0;
+    }
+
+    if (msg == WM_QUERYENDSESSION) {
+      g_exit_requested = true;
+      remove_tray_icon();
+      stop_backend();
+      return TRUE;
+    }
+
+    if (msg == WM_DESTROY) {
+      remove_tray_icon();
+    }
+
     return CallWindowProcW(g_original_wndproc, hwnd, msg, w, l);
   }
 }
@@ -330,17 +496,19 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(480, 850);
   if (!window.Create(L"LaLune", origin, size)) {
+    stop_backend();
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);
 
-  // 4. Хук на WM_CLOSE.
-  g_window = &window;
+  // 4. Хук на окно и установка tray icon.
   g_main_hwnd = window.GetHandle();
   if (g_main_hwnd) {
     g_original_wndproc = reinterpret_cast<WNDPROC>(
         SetWindowLongPtrW(g_main_hwnd, GWLP_WNDPROC,
                           reinterpret_cast<LONG_PTR>(MainWndProcHook)));
+    g_taskbar_created_message = RegisterWindowMessageW(L"TaskbarCreated");
+    add_tray_icon(g_main_hwnd);
   }
 
   ::MSG msg;

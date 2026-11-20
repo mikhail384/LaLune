@@ -17,8 +17,9 @@ VK Calls, TURN используется для обхода NAT, WRAP — для
 
 | Платформа | Статус | Стек | Ядро |
 |---|---|---|---|
-| Windows | ✅ | Flutter + Rust (axum) + Wintun | `client-windows-x86_64.exe` |
+| Windows | ✅ | Flutter + Rust (axum) + Wintun + tray | `client-windows-x86_64.exe` |
 | Linux | ✅ | Flutter + Rust (axum) + TUN | `client-linux-x86_64` |
+| macOS | 🧪 | Flutter + Rust (axum) + utun + DMG installer | `client-macos-x86_64` |
 | Android | ✅ | Flutter + Kotlin + VpnService | `libclient-android-*.so` |
 | iOS 17+ | ✅ | Flutter + Swift + NetworkExtension | `csqtt-core` (static lib) |
 | OpenWRT | ✅ | Rust (axum) + `lalune0` + policy routing | встроенные CSQTT / CSQTTR / CSQTT 2.1.9 |
@@ -45,6 +46,16 @@ curl -fsSL https://raw.githubusercontent.com/Endlad2/LaLune/main/Installer/insta
 
 Что делает: создаёт `~/.la-lune/`, качает клиент, backend, ядро,
 иконку, создаёт `.desktop`-файл и симлинк `~/.local/bin/lalune`.
+
+### macOS
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Endlad2/LaLune/main/Installer/install-macos.sh | bash
+```
+
+Что делает: сначала скачивает DMG и совместимые ядра, затем подключает DMG
+как диск, устанавливает `LaLune.app` в `/Applications`, а бинарники ядер —
+в `~/.la-lune/`. Для установки в `/Applications` запросит пароль администратора.
 
 ### OpenWRT (роутер: aarch64, x86_64, i386, mips/mipsel, arm)
 

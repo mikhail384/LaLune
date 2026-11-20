@@ -58,6 +58,34 @@ pub struct VpnStats {
     pub rx_rate: u64,
     pub tx_rate: u64,
     pub active_sessions: i32,
+    pub workers: u64,
+    pub workers_target: u64,
+    pub workers_vk: u64,
+    pub workers_jazz: u64,
+    pub workers_ya_docs: u64,
+    pub workers_mail_docs: u64,
+    pub workers_cups: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TotsMetrics {
+    pub rx_bytes: u64,
+    pub tx_bytes: u64,
+    pub workers: u64,
+    pub workers_target: u64,
+    pub workers_vk: u64,
+    pub workers_jazz: u64,
+    pub workers_ya_docs: u64,
+    pub workers_mail_docs: u64,
+    pub workers_cups: u64,
+}
+
+struct RateSample {
+    sampled_at: Instant,
+    rx_bytes: u64,
+    tx_bytes: u64,
+    rx_rate: u64,
+    tx_rate: u64,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -72,6 +100,14 @@ pub struct VpnRuntime {
     pub running: Arc<AtomicBool>,
     pub rx_bytes: Arc<AtomicU64>,
     pub tx_bytes: Arc<AtomicU64>,
+    pub workers: Arc<AtomicU64>,
+    pub workers_target: Arc<AtomicU64>,
+    pub workers_vk: Arc<AtomicU64>,
+    pub workers_jazz: Arc<AtomicU64>,
+    pub workers_ya_docs: Arc<AtomicU64>,
+    pub workers_mail_docs: Arc<AtomicU64>,
+    pub workers_cups: Arc<AtomicU64>,
+    rate_sample: Mutex<RateSample>,
     pub session_id: Mutex<String>,
     pub active_config_id: Mutex<i64>,
     pub started_at: Arc<Mutex<Option<Instant>>>,
@@ -107,6 +143,20 @@ impl VpnRuntime {
             running: Arc::new(AtomicBool::new(false)),
             rx_bytes: Arc::new(AtomicU64::new(0)),
             tx_bytes: Arc::new(AtomicU64::new(0)),
+            workers: Arc::new(AtomicU64::new(0)),
+            workers_target: Arc::new(AtomicU64::new(0)),
+            workers_vk: Arc::new(AtomicU64::new(0)),
+            workers_jazz: Arc::new(AtomicU64::new(0)),
+            workers_ya_docs: Arc::new(AtomicU64::new(0)),
+            workers_mail_docs: Arc::new(AtomicU64::new(0)),
+            workers_cups: Arc::new(AtomicU64::new(0)),
+            rate_sample: Mutex::new(RateSample {
+                sampled_at: Instant::now(),
+                rx_bytes: 0,
+                tx_bytes: 0,
+                rx_rate: 0,
+                tx_rate: 0,
+            }),
             session_id: Mutex::new(String::new()),
             active_config_id: Mutex::new(0),
             started_at: Arc::new(Mutex::new(None)),
@@ -161,13 +211,87 @@ impl VpnRuntime {
         *self.phase_message.write() = message.to_string();
     }
 
-    pub fn stats(&self) -> VpnStats {
-        VpnStats {
-            rx_bytes: self.rx_bytes.load(Ordering::Relaxed),
-            tx_bytes: self.tx_bytes.load(Ordering::Relaxed),
+    pub fn reset_stats(&self) {
+        self.rx_bytes.store(0, Ordering::Relaxed);
+        self.tx_bytes.store(0, Ordering::Relaxed);
+        self.workers.store(0, Ordering::Relaxed);
+        self.workers_target.store(0, Ordering::Relaxed);
+        self.workers_vk.store(0, Ordering::Relaxed);
+        self.workers_jazz.store(0, Ordering::Relaxed);
+        self.workers_ya_docs.store(0, Ordering::Relaxed);
+        self.workers_mail_docs.store(0, Ordering::Relaxed);
+        self.workers_cups.store(0, Ordering::Relaxed);
+        *self.rate_sample.lock() = RateSample {
+            sampled_at: Instant::now(),
+            rx_bytes: 0,
+            tx_bytes: 0,
             rx_rate: 0,
             tx_rate: 0,
-            active_sessions: if self.running.load(Ordering::Relaxed) { 1 } else { 0 },
+        };
+    }
+
+    pub fn update_tots_worker_counts(&self, workers: u64, workers_target: u64) {
+        self.workers.store(workers, Ordering::Relaxed);
+        self.workers_target.store(workers_target, Ordering::Relaxed);
+    }
+
+    pub fn update_tots_metrics(&self, metrics: TotsMetrics) {
+        self.rx_bytes.store(metrics.rx_bytes, Ordering::Relaxed);
+        self.tx_bytes.store(metrics.tx_bytes, Ordering::Relaxed);
+        self.workers.store(metrics.workers, Ordering::Relaxed);
+        self.workers_target.store(metrics.workers_target, Ordering::Relaxed);
+        self.workers_vk.store(metrics.workers_vk, Ordering::Relaxed);
+        self.workers_jazz.store(metrics.workers_jazz, Ordering::Relaxed);
+        self.workers_ya_docs.store(metrics.workers_ya_docs, Ordering::Relaxed);
+        self.workers_mail_docs.store(metrics.workers_mail_docs, Ordering::Relaxed);
+        self.workers_cups.store(metrics.workers_cups, Ordering::Relaxed);
+    }
+
+    pub fn stats(&self) -> VpnStats {
+        let rx_bytes = self.rx_bytes.load(Ordering::Relaxed);
+        let tx_bytes = self.tx_bytes.load(Ordering::Relaxed);
+        let workers = self.workers.load(Ordering::Relaxed);
+        let workers_target = self.workers_target.load(Ordering::Relaxed);
+        let workers_vk = self.workers_vk.load(Ordering::Relaxed);
+        let workers_jazz = self.workers_jazz.load(Ordering::Relaxed);
+        let workers_ya_docs = self.workers_ya_docs.load(Ordering::Relaxed);
+        let workers_mail_docs = self.workers_mail_docs.load(Ordering::Relaxed);
+        let workers_cups = self.workers_cups.load(Ordering::Relaxed);
+        let mut sample = self.rate_sample.lock();
+        let elapsed = sample.sampled_at.elapsed().as_secs_f64();
+        // Keep the last measured rate between ToTS's 5-second status lines.
+        // Reset to zero only after a genuinely idle interval; otherwise a
+        // 2-second UI poll would show a short speed spike followed by zero.
+        if elapsed >= 0.25 && (rx_bytes != sample.rx_bytes || tx_bytes != sample.tx_bytes) {
+            sample.rx_rate = (rx_bytes.saturating_sub(sample.rx_bytes) as f64 / elapsed) as u64;
+            sample.tx_rate = (tx_bytes.saturating_sub(sample.tx_bytes) as f64 / elapsed) as u64;
+            sample.rx_bytes = rx_bytes;
+            sample.tx_bytes = tx_bytes;
+            sample.sampled_at = Instant::now();
+        } else if elapsed >= 10.0 {
+            sample.rx_rate = 0;
+            sample.tx_rate = 0;
+        }
+        let running = self.running.load(Ordering::Relaxed);
+        VpnStats {
+            rx_bytes,
+            tx_bytes,
+            rx_rate: sample.rx_rate,
+            tx_rate: sample.tx_rate,
+            active_sessions: if workers_target > 0 {
+                i32::try_from(workers).unwrap_or(i32::MAX)
+            } else if running {
+                1
+            } else {
+                0
+            },
+            workers,
+            workers_target,
+            workers_vk,
+            workers_jazz,
+            workers_ya_docs,
+            workers_mail_docs,
+            workers_cups,
         }
     }
 
@@ -846,6 +970,71 @@ pub fn parse_stats(line: &str) -> Option<(i32, f64)> {
     Some((active, traffic))
 }
 
+fn tracing_field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    line.split_whitespace().find_map(|part| {
+        let part = part.trim_matches(|c: char| c == ',' || c == ';');
+        part.strip_prefix(key)?.strip_prefix('=')
+    })
+}
+
+fn mb_to_bytes(value: f64) -> u64 {
+    if !value.is_finite() || value <= 0.0 {
+        return 0;
+    }
+    (value * 1_048_576.0).min(u64::MAX as f64).round() as u64
+}
+
+/// Parse the structured `tracing` status line emitted by tots-client.
+/// Example: `ToTS status tun_tx_mb=1.25 tun_rx_mb=2.5 workers=8 workers_target=10`.
+pub fn parse_tots_status(line: &str) -> Option<TotsMetrics> {
+    if !line.to_ascii_lowercase().contains("tots status") {
+        return None;
+    }
+    let tx_mb = tracing_field(line, "tun_tx_mb")?.trim_end_matches(',').parse::<f64>().ok()?;
+    let rx_mb = tracing_field(line, "tun_rx_mb")?.trim_end_matches(',').parse::<f64>().ok()?;
+    let workers = tracing_field(line, "workers")?.trim_end_matches(',').parse::<u64>().ok()?;
+    let parse_worker = |key: &str| {
+        tracing_field(line, key)
+            .and_then(|v| v.trim_end_matches(',').parse::<u64>().ok())
+            .unwrap_or(0)
+    };
+    let workers_target = tracing_field(line, "workers_target")
+        .and_then(|v| v.trim_end_matches(',').parse::<u64>().ok())
+        .unwrap_or(workers);
+    Some(TotsMetrics {
+        rx_bytes: mb_to_bytes(rx_mb),
+        tx_bytes: mb_to_bytes(tx_mb),
+        workers,
+        workers_target,
+        workers_vk: parse_worker("workers_vk"),
+        workers_jazz: parse_worker("workers_jazz"),
+        workers_ya_docs: parse_worker("workers_ya_docs"),
+        workers_mail_docs: parse_worker("workers_mail_docs"),
+        workers_cups: parse_worker("workers_cups"),
+    })
+}
+
+/// Worker counts are available before the TUN status task starts. Read them
+/// from the pool-ready / TUN-connected line so the UI can show the pool as soon
+/// as the actual tunnel comes up.
+pub fn parse_tots_worker_status(line: &str) -> Option<(u64, u64)> {
+    let lower = line.to_ascii_lowercase();
+    if !lower.contains("tots worker pool ready") && !lower.contains("tots tun connected") {
+        return None;
+    }
+    let workers = tracing_field(line, "workers")?.trim_end_matches(',').parse::<u64>().ok()?;
+    let target = tracing_field(line, "workers_target")
+        .and_then(|v| v.trim_end_matches(',').parse::<u64>().ok())
+        .unwrap_or(workers);
+    Some((workers, target))
+}
+
+/// The pool-ready log is not enough: TUN and default routes are established
+/// only after tots-client emits this explicit message.
+pub fn is_tots_tun_connected(line: &str) -> bool {
+    line.to_ascii_lowercase().contains("tots tun connected")
+}
+
 pub fn extract_ipv4_addrs(line: &str) -> Vec<String> {
     use std::net::Ipv4Addr;
     let mut result = Vec::new();
@@ -925,5 +1114,40 @@ mod windows_lifecycle_tests {
         assert!(runtime.started_at.lock().is_none());
         assert!(runtime.tun_conf.lock().is_none());
         runtime.stop().await;
+    }
+}
+
+
+#[cfg(test)]
+mod tots_log_tests {
+    use super::*;
+
+    #[test]
+    fn parses_tots_status_counters_and_workers() {
+        let line = "2026-11-20T10:00:00Z INFO tots_client::workers: ToTS status tun_tx_mb=1.5 tun_rx_mb=2.25 workers=7 workers_target=10 workers_vk=3 workers_jazz=2 workers_ya_docs=1 workers_mail_docs=1 workers_cups=0 rtt_min_ms=12.0";
+        let stats = parse_tots_status(line).expect("ToTS status line should parse");
+        assert_eq!(stats.tx_bytes, 1_572_864);
+        assert_eq!(stats.rx_bytes, 2_359_296);
+        assert_eq!(stats.workers, 7);
+        assert_eq!(stats.workers_target, 10);
+        assert_eq!(stats.workers_vk, 3);
+        assert_eq!(stats.workers_jazz, 2);
+        assert_eq!(stats.workers_ya_docs, 1);
+        assert_eq!(stats.workers_mail_docs, 1);
+        assert_eq!(stats.workers_cups, 0);
+    }
+
+    #[test]
+    fn parses_worker_pool_counts_before_tun_is_ready() {
+        assert_eq!(
+            parse_tots_worker_status("ToTS worker pool ready workers=8 workers_target=10"),
+            Some((8, 10)),
+        );
+    }
+
+    #[test]
+    fn does_not_mark_worker_pool_ready_as_tun_connected() {
+        assert!(!is_tots_tun_connected("ToTS worker pool ready workers=10"));
+        assert!(is_tots_tun_connected("ToTS TUN connected workers=10"));
     }
 }

@@ -198,6 +198,7 @@ jobs:
           codesign --force --deep --sign - "$APP"
           mkdir -p Output
           ditto -c -k --keepParent "$APP" Output/LaLune-macOS.zip
+          hdiutil create -volname LaLune -srcfolder "$APP" -ov -format UDZO Output/LaLune-macOS.dmg
           cp dist-macos/lalune-backend Output/lalune-backend-macos
 
       - uses: actions/upload-artifact@v4
@@ -890,6 +891,7 @@ jobs:
           done
           cp release/android/LaLune-Android.apk release/assets/
           if [ -f release/macos/LaLune-macOS.zip ]; then cp release/macos/LaLune-macOS.zip release/assets/; fi
+          if [ -f release/macos/LaLune-macOS.dmg ]; then cp release/macos/LaLune-macOS.dmg release/assets/; fi
           cp release/token-fetcher-windows/LaLuneTokenFetcher_Windows.zip release/assets/
           cp release/token-fetcher-linux/LaLuneTokenFetcher_Linux.zip release/assets/
 
@@ -980,8 +982,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Attach macOS build (optional)
-        if: hashFiles('release/assets/LaLune-macOS.zip') != ''
+        if: hashFiles('release/assets/LaLune-macOS.zip') != '' || hashFiles('release/assets/LaLune-macOS.dmg') != ''
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ steps.version.outputs.tag }}" release/assets/LaLune-macOS.zip --clobber
+        run: |
+          set -euo pipefail
+          for asset in release/assets/LaLune-macOS.zip release/assets/LaLune-macOS.dmg; do
+            if [ -f "$asset" ]; then
+              gh release upload "${{ steps.version.outputs.tag }}" "$asset" --clobber
+            fi
+          done
 

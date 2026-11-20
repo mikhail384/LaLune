@@ -75,11 +75,9 @@ class VpnNotifier extends StateNotifier<VpnStatus> {
         if (!connected && !_isConnectTransition(reportedState)) {
           _disconnectingSince = null;
         }
-        state = VpnStatus(
+        state = state.copyWith(
           state: reportedState,
           connected: connected,
-          uptimeSec: state.uptimeSec,
-          configId: state.configId,
           message: message,
         );
       } else if (ev.type == 'event' && ev.data['name'] == 'tun_ready') {
@@ -113,19 +111,15 @@ class VpnNotifier extends StateNotifier<VpnStatus> {
       } else if (_isTransitionPending(_connectingSince)) {
         // Keep the initial transitional UI only while the backend still reports
         // a plain disconnected state.
-        state = VpnStatus(
+        state = state.copyWith(
           state: 'connecting',
           connected: false,
-          uptimeSec: state.uptimeSec,
-          configId: state.configId,
           message: next.message.isNotEmpty ? next.message : state.message,
         );
       } else if (_isTransitionPending(_disconnectingSince)) {
-        state = VpnStatus(
+        state = state.copyWith(
           state: 'disconnecting',
           connected: false,
-          uptimeSec: state.uptimeSec,
-          configId: state.configId,
           message: state.message,
         );
       } else {

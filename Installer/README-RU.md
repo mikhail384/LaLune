@@ -6,6 +6,7 @@
 |---|---|
 | −`install.ps1` | Установщик для Windows (PowerShell) |
 | −`install.sh` | Установщик для Linux (bash) |
+| −`install-macos.sh` | Установщик для macOS (DMG через curl \| bash) |
 | −`launcher/` | Rust GUI-инсталлятор для Windows |
 | −`launcher/build.rs` | Скачивает все ресурсы во время `cargo build` |
 | −`launcher/src/main.rs` | GUI: «Установить» / «Выйти» |
@@ -75,6 +76,23 @@
 ```
 
 То же самое, но скачивание пропускается.
+
+## Как работает `install-macos.sh`
+
+Однокомандная установка:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Endlad2/LaLune/main/Installer/install-macos.sh | bash
+```
+
+1. Скачивает `LaLune-macOS.dmg` и совместимые бинарники CSQTT / CSQTTR / ToTS.
+2. Только после завершения загрузок подключает DMG через `hdiutil`.
+3. Копирует `LaLune.app` в `/Applications`.
+4. Устанавливает ядра и версии в `~/.la-lune/`.
+5. Отключает DMG и удаляет временные файлы.
+
+Установка в `/Applications` запрашивает пароль администратора. ToTS desktop
+бинарник в текущих релизах предназначен для Apple Silicon.
 
 ## Как работает `launcher/`
 

@@ -23,6 +23,21 @@ import '../widgets/qr_scanner_dialog.dart';
 import '../widgets/toast.dart';
 import 'add_config_dialog.dart';
 
+String _formatTrafficBytes(int value) {
+  if (value < 1024) return '$value B';
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  var amount = value / 1024.0;
+  var unit = 0;
+  while (amount >= 1024 && unit < units.length - 1) {
+    amount /= 1024;
+    unit++;
+  }
+  return '${amount.toStringAsFixed(amount >= 100 ? 0 : 1)} ${units[unit]}';
+}
+
+String _formatTrafficRate(int bytesPerSecond) =>
+    '${_formatTrafficBytes(bytesPerSecond)}/s';
+
 class ConnectionPage extends ConsumerStatefulWidget {
   final VoidCallback? onReload;
   const ConnectionPage({super.key, this.onReload});
@@ -394,8 +409,18 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
             .where((c) => !managedIds.contains(c.id))
             .toList(growable: false);
     final vpn = ref.watch(vpnProvider);
+    ConfigItem? activeConfig;
+    for (final config in configsState.items) {
+      if (config.id == vpn.configId) {
+        activeConfig = config;
+        break;
+      }
+    }
     final tunChecking = vpn.state == 'checking' && vpn.message == 'Проверка TUN';
     final visuallyConnected = vpn.connected || tunChecking;
+    final showTraffic = vpn.connected &&
+        (activeConfig?.isTots == true || vpn.rxBytes > 0 || vpn.txBytes > 0 ||
+            vpn.rxRate > 0 || vpn.txRate > 0);
 
     return Stack(
       children: [
@@ -471,6 +496,89 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
                     ],
                   ),
                 ),
+                if (showTraffic) ...[
+                  const SizedBox(height: 14),
+                  Container(
+                    width: double.infinity,
+                    constraints: const BoxConstraints(maxWidth: 400),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.045),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: Colors.white.withOpacity(0.08)),
+                    ),
+                    child: Column(
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: _TrafficValue(
+                                icon: Icons.south,
+                                label: 'Входящий',
+                                value: _formatTrafficRate(vpn.rxRate),
+                                color: const Color(0xFF7CFF9A),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: _TrafficValue(
+                                icon: Icons.north,
+                                label: 'Исходящий',
+                                value: _formatTrafficRate(vpn.txRate),
+                                color: const Color(0xFF91B8FF),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 9),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                '↓ ${_formatTrafficBytes(vpn.rxBytes)}',
+                                style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(0.58)),
+                              ),
+                            ),
+                            Expanded(
+                              child: Text(
+                                '↑ ${_formatTrafficBytes(vpn.txBytes)}',
+                                textAlign: TextAlign.end,
+                                style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(0.58)),
+                              ),
+                            ),
+                          ],
+                        ),
+                        if (activeConfig?.isTots == true) ...[
+                          const SizedBox(height: 7),
+                          Divider(height: 1, color: Colors.white.withOpacity(0.08)),
+                          const SizedBox(height: 7),
+                          Row(
+                            children: [
+                              Icon(Icons.hub_outlined, size: 13, color: Colors.white.withOpacity(0.55)),
+                              const SizedBox(width: 6),
+                              Text(
+                                'ToTS Workers: ${vpn.workers}/${vpn.workersTarget}',
+                                style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(0.62)),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 5),
+                          Wrap(
+                            spacing: 10,
+                            runSpacing: 3,
+                            children: [
+                              _ProviderWorkers(label: 'VK', count: vpn.workersVk),
+                              _ProviderWorkers(label: 'Jazz', count: vpn.workersJazz),
+                              _ProviderWorkers(label: 'Ya Docs', count: vpn.workersYaDocs),
+                              _ProviderWorkers(label: 'Mail', count: vpn.workersMailDocs),
+                              _ProviderWorkers(label: 'Cups', count: vpn.workersCups),
+                            ],
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 22),
                 ConfigSelector(
                   configs: plainConfigs,
@@ -624,4 +732,54 @@ class _AddButtonState extends State<_AddButton> {
       ),
     );
   }
+}
+
+
+class _TrafficValue extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color color;
+
+  const _TrafficValue({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 15, color: color),
+        const SizedBox(width: 7),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.52))),
+              const SizedBox(height: 2),
+              Text(value, maxLines: 1, overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: color)),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+
+class _ProviderWorkers extends StatelessWidget {
+  final String label;
+  final int count;
+
+  const _ProviderWorkers({required this.label, required this.count});
+
+  @override
+  Widget build(BuildContext context) => Text(
+        '$label $count',
+        style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.48)),
+      );
 }
