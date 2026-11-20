@@ -113,6 +113,8 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
   Future<void> _measureAllPings() async {
     if (_measuringPings) return;
     final configsState = ref.read(configsProvider);
+    final vpnConnected = ref.read(vpnProvider).connected;
+    final selectedId = configsState.selectedId;
     final subsState = ref.read(subscriptionsProvider);
     final managedIds = subsState.managedIds;
     final plain = managedIds.isEmpty
@@ -131,7 +133,9 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
 
     for (final config in plain) {
       jobs.add(() async {
-        final ping = await probeProfile(config);
+        final ping = (vpnConnected && config.id == selectedId)
+            ? (await probeActiveTunnel() ?? await probeProfile(config))
+            : await probeProfile(config);
         if (ping != null) results[configPingKey(config.id)] = ping;
       }());
     }
