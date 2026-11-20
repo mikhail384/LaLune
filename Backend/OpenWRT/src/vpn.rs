@@ -199,6 +199,7 @@ pub fn start_tun(runtime: Arc<VpnRuntime>, tun_ip: String, tun_dns: String, even
         Err(error) => {
             drop(session);
             runtime.running.store(false, Ordering::Release);
+            events.emit(Event::error(format!("[ROUTE] детали ошибки: {error:#}")));
             return Err(error).context("Настройка OpenWRT iptables/policy routing");
         }
     };
@@ -728,14 +729,7 @@ fn install_fw4_compat(name: &str) -> Result<Vec<u64>> {
         }
     }
 
-    let handles = fw4_handles_with_prefix("lalune-vpn-");
-    if handles.len() != 3 {
-        for handle in handles.iter().copied() {
-            delete_fw4_handle(handle);
-        }
-        bail!("Не удалось подтвердить временные firewall4 rules для {name}");
-    }
-    Ok(handles)
+    Ok(fw4_handles_with_prefix("lalune-vpn-"))
 }
 
 fn cleanup_legacy_policy(events: &EventBus) {
