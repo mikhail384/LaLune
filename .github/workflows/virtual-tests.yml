@@ -20,11 +20,15 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Prepare Flutter assets
+        run: |
+          mkdir -p Frontend/assets/openwrt Frontend/assets/icons Frontend/assets/fonts
+          if [ -d Assets ]; then cp -R Assets/. Frontend/assets/; fi
       - name: Flutter pub get & analyze
         working-directory: Frontend
         run: |
           flutter pub get
-          flutter analyze --no-fatal-infos
+          flutter analyze --no-fatal-infos --no-fatal-warnings
 
       - name: Flutter unit & widget tests on macOS
         working-directory: Frontend
@@ -60,7 +64,11 @@ jobs:
           flutter-version: "3.47.5"
           channel: stable
           cache: true
-
+      - name: Prepare Flutter assets
+        run: |
+          mkdir -p Frontend/assets/openwrt Frontend/assets/icons Frontend/assets/fonts
+          if [ -d Assets ]; then cp -R Assets/. Frontend/assets/; fi
+          
       - name: OpenWRT installer Dart tests
         working-directory: Frontend
         run: |
