@@ -60,7 +60,7 @@ portable-atomic = "1"
 path = "../../Core/csqtt-link"
 
 [profile.release]
-opt-level = "z"
+opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
