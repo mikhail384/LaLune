@@ -2,6 +2,7 @@
 use anyhow::{bail, Context, Result};
 use std::fs;
 use std::net::Ipv4Addr;
+use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -59,6 +60,7 @@ struct Routes {
     undo: Vec<Vec<String>>,
     dns: Option<(PathBuf, Vec<u8>, Vec<u8>)>,
     events: EventBus,
+    mss_clamp_dev: Option<String>,
 }
 
 impl Routes {
@@ -74,6 +76,7 @@ impl Routes {
             undo: Vec::new(),
             dns: None,
             events,
+            mss_clamp_dev: None,
         };
 
         if !full_tunnel {
@@ -164,6 +167,8 @@ impl Routes {
             return Err(error).context("Настройка DNS для TUN");
         }
         routes.dns = Some((path, previous, installed));
+        if full_tunnel {routes.mss_clamp_dev = Some(name.to_string());  let _ = std::process::Command::new("iptables").args(["-t", "mangle", "-A", "FORWARD", "-o", name, "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu"]).status(); routes.mss_clamp_dev = Some(name.to_string());
+                       }
         Ok(routes)
     }
 
@@ -194,6 +199,7 @@ impl Drop for Routes {
                 )));
             }
         }
+        if let Some(dev) = &self.mss_clamp_dev { let _ = std::process::Command::new("iptables").args(["-t", "mangle", "-D", "FORWARD", "-o", dev, "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-j", "TCPMSS", "--clamp-mss-to-pmtu"]).status(); }
     }
 }
 
@@ -208,6 +214,7 @@ fn dns_content(dns: &str) -> Result<Vec<u8>> {
     }
     Ok(text.into_bytes())
 }
+fn tune_udp_socket(socket: &std::net::UdpSocket) { let fd = socket.as_raw_fd(); let buf_size: libc::c_int = 2 * 1024 * 1024; unsafe { libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_RCVBUF, &buf_size as *const _ as *const libc::c_void, std::mem::size_of::<libc::c_int>() as libc::socklen_t); libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_SNDBUF, &buf_size as *const _ as *const libc::c_void, std::mem::size_of::<libc::c_int>() as libc::socklen_t); } }
 
 pub struct Session {
     handle: Option<JoinHandle<()>>,
@@ -264,6 +271,7 @@ impl Session {
             "link".into(), "set".into(), "dev".into(), name.into(),
             "mtu".into(), mtu.to_string(), "up".into(),
         ]).context("Поднятие Linux TUN")?;
+        let _ = ip(&strings(&["link", "set", "dev", name, "txqueuelen", "1000"]));
 
         let link = ip(&vec![
             "-details".into(), "link".into(), "show".into(), "dev".into(), name.into(),
@@ -286,8 +294,9 @@ impl Session {
             let socket = std::net::UdpSocket::bind("127.0.0.1:0")?;
             socket.connect((Ipv4Addr::LOCALHOST, core_port))?;
             socket.set_nonblocking(true)?;
+               tune_udp_socket(&socket); 
             socket
-        })?;
+        })?; let socket = Arc::new(socket);
         let routes = Routes::install(name, dns, uid, full_tunnel, &bypass, events.clone())?;
         rx.store(0, Ordering::Relaxed);
         tx.store(0, Ordering::Relaxed);
@@ -296,26 +305,7 @@ impl Session {
             // Drop восстанавливает сеть и при штатном завершении, и при abort.
             let (mut reader, mut writer) = tokio::io::split(dev);
             let _routes = routes;
-            let mut outgoing = vec![0u8; 65535];
-            let mut incoming = vec![0u8; 65535];
-            let result: Result<()> = async {
-                loop {
-                    tokio::select! {
-                        result = reader.read(&mut outgoing) => {
-                            let n = result?;
-                            if n == 0 { bail!("TUN закрыт"); }
-                            if socket.send(&outgoing[..n]).await? != n { bail!("Неполная отправка пакета ядру"); }
-                            tx.fetch_add(n as u64, Ordering::Relaxed);
-                        }
-                        result = socket.recv(&mut incoming) => {
-                            let n = result?;
-                            // Один write соответствует одному IP-пакету TUN.
-                            if writer.write(&incoming[..n]).await? != n { bail!("Неполная запись пакета в TUN"); }
-                            rx.fetch_add(n as u64, Ordering::Relaxed);
-                        }
-                    }
-                }
-            }.await;
+       let tx_socket = socket.clone(); let rx_socket = socket; let tx_counter = tx.clone(); let rx_counter = rx.clone(); let mut tx_task = tokio::spawn(async move { let mut outgoing = vec![0u8; 65535]; loop { let n = reader.read(&mut outgoing).await?; if n == 0 { bail!("TUN closed"); } if tx_socket.send(&outgoing[..n]).await? != n { bail!("short send"); } tx_counter.fetch_add(n as u64, Ordering::Relaxed); } #[allow(unreachable_code)] Ok::<(), anyhow::Error>(()) }); let mut rx_task = tokio::spawn(async move { let mut incoming = vec![0u8; 65535]; loop { let n = rx_socket.recv(&mut incoming).await?; if writer.write(&incoming[..n]).await? != n { bail!("short write"); } rx_counter.fetch_add(n as u64, Ordering::Relaxed); } #[allow(unreachable_code)] Ok::<(), anyhow::Error>(()) }); let result: Result<()> = tokio::select! { res = &mut tx_task => { rx_task.abort(); res.map_err(|e| anyhow::anyhow!("tx task: {e}"))? } res = &mut rx_task => { tx_task.abort(); res.map_err(|e| anyhow::anyhow!("rx task: {e}"))? } };
             running.store(false, Ordering::Release);
             if let Err(error) = result {
                 events.emit(Event::error(format!("TUN-мост остановлен: {error}")));
