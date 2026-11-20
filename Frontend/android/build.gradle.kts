@@ -11,6 +11,16 @@ allprojects {
     repositories {
         mavenLocal()
         google()
+        // Use the endpoint pre-validated by CI before canonical Maven Central.
+        System.getenv("LALUNE_MAVEN_CENTRAL_URL")
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { mirrorUrl ->
+                maven {
+                    name = "LaLuneMavenCentralMirror"
+                    url = uri(mirrorUrl)
+                }
+            }
         mavenCentral()
         // Fallback, но с явным ограничением: не пытаться тянуть
         // kotlin-compiler-embeddable отсюда (это как раз вызывает redirect).

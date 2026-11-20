@@ -480,7 +480,9 @@ jobs:
           set -euo pipefail
           FLUTTER_BIN="$(command -v flutter)"
           FLUTTER_ROOT="$(cd "$(dirname "$FLUTTER_BIN")/.." && pwd)"
-          python .github/scripts/patch_flutter_gradle_repositories.py "$FLUTTER_ROOT"
+          python .github/scripts/patch_flutter_gradle_repositories.py \
+            --github-env "$GITHUB_ENV" \
+            "$FLUTTER_ROOT"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
