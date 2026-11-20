@@ -19,15 +19,15 @@ class GlassCard extends StatelessWidget {
     this.padding = const EdgeInsets.all(16),
     this.radius = 14,
     this.opacity = 0.07,
-    this.blur = 16,
+    this.blur = 12,
     this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
     final borderRadius = BorderRadius.circular(radius);
-    final topAlpha = (0.38 + opacity * 0.45).clamp(0.0, 0.65);
-    final bottomAlpha = (0.28 + opacity * 0.35).clamp(0.0, 0.58);
+    final isAndroid = !kIsWeb && defaultTargetPlatform == TargetPlatform.android; final topAlpha = isAndroid ? (0.58 + opacity * 0.4).clamp(0.0, 0.78) : (0.38 + opacity * 0.45).clamp(0.0, 0.65);
+    final bottomAlpha = isAndroid ? (0.48 + opacity * 0.35).clamp(0.0, 0.70) : (0.28 + opacity * 0.35).clamp(0.0, 0.58);
 
     final decoration = BoxDecoration(
       gradient: LinearGradient(
@@ -67,8 +67,8 @@ class GlassCard extends StatelessWidget {
     );
 
     final effectiveBlur =
-        !kIsWeb && defaultTargetPlatform == TargetPlatform.android && blur > 14
-            ? 14.0
+        isAndroid
+            ? 0.0
             : blur;
 
     Widget body;
