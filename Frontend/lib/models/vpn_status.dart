@@ -6,17 +6,22 @@ class VpnStatus {
   final int uptimeSec;
   final int configId;
   final String message;
+  final bool trafficAvailable;
   final int rxBytes;
   final int txBytes;
   final int rxRate;
   final int txRate;
+  final bool workersAvailable;
+  final bool workerProvidersAvailable;
   final int workers;
   final int workersTarget;
+  final int tunnelRttMs;
   final int workersVk;
   final int workersJazz;
   final int workersYaDocs;
   final int workersMailDocs;
   final int workersCups;
+  final int workersMax;
   final int activeSessions;
 
   const VpnStatus({
@@ -25,17 +30,22 @@ class VpnStatus {
     this.uptimeSec = 0,
     this.configId = 0,
     this.message = '',
+    this.trafficAvailable = true,
     this.rxBytes = 0,
     this.txBytes = 0,
     this.rxRate = 0,
     this.txRate = 0,
+    this.workersAvailable = false,
+    this.workerProvidersAvailable = false,
     this.workers = 0,
     this.workersTarget = 0,
+    this.tunnelRttMs = 0,
     this.workersVk = 0,
     this.workersJazz = 0,
     this.workersYaDocs = 0,
     this.workersMailDocs = 0,
     this.workersCups = 0,
+    this.workersMax = 0,
     this.activeSessions = 0,
   });
 
@@ -45,17 +55,23 @@ class VpnStatus {
         uptimeSec: ((j['uptimeSec'] ?? 0) as num).toInt(),
         configId: ((j['configId'] ?? 0) as num).toInt(),
         message: (j['message'] ?? '') as String,
+        trafficAvailable: j['trafficAvailable'] != false,
         rxBytes: ((j['rxBytes'] ?? 0) as num).toInt(),
         txBytes: ((j['txBytes'] ?? 0) as num).toInt(),
         rxRate: ((j['rxRate'] ?? 0) as num).toInt(),
         txRate: ((j['txRate'] ?? 0) as num).toInt(),
+        workersAvailable: (j['workersAvailable'] ?? j.containsKey('workers')) == true,
+        workerProvidersAvailable:
+            (j['workerProvidersAvailable'] ?? j.containsKey('workersVk')) == true,
         workers: ((j['workers'] ?? 0) as num).toInt(),
         workersTarget: ((j['workersTarget'] ?? 0) as num).toInt(),
+        tunnelRttMs: ((j['tunnelRttMs'] ?? 0) as num).toInt(),
         workersVk: ((j['workersVk'] ?? 0) as num).toInt(),
         workersJazz: ((j['workersJazz'] ?? 0) as num).toInt(),
         workersYaDocs: ((j['workersYaDocs'] ?? 0) as num).toInt(),
         workersMailDocs: ((j['workersMailDocs'] ?? 0) as num).toInt(),
         workersCups: ((j['workersCups'] ?? 0) as num).toInt(),
+        workersMax: ((j['workersMax'] ?? 0) as num).toInt(),
         activeSessions: ((j['activeSessions'] ?? 0) as num).toInt(),
       );
 
@@ -65,17 +81,22 @@ class VpnStatus {
     int? uptimeSec,
     int? configId,
     String? message,
+    bool? trafficAvailable,
     int? rxBytes,
     int? txBytes,
     int? rxRate,
     int? txRate,
+    bool? workersAvailable,
+    bool? workerProvidersAvailable,
     int? workers,
     int? workersTarget,
+    int? tunnelRttMs,
     int? workersVk,
     int? workersJazz,
     int? workersYaDocs,
     int? workersMailDocs,
     int? workersCups,
+    int? workersMax,
     int? activeSessions,
   }) =>
       VpnStatus(
@@ -84,17 +105,23 @@ class VpnStatus {
         uptimeSec: uptimeSec ?? this.uptimeSec,
         configId: configId ?? this.configId,
         message: message ?? this.message,
+        trafficAvailable: trafficAvailable ?? this.trafficAvailable,
         rxBytes: rxBytes ?? this.rxBytes,
         txBytes: txBytes ?? this.txBytes,
         rxRate: rxRate ?? this.rxRate,
         txRate: txRate ?? this.txRate,
+        workersAvailable: workersAvailable ?? this.workersAvailable,
+        workerProvidersAvailable:
+            workerProvidersAvailable ?? this.workerProvidersAvailable,
         workers: workers ?? this.workers,
         workersTarget: workersTarget ?? this.workersTarget,
+        tunnelRttMs: tunnelRttMs ?? this.tunnelRttMs,
         workersVk: workersVk ?? this.workersVk,
         workersJazz: workersJazz ?? this.workersJazz,
         workersYaDocs: workersYaDocs ?? this.workersYaDocs,
         workersMailDocs: workersMailDocs ?? this.workersMailDocs,
         workersCups: workersCups ?? this.workersCups,
+        workersMax: workersMax ?? this.workersMax,
         activeSessions: activeSessions ?? this.activeSessions,
       );
 

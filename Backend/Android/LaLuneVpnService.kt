@@ -26,6 +26,7 @@ import android.net.IpPrefix
 import android.net.LocalServerSocket
 import android.net.VpnService
 import android.os.Build
+import android.os.SystemClock
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -94,6 +95,20 @@ class LaLuneVpnService : VpnService() {
          */
         val tunTxBytes = java.util.concurrent.atomic.AtomicLong(0)
         val tunRxBytes = java.util.concurrent.atomic.AtomicLong(0)
+        @Volatile private var usesNativeTun = false
+        @Volatile private var nativeTraffic: NativeTunTraffic? = null
+        private data class WorkerSample(val session: String, val at: Long, val value: TotsWorkers)
+        @Volatile private var workerSample: WorkerSample? = null
+        @Volatile internal var totsWorkersTarget = 0
+            private set
+
+        internal fun currentTotsWorkers(): TotsWorkers? = workerSample?.takeIf {
+            it.session == snapshotSessionId && SystemClock.elapsedRealtime() - it.at <= 15_000
+        }?.value
+
+        internal fun trafficBytes(): TunnelBytes? =
+            if (usesNativeTun) nativeTraffic?.read()
+            else TunnelBytes(tunRxBytes.get(), tunTxBytes.get())
 
         @Volatile var snapshotConnected: Boolean = false
         @Volatile var snapshotActiveSessions: Int = 0
@@ -177,6 +192,10 @@ class LaLuneVpnService : VpnService() {
         // Empty during counter reset, so a concurrent reader cannot associate
         // a previous session ID with the next session's counters.
         snapshotSessionId = ""
+        usesNativeTun = false
+        nativeTraffic = null
+        workerSample = null
+        totsWorkersTarget = 0
         tunTxBytes.set(0)
         tunRxBytes.set(0)
         snapshotSessionId = java.util.UUID.randomUUID().toString()
@@ -191,6 +210,8 @@ class LaLuneVpnService : VpnService() {
                 null
             }
             if (totsRuntime != null) {
+                usesNativeTun = true
+                totsWorkersTarget = totsRuntime?.optInt("workersTarget", 0) ?: 0
                 notifyLog(this@LaLuneVpnService, "[VPN] ToTS runtime loaded; creating TUN")
                 establishing = true
                 val established = establishTun()
@@ -498,9 +519,11 @@ class LaLuneVpnService : VpnService() {
                 args += "--tun-fd-socket"
                 args += fdSocketName
 
-                tunnelGeneration++
+                val generation = ++tunnelGeneration
+                val session = snapshotSessionId
                 vpnInterface = iface
                 totsTunFd = inherited
+                nativeTraffic = NativeTunTraffic.forAddress(tunIP)
                 tunEstablished = true
                 notifyLog(this@LaLuneVpnService, "[VPN] TUN fd=${inherited.fd} ready; starting ToTS")
                 val coreTunReady = CompletableDeferred<Boolean>()
@@ -510,6 +533,13 @@ class LaLuneVpnService : VpnService() {
                     onLog = { line ->
                         Log.i(TAG, line)
                         notifyLog(this@LaLuneVpnService, line, core = true)
+                        if (generation == tunnelGeneration && session == snapshotSessionId) {
+                            TotsWorkers.parse(line)?.let {
+                                workerSample = WorkerSample(session, SystemClock.elapsedRealtime(), it)
+                                updateNotification()
+                            }
+                            if (line.contains("[CORE] process exited")) workerSample = null
+                        }
                         when {
                             line.contains("ToTS Android TUN connected") -> coreTunReady.complete(true)
                             line.contains("[CORE] process exited") || line.contains("Error:") -> coreTunReady.complete(false)
@@ -517,6 +547,7 @@ class LaLuneVpnService : VpnService() {
                     },
                 )
                 if (!started) {
+                    nativeTraffic?.finish()
                     try { fdServer.close() } catch (_: Exception) {}
                     notifyLog(this@LaLuneVpnService, "[VPN] ToTS process failed to start")
                     tunEstablished = false
@@ -549,6 +580,7 @@ class LaLuneVpnService : VpnService() {
                     try { fdServer.close() } catch (_: Exception) {}
                 }
                 if (!handedOff) {
+                    nativeTraffic?.finish()
                     coreManager.stopCore()
                     tunEstablished = false
                     try { inherited.close() } catch (_: Exception) {}
@@ -560,6 +592,7 @@ class LaLuneVpnService : VpnService() {
                 notifyLog(this@LaLuneVpnService, "[VPN] TUN descriptor transferred; waiting for ToTS to confirm epoll readiness")
                 val ready = withTimeoutOrNull(15_000) { coreTunReady.await() } == true
                 if (!ready) {
+                    nativeTraffic?.finish()
                     notifyLog(this@LaLuneVpnService, "[VPN] ToTS did not confirm TUN readiness")
                     coreManager.stopCore()
                     tunEstablished = false
@@ -658,6 +691,8 @@ class LaLuneVpnService : VpnService() {
         }
         tunnelGeneration++
         tunEstablished = false
+        nativeTraffic?.finish()
+        workerSample = null
         bridgeJobs.forEach { it.cancel() }
         bridgeJobs.clear()
         try { udpSocket?.close() } catch (_: Exception) {}
@@ -679,6 +714,9 @@ class LaLuneVpnService : VpnService() {
 
         tunnelGeneration++
         tunEstablished = false
+        nativeTraffic?.finish()
+        workerSample = null
+        totsWorkersTarget = 0
         bridgeJobs.forEach { it.cancel() }
         bridgeJobs.clear()
         try { udpSocket?.close() } catch (_: Exception) {}
@@ -747,7 +785,15 @@ class LaLuneVpnService : VpnService() {
 
         val text = when (connectionState) {
             "checking" -> "Проверка"
-            "connected" -> "Активных: $activeSessions | Трафик: $trafficMB МБ"
+            "connected" -> if (usesNativeTun) {
+                val workers = currentTotsWorkers()
+                val active = workers?.active?.toString() ?: "—"
+                val target = workers?.target ?: totsWorkersTarget
+                val traffic = trafficBytes()?.let {
+                    String.format(java.util.Locale.getDefault(), "%.2f МБ", (it.rx + it.tx) / 1048576.0)
+                } ?: "—"
+                "Активных: $active/$target | Трафик: $traffic"
+            } else "Активных: $activeSessions | Трафик: $trafficMB МБ"
             else -> "Подключение"
         }
 

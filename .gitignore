@@ -51,9 +51,12 @@ Frontend/android/app/src/main/kotlin/com/lalune/lalune/CsqttLink.kt
 Frontend/android/app/src/main/kotlin/com/lalune/lalune/LaLuneVpnService.kt
 Frontend/android/app/src/main/kotlin/com/lalune/lalune/LuaRuntime.kt
 Frontend/android/app/src/main/kotlin/com/lalune/lalune/Socks5Server.kt
+Frontend/android/app/src/main/kotlin/com/lalune/lalune/TunnelTraffic.kt
+Frontend/android/app/src/main/kotlin/com/lalune/lalune/TotsWorkers.kt
 Frontend/android/app/src/main/kotlin/com/lalune/lalune/VkWebViewFetcher.kt
 Frontend/android/app/src/main/assets/SmartTunnel.lua
 Frontend/android/app/src/main/assets/csqtt_decode.lua
+Frontend/android/app/src/main/assets/tots-notices/
 Frontend/windows/flutter/ephemeral/
 Frontend/linux/flutter/ephemeral/
 

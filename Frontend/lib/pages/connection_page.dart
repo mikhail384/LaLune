@@ -142,13 +142,13 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
 
     final api = ref.read(apiClientProvider);
     final results = <String, int>{};
-    final jobs = <Future<void>>[];
+    final jobs = <Future<void> Function()>[];
 
     for (final config in plain) {
       jobs.add(() async {
         final ping = await probeProfile(config);
         if (ping != null) results[configPingKey(config.id)] = ping;
-      }());
+      });
     }
 
     for (final sub in subsState.items) {
@@ -168,11 +168,19 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
           } catch (_) {
             // Ошибка одного профиля не должна отменять параллельный замер остальных.
           }
-        }());
+        });
       }
     }
 
-    await Future.wait(jobs);
+    var nextJob = 0;
+    await Future.wait([
+      for (var worker = 0; worker < 4 && worker < jobs.length; worker++)
+        () async {
+          while (nextJob < jobs.length) {
+            await jobs[nextJob++]();
+          }
+        }(),
+    ]);
     if (!mounted) return;
     setState(() {
       _profilePings
@@ -418,9 +426,11 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
     }
     final tunChecking = vpn.state == 'checking' && vpn.message == 'Проверка TUN';
     final visuallyConnected = vpn.connected || tunChecking;
+    final activeWorkers = vpn.workersAvailable ? '${vpn.workers}' : '—';
+    final targetWorkers = vpn.workersTarget > 0 ? '${vpn.workersTarget}' : '—';
     final showTraffic = vpn.connected &&
         (activeConfig?.isTots == true || vpn.rxBytes > 0 || vpn.txBytes > 0 ||
-            vpn.rxRate > 0 || vpn.txRate > 0);
+            vpn.rxRate > 0 || vpn.txRate > 0 || !vpn.trafficAvailable);
 
     return Stack(
       children: [
@@ -509,45 +519,49 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
                     ),
                     child: Column(
                       children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: _TrafficValue(
-                                icon: Icons.south,
-                                label: 'Входящий',
-                                value: _formatTrafficRate(vpn.rxRate),
-                                color: const Color(0xFF7CFF9A),
+                        if (!vpn.trafficAvailable)
+                          const Text('Счётчики трафика недоступны'),
+                        if (vpn.trafficAvailable) ...[
+                          Row(
+                            children: [
+                              Expanded(
+                                child: _TrafficValue(
+                                  icon: Icons.south,
+                                  label: 'Входящий',
+                                  value: _formatTrafficRate(vpn.rxRate),
+                                  color: const Color(0xFF7CFF9A),
+                                ),
                               ),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: _TrafficValue(
-                                icon: Icons.north,
-                                label: 'Исходящий',
-                                value: _formatTrafficRate(vpn.txRate),
-                                color: const Color(0xFF91B8FF),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: _TrafficValue(
+                                  icon: Icons.north,
+                                  label: 'Исходящий',
+                                  value: _formatTrafficRate(vpn.txRate),
+                                  color: const Color(0xFF91B8FF),
+                                ),
                               ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 9),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                '↓ ${_formatTrafficBytes(vpn.rxBytes)}',
-                                style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(0.58)),
+                            ],
+                          ),
+                          const SizedBox(height: 9),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  '↓ ${_formatTrafficBytes(vpn.rxBytes)}',
+                                  style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(0.58)),
+                                ),
                               ),
-                            ),
-                            Expanded(
-                              child: Text(
-                                '↑ ${_formatTrafficBytes(vpn.txBytes)}',
-                                textAlign: TextAlign.end,
-                                style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(0.58)),
+                              Expanded(
+                                child: Text(
+                                  '↑ ${_formatTrafficBytes(vpn.txBytes)}',
+                                  textAlign: TextAlign.end,
+                                  style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(0.58)),
+                                ),
                               ),
-                            ),
-                          ],
-                        ),
+                            ],
+                          ),
+                        ],
                         if (activeConfig?.isTots == true) ...[
                           const SizedBox(height: 7),
                           Divider(height: 1, color: Colors.white.withOpacity(0.08)),
@@ -557,23 +571,36 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
                               Icon(Icons.hub_outlined, size: 13, color: Colors.white.withOpacity(0.55)),
                               const SizedBox(width: 6),
                               Text(
-                                'ToTS Workers: ${vpn.workers}/${vpn.workersTarget}',
+                                'ToTS Workers: $activeWorkers/$targetWorkers',
                                 style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(0.62)),
                               ),
+                              if (vpn.tunnelRttMs > 0) ...[
+                                const Spacer(),
+                                Text(
+                                  'RTT туннеля · ${vpn.tunnelRttMs} мс',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: Colors.white.withValues(alpha: 0.62),
+                                  ),
+                                ),
+                              ],
                             ],
                           ),
                           const SizedBox(height: 5),
-                          Wrap(
-                            spacing: 10,
-                            runSpacing: 3,
-                            children: [
-                              _ProviderWorkers(label: 'VK', count: vpn.workersVk),
-                              _ProviderWorkers(label: 'Jazz', count: vpn.workersJazz),
-                              _ProviderWorkers(label: 'Ya Docs', count: vpn.workersYaDocs),
-                              _ProviderWorkers(label: 'Mail', count: vpn.workersMailDocs),
-                              _ProviderWorkers(label: 'Cups', count: vpn.workersCups),
-                            ],
-                          ),
+                          if (vpn.workerProvidersAvailable)
+                            Wrap(
+                              spacing: 10,
+                              runSpacing: 3,
+                              children: [
+                                _ProviderWorkers(label: 'VK', count: vpn.workersVk),
+                                _ProviderWorkers(label: 'Jazz', count: vpn.workersJazz),
+                                _ProviderWorkers(label: 'Ya Docs', count: vpn.workersYaDocs),
+                                _ProviderWorkers(label: 'Mail', count: vpn.workersMailDocs),
+                                _ProviderWorkers(label: 'Cups', count: vpn.workersCups),
+                                if (vpn.workersMax > 0)
+                                  _ProviderWorkers(label: 'MAX', count: vpn.workersMax),
+                              ],
+                            ),
                         ],
                       ],
                     ),

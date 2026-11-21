@@ -54,7 +54,7 @@ class Backend(private val context: Context) {
         // next to the original app (1062) without a bind conflict.
         const val LALUNE_TEST_PORT = 1064
         const val HOST = "127.0.0.1"
-        const val VERSION = "0.9.13"
+        const val VERSION = "0.9.17"
 
         /** Single source of truth for the loopback API port of a package. */
         fun portFor(packageName: String): Int = when {
@@ -98,9 +98,7 @@ class Backend(private val context: Context) {
     private val activeCallIds = CopyOnWriteArrayList<String>()
     private var httpServer: ServerSocket? = null
 
-    @Volatile private var lastStatsAt = 0L
-    @Volatile private var lastRx = 0L
-    @Volatile private var lastTx = 0L
+    private val trafficRates = TrafficRates()
 
     @Volatile private var running = false
     @Volatile private var vpnConnected = false
@@ -491,35 +489,18 @@ class Backend(private val context: Context) {
 
                 path == "/vpn/connect" && method == "POST" -> vpnConnect(body)
                 path == "/vpn/disconnect" && method == "POST" -> vpnDisconnect()
-                path == "/vpn/status" && method == "GET" -> 200 to jsonOk(
-                    "state" to vpnState,
-                    "connected" to vpnConnected, "uptimeSec" to 0,
-                    "configId" to LaLuneVpnService.snapshotConfigId, "message" to vpnMessage, "since" to "",
-                    "socks5Port" to socks5Port
-                )
+                path == "/vpn/status" && method == "GET" -> 200 to vpnTraffic().apply {
+                    put("state", vpnState)
+                    put("connected", vpnConnected)
+                    put("uptimeSec", 0)
+                    put("configId", LaLuneVpnService.snapshotConfigId)
+                    put("message", vpnMessage)
+                    put("since", "")
+                }.toString()
                 path == "/vpn/reconnect" && method == "POST" -> {
                     vpnDisconnect(); Thread.sleep(300); vpnConnect("{}")
                 }
-                path == "/vpn/stats" && method == "GET" -> {
-                    // Real counters from the TUN bridge, rates from the delta
-                    // between two consecutive calls.
-                    val sessionBefore = LaLuneVpnService.snapshotSessionId
-                    val rx = LaLuneVpnService.tunRxBytes.get()
-                    val tx = LaLuneVpnService.tunTxBytes.get()
-                    val sessionAfter = LaLuneVpnService.snapshotSessionId
-                    val now = System.currentTimeMillis()
-                    val dt = (now - lastStatsAt).coerceAtLeast(1)
-                    val rxRate = if (lastStatsAt > 0 && rx >= lastRx) (rx - lastRx) * 1000 / dt else 0L
-                    val txRate = if (lastStatsAt > 0 && tx >= lastTx) (tx - lastTx) * 1000 / dt else 0L
-                    lastStatsAt = now; lastRx = rx; lastTx = tx
-                    200 to jsonOk(
-                        "rxBytes" to rx, "txBytes" to tx,
-                        "sessionId" to if (sessionBefore == sessionAfter) sessionBefore else "",
-                        "rxRate" to rxRate, "txRate" to txRate,
-                        "activeSessions" to if (vpnConnected) LaLuneVpnService.snapshotActiveSessions else 0,
-                        "socks5Port" to socks5Port
-                    )
-                }
+                path == "/vpn/stats" && method == "GET" -> 200 to vpnTraffic().toString()
                 path == "/vpn/tunconf" && method == "GET" -> 200 to "{}"
 
                 path == "/logs" && method == "GET" ->
@@ -1467,6 +1448,38 @@ class Backend(private val context: Context) {
         return 200 to jsonOk("ok" to true, "status" to "connecting")
     }
 
+    private fun jazzWorkerCapacity(jazz: JSONObject): Int {
+        return if (jazz.has("worker_rooms")) {
+            val rooms = jazz.optJSONArray("worker_rooms")
+                ?: throw IllegalArgumentException("Jazz worker_rooms must be an array")
+            if (rooms.length() !in 1..50) {
+                throw IllegalArgumentException("Jazz worker_rooms must contain 1..50 server-provisioned rooms")
+            }
+            val declared = if (jazz.has("worker_count")) jazz.optInt("worker_count", -1) else rooms.length()
+            if (declared != rooms.length()) {
+                throw IllegalArgumentException("Jazz worker_count does not match worker_rooms (${rooms.length()} rooms)")
+            }
+            val links = HashSet<String>()
+            for (index in 0 until rooms.length()) {
+                val room = rooms.optJSONObject(index)
+                    ?: throw IllegalArgumentException("Jazz worker_rooms[$index] is invalid")
+                val joinLink = room.optString("join_link", "").trim()
+                val connectorUrl = room.optString("connector_url", "").trim()
+                if (joinLink.isEmpty() || connectorUrl.isEmpty() || !links.add(joinLink)) {
+                    throw IllegalArgumentException("Jazz worker_rooms[$index] is incomplete or duplicated")
+                }
+            }
+            rooms.length()
+        } else {
+            // A legacy Jazz invite is exactly one worker slot. A worker_count
+            // field without worker_rooms does not create server-side bridges.
+            if (jazz.optString("join_link", "").trim().isEmpty()) {
+                throw IllegalArgumentException("Jazz provider data has no server-provisioned join_link")
+            }
+            1
+        }
+    }
+
     private fun buildTotsRuntime(rawLink: String, settings: JSONObject): JSONObject {
         // Keep the native Android core responsible for decoding/validating the
         // effective tots:// config. This tracks upstream ToTS more closely than
@@ -1518,6 +1531,15 @@ class Backend(private val context: Context) {
         providers.filter { !settings.optBoolean(it.enabledKey, true) }
             .forEach { providerData.remove(it.name) }
 
+        val requestedWorkers = settings.optInt("totsWorkers", 1).coerceIn(1, 256)
+        // Any worker can fail over to Jazz, including workers assigned to another provider.
+        val jazz = if (providerData.has("jazz")) {
+            providerData.optJSONObject("jazz")
+                ?: throw IllegalArgumentException("Jazz provider data must be an object")
+        } else null
+        val workersTarget = jazz?.let { requestedWorkers.coerceAtMost(jazzWorkerCapacity(it)) }
+            ?: requestedWorkers
+
         if (settings.optBoolean("totsVkEnabled", true)) {
             var links = settings.optString("totsVkCallLinks", "")
                 .split(Regex("[\\s,+;]+"))
@@ -1528,9 +1550,8 @@ class Backend(private val context: Context) {
                 }
             if (settings.optString("totsVkAuthMode", "manual") == "autoApi") {
                 val token = readVkToken() ?: throw IllegalArgumentException("Auto API requires VK token")
-                val workers = settings.optInt("totsWorkers", 1).coerceIn(1, 256)
                 val count = callCountForWorkers(
-                    workers,
+                    workersTarget,
                     settings.optInt("autoApiWorkers", DEFAULT_AUTO_API_WORKERS),
                 )
                 val generated = mutableListOf<String>()
@@ -1554,8 +1575,7 @@ class Backend(private val context: Context) {
             }
         }
 
-        if (settings.optBoolean("totsJazzEnabled", true) && providerData.has("jazz")) {
-            val jazz = JSONObject((providerData.optJSONObject("jazz") ?: JSONObject()).toString())
+        if (jazz != null) {
             val roomName = if (settings.optBoolean("totsJazzRandomName", true)) {
                 val names = listOf(
                     "Иван", "Владимир", "Алексей", "Михаил", "Александр", "Дмитрий",
@@ -1564,8 +1584,7 @@ class Backend(private val context: Context) {
                 )
                 names[(System.nanoTime().ushr(4) % names.size).toInt()]
             } else settings.optString("totsJazzRoomName", "").trim()
-            if (roomName.isNotEmpty()) jazz.put("room_name", roomName)
-            providerData.put("jazz", jazz)
+            if (roomName.isNotEmpty()) jazz.put("name", roomName)
         }
 
         val available = providers.filter {
@@ -1617,9 +1636,12 @@ class Backend(private val context: Context) {
             Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
         )
 
+        if (workersTarget < requestedWorkers) {
+            addLog("[VPN] ToTS: requested $requestedWorkers workers, using $workersTarget provisioned Jazz rooms")
+        }
         val args = JSONArray().apply {
             put("--config"); put(effectiveLink)
-            put("--n"); put(settings.optInt("totsWorkers", 1).coerceIn(1, 256).toString())
+            put("--n"); put(workersTarget.toString())
             put("--workers_percent")
             put(JSONObject().apply { weights.forEach { (k, v) -> put(k, v) } }.toString())
             if (settings.optBoolean("totsRelayOnly", false)) put("--relay-only")
@@ -1633,6 +1655,7 @@ class Backend(private val context: Context) {
             // 10.77/16 derivation only as a compatibility fallback.
             put("virtualIp", virtualIp)
             put("mtu", mtu)
+            put("workersTarget", workersTarget)
             put("args", args)
         }
     }
@@ -1930,6 +1953,44 @@ class Backend(private val context: Context) {
                 Triple(callId, hash, 0)
             }
         } catch (_: Exception) { Triple("", "", -1) }
+    }
+
+    @Synchronized
+    private fun vpnTraffic(): JSONObject {
+        val session = LaLuneVpnService.snapshotSessionId
+        val sample = LaLuneVpnService.trafficBytes()
+        val stable = session.isNotEmpty() && session == LaLuneVpnService.snapshotSessionId
+        val available = stable && sample != null
+        val bytes = if (available) requireNotNull(sample) else TunnelBytes(0, 0)
+        val rates = trafficRates.sample(
+            if (available) session else "",
+            android.os.SystemClock.elapsedRealtime(),
+            bytes,
+        )
+        val connected = vpnConnected
+        val workers = if (connected) LaLuneVpnService.currentTotsWorkers() else null
+        val byProvider = workers?.providers
+        return JSONObject().apply {
+            put("trafficAvailable", available)
+            put("sessionId", if (stable) session else "")
+            put("rxBytes", bytes.rx)
+            put("txBytes", bytes.tx)
+            put("rxRate", if (connected) rates.rx else 0L)
+            put("txRate", if (connected) rates.tx else 0L)
+            put("activeSessions", if (connected) workers?.active ?: LaLuneVpnService.snapshotActiveSessions else 0)
+            put("workersAvailable", workers != null)
+            put("tunnelRttMs", workers?.tunnelRttMs ?: 0)
+            put("workerProvidersAvailable", byProvider != null)
+            put("workers", workers?.active ?: 0)
+            put("workersTarget", if (connected) workers?.target ?: LaLuneVpnService.totsWorkersTarget else 0)
+            put("workersVk", byProvider?.get("vk") ?: 0)
+            put("workersJazz", byProvider?.get("jazz") ?: 0)
+            put("workersYaDocs", byProvider?.get("ya_docs") ?: 0)
+            put("workersMailDocs", byProvider?.get("mail_docs") ?: 0)
+            put("workersCups", byProvider?.get("cups") ?: 0)
+            put("workersMax", byProvider?.get("max") ?: 0)
+            put("socks5Port", socks5Port)
+        }
     }
 
     private fun jsonOk(vararg pairs: Pair<String, Any?>): String {

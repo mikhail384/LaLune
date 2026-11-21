@@ -73,32 +73,29 @@ class GlassCard extends StatelessWidget {
             ? 14.0
             : blur;
 
-    Widget body;
-    final sample = CachedGlassBackdrop.sample(context, effectiveBlur);
-    if (effectiveBlur <= 0) {
-      body = surface;
-    } else if (sample != null) {
-      // The wallpaper follows the screen, but the text and controls follow
-      // the card. Cache their painting separately as the card scrolls.
-      body = Stack(children: [
-        Positioned.fill(child: sample),
-        RepaintBoundary(child: surface),
-      ]);
-    } else {
+    var backdrop = CachedGlassBackdrop.sample(context, effectiveBlur);
+    if (effectiveBlur > 0 && backdrop == null) {
       final filter = ImageFilter.blur(
         sigmaX: effectiveBlur,
         sigmaY: effectiveBlur,
         tileMode: TileMode.clamp,
       );
-      body = BackdropGroup.of(context) == null
-          ? BackdropFilter(filter: filter, child: surface)
-          : BackdropFilter.grouped(filter: filter, child: surface);
+      const fill = SizedBox.expand();
+      backdrop = BackdropGroup.of(context) == null
+          ? BackdropFilter(filter: filter, child: fill)
+          : BackdropFilter.grouped(filter: filter, child: fill);
     }
 
-    final card = ClipRRect(
+    // The keyboard resizes the viewport, so the cached wallpaper temporarily
+    // falls back to a live blur. Only replace the backdrop, not the controls.
+    return ClipRRect(
       borderRadius: borderRadius,
-      child: body,
+      child: Stack(
+        children: [
+          Positioned.fill(child: backdrop ?? const SizedBox.shrink()),
+          RepaintBoundary(child: surface),
+        ],
+      ),
     );
-    return sample == null ? RepaintBoundary(child: card) : card;
   }
 }

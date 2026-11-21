@@ -31,6 +31,8 @@ val releaseKeystorePath = releaseSigningProperties.getProperty(
     "../../Assets/apk-key/my-release-key.jks",
 )
 
+val useDebugSigning = providers.environmentVariable("LALUNE_ANDROID_DEBUG_SIGNING").orNull == "true"
+
 android {
     namespace = "com.lalune.lalune"
     compileSdk = flutter.compileSdkVersion
@@ -46,7 +48,8 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.lalune.lalune.test"
+        applicationId = providers.environmentVariable("LALUNE_ANDROID_APPLICATION_ID")
+            .getOrElse("com.lalune.lalune.test")
         minSdk = 24
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
@@ -64,7 +67,7 @@ android {
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig = signingConfigs.getByName(if (useDebugSigning) "debug" else "release")
             // LuaJ is used through reflective library registration; R8 removed
             // an inner LuaJ class in the release APK on Android 7.
             isMinifyEnabled = false
