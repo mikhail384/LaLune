@@ -198,8 +198,9 @@ class _NavButtonState extends State<_NavButton> {
                                   : Colors.white.withOpacity(0.7),
                             ),
                           ),
-                    
+                      ),                    
                   ),
+                ),
                 ),
                 const SizedBox(height: 3),
                 AnimatedDefaultTextStyle(
