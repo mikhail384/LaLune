@@ -34,12 +34,12 @@ class NavBar extends StatelessWidget {
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [
-            const Color(0xFF0B2118).withOpacity(isAndroid ? 0.68 : 0.52),
-            const Color(0xFF07160F).withOpacity(isAndroid ? 0.58 : 0.42),
+            const Color(0xFF0B2118).withOpacity(isAndroid ? 0.88 : 0.52),
+            const Color(0xFF07160F).withOpacity(isAndroid ? 0.82 : 0.42),
           ],
         ),
         borderRadius: borderRadius,
-        border: Border.all(color: Colors.white.withOpacity(0.15), width: 1),
+        border: Border.all(color: Colors.white.withOpacity(isAndroid ? 0.16 : 0.15), width: 1),
       ),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
@@ -58,13 +58,13 @@ class NavBar extends StatelessWidget {
     );
 
     final sigma =
-      isAndroid ? 4.0 : 14.0;  
+      14.0;  
     final filter = ImageFilter.blur(
       sigmaX: sigma,
       sigmaY: sigma,
       tileMode: TileMode.clamp,
     );
-    final content = DecoratedBox(
+    final content = isAndroid ? ClipRRect(borderRadius: borderRadius, child: bar) : DecoratedBox(
       decoration: BoxDecoration(
         borderRadius: borderRadius,
         boxShadow: [
@@ -123,6 +123,7 @@ class _NavButtonState extends State<_NavButton> {
   @override
   Widget build(BuildContext context) {
     final active = widget.selected;
+    final isAndroid = !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
     final scale = _pressed ? 0.90 : (_hover ? 0.96 : 1.0);
     const activeColor = kAccentGreen;
 
@@ -167,7 +168,7 @@ class _NavButtonState extends State<_NavButton> {
                   duration: const Duration(milliseconds: 140),
                   curve: Curves.easeOutCubic,
                   child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
+                    duration: const Duration(milliseconds: 140),
                     curve: Curves.easeOut,
                     padding:
                         const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
@@ -180,16 +181,15 @@ class _NavButtonState extends State<_NavButton> {
                       width: 28,
                       height: 28,
                       child: Center(
-                        child: AnimatedOpacity(
-                          opacity: iconOpacity,
-                          duration: const Duration(milliseconds: 180),
-                          child: Image.asset(
+                        child: Image.asset(
                             widget.item.icon,
                             width: iconSize,
                             height: iconSize,
-                            cacheWidth: 96,
+                            cacheWidth: isAndroid ? 64 : 96,
+                            color: Colors.white.withOpacity(iconOpacity),
+                            colorBlendMode: BlendMode.modulate,
                             fit: BoxFit.contain,
-                            filterQuality: FilterQuality.medium,
+                            filterQuality: isAndroid ? FilterQuality.low : FilterQuality.medium,
                             errorBuilder: (_, __, ___) => Icon(
                               Icons.circle_outlined,
                               size: 24,
@@ -198,14 +198,12 @@ class _NavButtonState extends State<_NavButton> {
                                   : Colors.white.withOpacity(0.7),
                             ),
                           ),
-                        ),
-                      ),
-                    ),
+                    
                   ),
                 ),
                 const SizedBox(height: 3),
                 AnimatedDefaultTextStyle(
-                  duration: const Duration(milliseconds: 200),
+                  duration: const Duration(milliseconds: 140),
                   style: TextStyle(
                     fontFamily: 'Nunito',
                     fontSize: 10.5,
@@ -221,7 +219,7 @@ class _NavButtonState extends State<_NavButton> {
                 ),
                 const SizedBox(height: 2),
                 AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
+                  duration: const Duration(milliseconds: 140),
                   curve: Curves.easeOut,
                   width: active ? 16 : 0,
                   height: 2.5,
