@@ -23,9 +23,11 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.IpPrefix
+import android.net.TrafficStats
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.os.Process
 import android.util.Log
 import android.system.Os
 import android.system.OsConstants
@@ -49,6 +51,7 @@ import java.io.FileOutputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
+import java.util.Locale
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -136,6 +139,11 @@ class LaLuneVpnService : VpnService() {
     private var udpSocket: DatagramSocket? = null
     private var totsTunFd: ParcelFileDescriptor? = null
     private var totsRuntime: JSONObject? = null
+    private var totsBaseTxBytes: Long = -1L
+    private var totsBaseRxBytes: Long = -1L
+    private var totsConfiguredWorkers: Int = 1
+    private var totsReportedActive: Int? = null
+    private var lastTotsStatsLogMs: Long = 0L
     @Volatile private var isRunning = false
     @Volatile private var tunEstablished = false
     @Volatile private var establishing = false
@@ -215,7 +223,22 @@ class LaLuneVpnService : VpnService() {
         notificationTickerJob = scope.launch {
             while (isActive && isRunning) {
                 delay(NOTIFICATION_TICK_MS)
-                updateNotification()
+              if (totsRuntime != null && tunEstablished) {
+                  if (coreManager.isRunning) {
+                      val uid = Process.myUid(); val curTx = TrafficStats.getUidTxBytes(uid); val curRx = TrafficStats.getUidRxBytes(uid)
+                      if (curTx >= 0L && totsBaseTxBytes >= 0L && curRx >= 0L && totsBaseRxBytes >= 0L) {
+                          val txDelta = (curTx - totsBaseTxBytes).coerceAtLeast(0L); val rxDelta = (curRx - totsBaseRxBytes).coerceAtLeast(0L)
+                          tunTxBytes.set(txDelta)
+                          tunRxBytes.set(rxDelta)
+                          if (txDelta + rxDelta > 0L) { trafficMB = String.format(Locale.US, "%.2f", (txDelta + rxDelta) / (1024.0 * 1024.0)) }
+                      }
+                      activeSessions = totsReportedActive ?: totsConfiguredWorkers
+                      snapshotActiveSessions = activeSessions
+                      val now = System.currentTimeMillis()
+                      if (now - lastTotsStatsLogMs >= 10_000L) { lastTotsStatsLogMs = now; notifyLog(this@LaLuneVpnService, "[ToTS] [СТАТИСТИКА] Активных: $activeSessions | Трафик: $trafficMB МБ", core = true) }
+                      } else { activeSessions = 0; snapshotActiveSessions = 0 }
+              }
+                          updateNotification()
             }
         }
     }
@@ -467,6 +490,13 @@ class LaLuneVpnService : VpnService() {
                 args += "--tun-fd"
                 args += inherited.fd.toString()
 
+               val nIdx = args.indexOf("--n")
+               totsConfiguredWorkers = if (nIdx >= 0 && nIdx + 1 < args.size) args[nIdx + 1].toIntOrNull()?.coerceAtLeast(1) ?: 1 else 1
+               val uid = Process.myUid()
+               totsBaseTxBytes = TrafficStats.getUidTxBytes(uid)
+               totsBaseRxBytes = TrafficStats.getUidRxBytes(uid)
+               totsReportedActive = null
+               lastTotsStatsLogMs = 0L
                 tunnelGeneration++
                 vpnInterface = iface
                 totsTunFd = inherited
@@ -476,8 +506,26 @@ class LaLuneVpnService : VpnService() {
                     protocol = CoreManager.PROTO_TOTS,
                     args = args,
                     onLog = { line ->
-                        Log.i(TAG, line)
-                        notifyLog(this@LaLuneVpnService, line, core = true)
+                        val clean = coreManager.stripAnsi(line).trim()
+                        if (clean.isNotEmpty()) {
+                            Log.i(TAG, clean)
+                            coreManager.parseStats(clean)?.let { (active, traffic) ->
+                                totsReportedActive = active
+                                activeSessions = active
+                                snapshotActiveSessions = active
+                                if (traffic > 0.0) {
+                                    trafficMB = String.format(Locale.US, "%.2f", traffic)
+                                }
+                            }
+                            if (clean.contains("[CORE] process exited")) {
+                                totsReportedActive = 0
+                                activeSessions = 0
+                                snapshotActiveSessions = 0
+                                updateNotification()
+                            }
+                            val formatted = if (clean.startsWith("[CORE]", ignoreCase = true) || clean.startsWith("[ToTS]", ignoreCase = true)) clean else "[ToTS] $clean"
+                            notifyLog(this@LaLuneVpnService, formatted, core = true)
+                        }
                     },
                 )
                 if (!started) {
@@ -491,6 +539,8 @@ class LaLuneVpnService : VpnService() {
                 }
                 Log.i(TAG, "ToTS TUN up: IP=$tunIP MTU=$tunMtu fd=${inherited.fd}")
                 notifyLog(this@LaLuneVpnService, "[VPN] ToTS started; TUN up IP=$tunIP MTU=$tunMtu")
+                activeSessions = totsReportedActive ?: totsConfiguredWorkers
+                snapshotActiveSessions = activeSessions
                 updateNotification()
                 return@withLock true
             }
@@ -613,6 +663,11 @@ class LaLuneVpnService : VpnService() {
             try { File(filesDir, "la-lune/tots_runtime.json").delete() } catch (_: Exception) {}
         }
         totsRuntime = null
+        totsBaseTxBytes = -1L
+        totsBaseRxBytes = -1L
+        totsConfiguredWorkers = 1
+        totsReportedActive = null
+        lastTotsStatsLogMs = 0L
 
         activeSessions = 0
         snapshotActiveSessions = 0
