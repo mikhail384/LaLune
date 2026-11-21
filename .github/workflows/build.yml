@@ -418,16 +418,21 @@ jobs:
         run: |
           set -euo pipefail
           sh -n Installer/openwrt.sh
-          sh -n Installer/luci-app-lalune/root/usr/libexec/rpcd/lalune
+          RPCD_BRIDGE="Installer/luci-app-lalune/root/usr/libexec/rpcd/lalune"
+          # Git archives/checkouts may lose the executable bit. The bridge is
+          # always invoked explicitly with /bin/sh in CI and packaged as 0755.
+          chmod 0755 "$RPCD_BRIDGE"
+          sh -n "$RPCD_BRIDGE"
           sh Installer/test-abi.sh Installer/openwrt.sh
           node --check Installer/luci-app-lalune/root/www/luci-static/resources/view/lalune/status.js
-          Installer/luci-app-lalune/root/usr/libexec/rpcd/lalune list | jq -e '.status and .connect and .create and .delete'
+          sh "$RPCD_BRIDGE" list | jq -e '.status and .connect and .create and .delete'
           python3 - <<'PYARCHIVE'
           import tarfile
           from pathlib import Path
           archive = Path('Assets/openwrt/luci-app-lalune.tar.gz')
           with tarfile.open(archive, 'r:gz') as tf:
-              names = set(tf.getnames())
+              members = {member.name: member for member in tf.getmembers()}
+              names = set(members)
           required = {
               'usr/libexec/rpcd/lalune',
               'usr/share/rpcd/acl.d/luci-app-lalune.json',
@@ -437,7 +442,10 @@ jobs:
           missing = required - names
           if missing:
               raise SystemExit(f'LuCI archive is missing: {sorted(missing)}')
-          print(f'LuCI archive verified: {archive.stat().st_size} bytes')
+          bridge_mode = members['usr/libexec/rpcd/lalune'].mode
+          if not bridge_mode & 0o111:
+              raise SystemExit(f'rpcd bridge is not executable in LuCI archive (mode {bridge_mode:o})')
+          print(f'LuCI archive verified: {archive.stat().st_size} bytes; rpcd mode={bridge_mode:o}')
           PYARCHIVE
       - name: Syntax under BusyBox ash (what routers run)
         run: |
@@ -954,7 +962,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release/assets
-          tar -czf release/assets/luci-app-lalune.tar.gz -C Installer/luci-app-lalune/root .
+          # rpcd exec handlers must be executable after extraction on OpenWrt.
+          chmod 0755 Installer/luci-app-lalune/root/usr/libexec/rpcd/lalune
+          tar --mode='u+rwX,go+rX' -czf release/assets/luci-app-lalune.tar.gz -C Installer/luci-app-lalune/root usr www
           cp release/windows/LaLune-Windows.zip release/assets/
           cp release/windows/Backend-Windows.zip release/assets/
           cp release/windows/Installer-Windows.zip release/assets/
