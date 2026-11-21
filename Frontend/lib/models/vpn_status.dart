@@ -11,6 +11,8 @@ class VpnStatus {
   final int txBytes;
   final int rxRate;
   final int txRate;
+  final bool workersAvailable;
+  final bool workerProvidersAvailable;
   final int workers;
   final int workersTarget;
   final int workersVk;
@@ -18,6 +20,7 @@ class VpnStatus {
   final int workersYaDocs;
   final int workersMailDocs;
   final int workersCups;
+  final int workersMax;
   final int activeSessions;
 
   const VpnStatus({
@@ -31,6 +34,8 @@ class VpnStatus {
     this.txBytes = 0,
     this.rxRate = 0,
     this.txRate = 0,
+    this.workersAvailable = false,
+    this.workerProvidersAvailable = false,
     this.workers = 0,
     this.workersTarget = 0,
     this.workersVk = 0,
@@ -38,6 +43,7 @@ class VpnStatus {
     this.workersYaDocs = 0,
     this.workersMailDocs = 0,
     this.workersCups = 0,
+    this.workersMax = 0,
     this.activeSessions = 0,
   });
 
@@ -52,6 +58,9 @@ class VpnStatus {
         txBytes: ((j['txBytes'] ?? 0) as num).toInt(),
         rxRate: ((j['rxRate'] ?? 0) as num).toInt(),
         txRate: ((j['txRate'] ?? 0) as num).toInt(),
+        workersAvailable: (j['workersAvailable'] ?? j.containsKey('workers')) == true,
+        workerProvidersAvailable:
+            (j['workerProvidersAvailable'] ?? j.containsKey('workersVk')) == true,
         workers: ((j['workers'] ?? 0) as num).toInt(),
         workersTarget: ((j['workersTarget'] ?? 0) as num).toInt(),
         workersVk: ((j['workersVk'] ?? 0) as num).toInt(),
@@ -59,6 +68,7 @@ class VpnStatus {
         workersYaDocs: ((j['workersYaDocs'] ?? 0) as num).toInt(),
         workersMailDocs: ((j['workersMailDocs'] ?? 0) as num).toInt(),
         workersCups: ((j['workersCups'] ?? 0) as num).toInt(),
+        workersMax: ((j['workersMax'] ?? 0) as num).toInt(),
         activeSessions: ((j['activeSessions'] ?? 0) as num).toInt(),
       );
 
@@ -73,6 +83,8 @@ class VpnStatus {
     int? txBytes,
     int? rxRate,
     int? txRate,
+    bool? workersAvailable,
+    bool? workerProvidersAvailable,
     int? workers,
     int? workersTarget,
     int? workersVk,
@@ -80,6 +92,7 @@ class VpnStatus {
     int? workersYaDocs,
     int? workersMailDocs,
     int? workersCups,
+    int? workersMax,
     int? activeSessions,
   }) =>
       VpnStatus(
@@ -93,6 +106,9 @@ class VpnStatus {
         txBytes: txBytes ?? this.txBytes,
         rxRate: rxRate ?? this.rxRate,
         txRate: txRate ?? this.txRate,
+        workersAvailable: workersAvailable ?? this.workersAvailable,
+        workerProvidersAvailable:
+            workerProvidersAvailable ?? this.workerProvidersAvailable,
         workers: workers ?? this.workers,
         workersTarget: workersTarget ?? this.workersTarget,
         workersVk: workersVk ?? this.workersVk,
@@ -100,6 +116,7 @@ class VpnStatus {
         workersYaDocs: workersYaDocs ?? this.workersYaDocs,
         workersMailDocs: workersMailDocs ?? this.workersMailDocs,
         workersCups: workersCups ?? this.workersCups,
+        workersMax: workersMax ?? this.workersMax,
         activeSessions: activeSessions ?? this.activeSessions,
       );
 

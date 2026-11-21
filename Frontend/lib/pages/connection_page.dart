@@ -426,6 +426,8 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
     }
     final tunChecking = vpn.state == 'checking' && vpn.message == 'Проверка TUN';
     final visuallyConnected = vpn.connected || tunChecking;
+    final activeWorkers = vpn.workersAvailable ? '${vpn.workers}' : '—';
+    final targetWorkers = vpn.workersTarget > 0 ? '${vpn.workersTarget}' : '—';
     final showTraffic = vpn.connected &&
         (activeConfig?.isTots == true || vpn.rxBytes > 0 || vpn.txBytes > 0 ||
             vpn.rxRate > 0 || vpn.txRate > 0 || !vpn.trafficAvailable);
@@ -569,23 +571,26 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
                               Icon(Icons.hub_outlined, size: 13, color: Colors.white.withOpacity(0.55)),
                               const SizedBox(width: 6),
                               Text(
-                                'ToTS Workers: ${vpn.workers}/${vpn.workersTarget}',
+                                'ToTS Workers: $activeWorkers/$targetWorkers',
                                 style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(0.62)),
                               ),
                             ],
                           ),
                           const SizedBox(height: 5),
-                          Wrap(
-                            spacing: 10,
-                            runSpacing: 3,
-                            children: [
-                              _ProviderWorkers(label: 'VK', count: vpn.workersVk),
-                              _ProviderWorkers(label: 'Jazz', count: vpn.workersJazz),
-                              _ProviderWorkers(label: 'Ya Docs', count: vpn.workersYaDocs),
-                              _ProviderWorkers(label: 'Mail', count: vpn.workersMailDocs),
-                              _ProviderWorkers(label: 'Cups', count: vpn.workersCups),
-                            ],
-                          ),
+                          if (vpn.workerProvidersAvailable)
+                            Wrap(
+                              spacing: 10,
+                              runSpacing: 3,
+                              children: [
+                                _ProviderWorkers(label: 'VK', count: vpn.workersVk),
+                                _ProviderWorkers(label: 'Jazz', count: vpn.workersJazz),
+                                _ProviderWorkers(label: 'Ya Docs', count: vpn.workersYaDocs),
+                                _ProviderWorkers(label: 'Mail', count: vpn.workersMailDocs),
+                                _ProviderWorkers(label: 'Cups', count: vpn.workersCups),
+                                if (vpn.workersMax > 0)
+                                  _ProviderWorkers(label: 'MAX', count: vpn.workersMax),
+                              ],
+                            ),
                         ],
                       ],
                     ),

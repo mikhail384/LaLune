@@ -133,8 +133,9 @@ List<_ProbeEndpoint> _endpointsFor(ConfigItem config) {
       final host = (decoded['peer'] ?? config.peer).toString().trim();
       final webRtc = _asPort(decoded['webrtc_port']);
       final turn = _asPort(decoded['turn_port']);
-      if (host.isNotEmpty && webRtc != null)
+      if (host.isNotEmpty && webRtc != null) {
         out.add(_ProbeEndpoint(host, webRtc));
+      }
       if (host.isNotEmpty && turn != null && turn != webRtc) {
         out.add(_ProbeEndpoint(host, turn));
       }
@@ -160,8 +161,9 @@ _ProbeEndpoint? _parseHostPort(String raw) {
     return null;
   }
   final colon = s.lastIndexOf(':');
-  if (colon <= 0 || colon == s.length - 1 || s.indexOf(':') != colon)
+  if (colon <= 0 || colon == s.length - 1 || s.indexOf(':') != colon) {
     return null;
+  }
   final port = int.tryParse(s.substring(colon + 1));
   if (port == null || port <= 0 || port > 65535) return null;
   return _ProbeEndpoint(s.substring(0, colon), port);

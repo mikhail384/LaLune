@@ -1639,9 +1639,10 @@ class Backend(private val context: Context) {
             Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
         )
 
+        val workersTarget = settings.optInt("totsWorkers", 1).coerceIn(1, 256)
         val args = JSONArray().apply {
             put("--config"); put(effectiveLink)
-            put("--n"); put(settings.optInt("totsWorkers", 1).coerceIn(1, 256).toString())
+            put("--n"); put(workersTarget.toString())
             put("--workers_percent")
             put(JSONObject().apply { weights.forEach { (k, v) -> put(k, v) } }.toString())
             if (settings.optBoolean("totsRelayOnly", false)) put("--relay-only")
@@ -1655,6 +1656,7 @@ class Backend(private val context: Context) {
             // 10.77/16 derivation only as a compatibility fallback.
             put("virtualIp", virtualIp)
             put("mtu", mtu)
+            put("workersTarget", workersTarget)
             put("args", args)
         }
     }
@@ -1967,6 +1969,8 @@ class Backend(private val context: Context) {
             bytes,
         )
         val connected = vpnConnected
+        val workers = if (connected) LaLuneVpnService.currentTotsWorkers() else null
+        val byProvider = workers?.providers
         return JSONObject().apply {
             put("trafficAvailable", available)
             put("sessionId", if (stable) session else "")
@@ -1974,7 +1978,17 @@ class Backend(private val context: Context) {
             put("txBytes", bytes.tx)
             put("rxRate", if (connected) rates.rx else 0L)
             put("txRate", if (connected) rates.tx else 0L)
-            put("activeSessions", if (connected) LaLuneVpnService.snapshotActiveSessions else 0)
+            put("activeSessions", if (connected) workers?.active ?: LaLuneVpnService.snapshotActiveSessions else 0)
+            put("workersAvailable", workers != null)
+            put("workerProvidersAvailable", byProvider != null)
+            put("workers", workers?.active ?: 0)
+            put("workersTarget", if (connected) workers?.target ?: LaLuneVpnService.totsWorkersTarget else 0)
+            put("workersVk", byProvider?.get("vk") ?: 0)
+            put("workersJazz", byProvider?.get("jazz") ?: 0)
+            put("workersYaDocs", byProvider?.get("ya_docs") ?: 0)
+            put("workersMailDocs", byProvider?.get("mail_docs") ?: 0)
+            put("workersCups", byProvider?.get("cups") ?: 0)
+            put("workersMax", byProvider?.get("max") ?: 0)
             put("socks5Port", socks5Port)
         }
     }
