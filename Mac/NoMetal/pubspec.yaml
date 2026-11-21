@@ -1,0 +1,26 @@
+name: lalune
+description: LaLune
+version: 0.9.12
+publish_to: none
+environment:
+  sdk: '>=3.4.0 <4.0.0'
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.2.2
+  dartssh2:
+    path: dartssh2-local
+  flutter_riverpod: ^2.5.1
+  shared_preferences: ^2.3.2
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/
+    - assets/openwrt/
+  fonts:
+    - family: Nunito
+      fonts:
+        - asset: assets/fonts/Nunito-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Nunito-Bold.ttf
+          weight: 700

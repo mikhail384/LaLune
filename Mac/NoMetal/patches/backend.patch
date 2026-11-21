@@ -1,0 +1,27 @@
+--- a/src/api.rs
++++ b/src/api.rs
+@@ -40,6 +40,16 @@
+ 
+ pub const CORE_PREFIX: &str = "[CORE] ";
+ 
++async fn local_auth(req: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
++    use axum::response::IntoResponse;
++    let expected = std::env::var("LALUNE_API_TOKEN").unwrap_or_default();
++    let supplied = req.headers().get("x-lalune-token").and_then(|v| v.to_str().ok()).unwrap_or("");
++    if expected.len() < 32 || supplied != expected || req.headers().contains_key("origin") {
++        return axum::http::StatusCode::UNAUTHORIZED.into_response();
++    }
++    next.run(req).await
++}
++
+ pub fn router(state: Arc<AppState>) -> Router {
+     let cors = CorsLayer::new()
+         .allow_origin(Any)
+@@ -129,6 +139,7 @@
+         .route("/debug/lua", get(debug_lua))
+         .route("/debug/lua/eval", post(debug_lua_eval))
+         .layer(cors)
++        .layer(axum::middleware::from_fn(local_auth))
+         .with_state(state)
+ }
+ 
