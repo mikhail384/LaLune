@@ -411,10 +411,10 @@ setState(() => _syncFromConfig(next.selected));
 
     // The settings cards do not overlap, so Flutter can reuse the same
     // backdrop blur without changing the glass effect on individual cards.
-    return BackdropGroup(
-      child: ListView.builder(
+    final listView = ListView.builder(
         key: const PageStorageKey('settings-page'),
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+      cacheExtent: 300,
         itemCount: items.length,
         itemBuilder: (context, index) => Center(
           child: ConstrainedBox(
@@ -425,8 +425,11 @@ setState(() => _syncFromConfig(next.selected));
             ),
           ),
         ),
-      ),
     );
+
+    return !(!kIsWeb && defaultTargetPlatform == TargetPlatform.android)
+        ? BackdropGroup(child: listView)
+        : listView;
   }
 
   Widget _buildMainBlock() {
