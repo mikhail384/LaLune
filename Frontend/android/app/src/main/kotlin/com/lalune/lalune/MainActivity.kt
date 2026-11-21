@@ -15,6 +15,7 @@
 package com.lalune.lalune
 
 import android.Manifest
+import android.app.ActivityManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.VpnService
@@ -92,6 +93,13 @@ class MainActivity : FlutterActivity() {
         methodChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
                 "getApiPort" -> result.success(apiPort)
+                "preferReducedEffects" -> {
+                    val activityManager = getSystemService(ActivityManager::class.java)
+                    result.success(
+                        Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
+                            activityManager?.isLowRamDevice == true
+                    )
+                }
                 "isBackendAlive" -> {
                     scope.launch {
                         val alive = isBackendAlive()

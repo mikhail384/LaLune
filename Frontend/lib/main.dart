@@ -34,14 +34,17 @@ import 'pages/logs_page.dart';
 import 'pages/settings_page.dart';
 import 'state/configs_notifier.dart';
 import 'theme/app_theme.dart';
+import 'theme/ui_effects.dart';
 import 'widgets/navbar.dart';
 import 'widgets/router_banner.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   startFrameMetrics();
+  final effects = UiEffects.detectReducedEffects();
   await ApiClient.initializeLocalPort();
-  runApp(const ProviderScope(child: LaLuneApp()));
+  final reduceEffects = await effects;
+  runApp(ProviderScope(child: LaLuneApp(reduceEffects: reduceEffects)));
 }
 
 class _NoStretchScrollBehavior extends MaterialScrollBehavior {
@@ -58,7 +61,9 @@ class _NoStretchScrollBehavior extends MaterialScrollBehavior {
 }
 
 class LaLuneApp extends StatelessWidget {
-  const LaLuneApp({super.key});
+  const LaLuneApp({super.key, this.reduceEffects = false});
+
+  final bool reduceEffects;
 
   @override
   Widget build(BuildContext context) {
@@ -67,6 +72,8 @@ class LaLuneApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: buildAppTheme(),
       scrollBehavior: const _NoStretchScrollBehavior(),
+      builder: (context, child) =>
+          UiEffects(reduceEffects: reduceEffects, child: child!),
       home: const RootShell(),
     );
   }
@@ -107,11 +114,14 @@ class _RootShellState extends ConsumerState<RootShell> {
   void _onNavSelect(int i) {
     if (i == _currentPage || i < 0 || i >= 4) return;
     setState(() => _currentPage = i);
-    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
-      // Sliding four backdrop-heavy pages at once is noticeably expensive on
-      // mobile GPUs. Android gets an immediate tab switch; desktop keeps the
-      // animated transition.
-      _pageController.animateToPage(i, duration: const Duration(milliseconds: 260), curve: Curves.easeOutCubic);
+    if (UiEffects.reduceEffectsOf(context)) {
+      _pageController.jumpToPage(i);
+    } else if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      _pageController.animateToPage(
+        i,
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
+      );
     } else {
       _pageController.animateToPage(
         i,

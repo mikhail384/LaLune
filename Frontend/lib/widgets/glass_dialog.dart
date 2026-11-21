@@ -5,6 +5,8 @@ import 'dart:ui';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../theme/ui_effects.dart';
+
 double _dialogBlurSigma() {
   if (kIsWeb) return 14.0;
   return defaultTargetPlatform == TargetPlatform.android ? 16.0 : 18.0;
@@ -13,13 +15,13 @@ double _dialogBlurSigma() {
 BoxDecoration _dialogGlassDecoration(
   BorderRadius borderRadius,
   Color? requested,
+  bool reduceEffects,
 ) {
-  final baseTop = requested != null
-      ? requested.withOpacity(0.54)
-      : const Color(0xFF0B2118).withOpacity(0.56);
-  final baseBottom = requested != null
-      ? requested.withOpacity(0.46)
-      : const Color(0xFF07160F).withOpacity(0.48);
+  final topOpacity = reduceEffects ? 0.94 : (requested == null ? 0.56 : 0.54);
+  final bottomOpacity = reduceEffects ? 0.92 : (requested == null ? 0.48 : 0.46);
+  final baseTop = (requested ?? const Color(0xFF0B2118)).withOpacity(topOpacity);
+  final baseBottom =
+      (requested ?? const Color(0xFF07160F)).withOpacity(bottomOpacity);
 
   return BoxDecoration(
     gradient: LinearGradient(
@@ -45,23 +47,31 @@ Widget _glassLayer(
   required BorderRadius borderRadius,
   Color? backgroundColor,
 }) {
-  final blur = _dialogBlurSigma();
-  final filter = ImageFilter.blur(
-    sigmaX: blur,
-    sigmaY: blur,
-    tileMode: TileMode.clamp,
-  );
+  final reduceEffects = UiEffects.reduceEffectsOf(context);
   final surface = DecoratedBox(
-    decoration: _dialogGlassDecoration(borderRadius, backgroundColor),
+    decoration: _dialogGlassDecoration(
+      borderRadius,
+      backgroundColor,
+      reduceEffects,
+    ),
     child: child,
   );
+  Widget body = surface;
+  if (!reduceEffects) {
+    final blur = _dialogBlurSigma();
+    body = BackdropFilter(
+      filter: ImageFilter.blur(
+        sigmaX: blur,
+        sigmaY: blur,
+        tileMode: TileMode.clamp,
+      ),
+      child: surface,
+    );
+  }
   return RepaintBoundary(
     child: ClipRRect(
       borderRadius: borderRadius,
-      child: BackdropFilter(
-        filter: filter,
-        child: surface,
-      ),
+      child: body,
     ),
   );
 }

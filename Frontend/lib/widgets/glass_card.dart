@@ -5,6 +5,8 @@ import 'dart:ui';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../theme/ui_effects.dart';
+
 class GlassCard extends StatelessWidget {
   final Widget child;
   final EdgeInsetsGeometry padding;
@@ -26,6 +28,7 @@ class GlassCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final borderRadius = BorderRadius.circular(radius);
+    final reduceEffects = UiEffects.reduceEffectsOf(context);
     final topAlpha = (0.38 + opacity * 0.45).clamp(0.0, 0.65);
     final bottomAlpha = (0.28 + opacity * 0.35).clamp(0.0, 0.58);
 
@@ -72,7 +75,7 @@ class GlassCard extends StatelessWidget {
             : blur;
 
     Widget body;
-    if (effectiveBlur <= 0) {
+    if (reduceEffects || effectiveBlur <= 0) {
       body = surface;
     } else {
       final filter = ImageFilter.blur(

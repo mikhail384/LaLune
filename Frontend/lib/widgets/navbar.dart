@@ -2,11 +2,11 @@
 
 import 'dart:ui';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
 import '../theme/assets.dart';
+import '../theme/ui_effects.dart';
 
 class NavBar extends StatelessWidget {
   final int currentIndex;
@@ -57,13 +57,17 @@ class NavBar extends StatelessWidget {
       ),
     );
 
-    final sigma =
-      !kIsWeb && defaultTargetPlatform == TargetPlatform.android ? 16.0 : 16.0;  
-    final filter = ImageFilter.blur(
-      sigmaX: sigma,
-      sigmaY: sigma,
-      tileMode: TileMode.clamp,
-    );
+    Widget surface = bar;
+    if (!UiEffects.reduceEffectsOf(context)) {
+      final filter = ImageFilter.blur(
+        sigmaX: 16,
+        sigmaY: 16,
+        tileMode: TileMode.clamp,
+      );
+      surface = BackdropGroup.of(context) == null
+          ? BackdropFilter(filter: filter, child: bar)
+          : BackdropFilter.grouped(filter: filter, child: bar);
+    }
     final content = DecoratedBox(
       decoration: BoxDecoration(
         borderRadius: borderRadius,
@@ -77,9 +81,7 @@ class NavBar extends StatelessWidget {
       ),
       child: ClipRRect(
         borderRadius: borderRadius,
-        child: BackdropGroup.of(context) == null
-            ? BackdropFilter(filter: filter, child: bar)
-            : BackdropFilter.grouped(filter: filter, child: bar),
+        child: surface,
       ),
     );
 
