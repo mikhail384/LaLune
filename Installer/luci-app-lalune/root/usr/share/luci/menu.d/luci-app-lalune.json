@@ -1,0 +1,13 @@
+{
+  "admin/services/lalune": {
+    "title": "LaLune VPN",
+    "order": 65,
+    "action": {
+      "type": "view",
+      "path": "lalune/status"
+    },
+    "depends": {
+      "acl": [ "luci-app-lalune" ]
+    }
+  }
+}

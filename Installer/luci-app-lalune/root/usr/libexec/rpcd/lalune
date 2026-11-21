@@ -1,0 +1,131 @@
+#!/bin/sh
+# rpcd exec plugin: authenticated LuCI sessions call the existing local LaLune API.
+# Only fixed API paths/methods are exposed; caller input never becomes a shell command.
+
+set -u
+API='http://127.0.0.1:1062'
+TMP="/tmp/lalune-rpc-$$"
+INPUT="$TMP.input"
+BODY="$TMP.body"
+RESPONSE="$TMP.response"
+
+cleanup() { rm -f "$INPUT" "$BODY" "$RESPONSE"; }
+trap cleanup EXIT HUP INT TERM
+
+if [ "${1:-}" = list ]; then
+    cat <<'JSON'
+{
+  "status": {},
+  "stats": {},
+  "configs": {},
+  "selected": {},
+  "protocols": {},
+  "logs": {},
+  "connect": {},
+  "disconnect": {},
+  "reconnect": {},
+  "select": { "id": 1 },
+  "create": { "body": "{}" },
+  "delete": { "id": 1 }
+}
+JSON
+    exit 0
+fi
+
+[ "${1:-}" = call ] || exit 1
+METHOD="${2:-}"
+cat > "$INPUT"
+
+json_value() {
+    jsonfilter -i "$INPUT" -e "$1" 2>/dev/null | head -n 1
+}
+
+api_request() {
+    http_method="$1"
+    path="$2"
+    body_file="${3:-}"
+    if [ "$http_method" = GET ]; then
+        uclient-fetch --no-proxy -q -O - --timeout=12 "$API$path" 2>/dev/null
+        return $?
+    fi
+    [ -n "$body_file" ] || { : > "$BODY"; body_file="$BODY"; }
+    uclient-fetch --no-proxy -q -O - --timeout=15 \
+        --method="$http_method" --body-file="$body_file" \
+        --header='Content-Type: application/json' "$API$path" 2>/dev/null
+}
+
+emit_api_object() {
+    path="$1"
+    if api_request GET "$path" > "$RESPONSE"; then
+        compact="$(tr -d '[:space:]' < "$RESPONSE")"
+        case "$compact" in
+            ''|null) printf '{}\n' ;;
+            *) cat "$RESPONSE" ;;
+        esac
+    else
+        printf '{"error":"LaLune API is unavailable or returned an error"}\n'
+    fi
+}
+
+emit_api_array() {
+    path="$1"
+    if api_request GET "$path" > "$RESPONSE"; then
+        [ -s "$RESPONSE" ] || printf '[]' > "$RESPONSE"
+        printf '{"items":'
+        cat "$RESPONSE"
+        printf '}\n'
+    else
+        printf '{"items":[],"error":"LaLune API is unavailable or returned an error"}\n'
+    fi
+}
+
+emit_body_request() {
+    http_method="$1"
+    path="$2"
+    if api_request "$http_method" "$path" "$BODY" > "$RESPONSE"; then
+        [ -s "$RESPONSE" ] && cat "$RESPONSE" || printf '{"ok":true}\n'
+    else
+        if [ -s "$RESPONSE" ]; then cat "$RESPONSE"; else printf '{"error":"LaLune API request failed"}\n'; fi
+    fi
+}
+
+case "$METHOD" in
+    status)    emit_api_object '/vpn/status' ;;
+    stats)     emit_api_object '/vpn/stats' ;;
+    configs)   emit_api_array '/configs' ;;
+    selected)  emit_api_object '/configs/selected' ;;
+    protocols) emit_api_array '/core/protocols' ;;
+    logs)      emit_api_array '/logs/tail?source=all&lines=80' ;;
+    connect)
+        printf '%s' '{"configId":null}' > "$BODY"
+        emit_body_request POST '/vpn/connect'
+        ;;
+    disconnect|reconnect)
+        printf '%s' '{}' > "$BODY"
+        if [ "$METHOD" = disconnect ]; then
+            emit_body_request POST '/vpn/disconnect'
+        else
+            emit_body_request POST '/vpn/reconnect'
+        fi
+        ;;
+    select)
+        id="$(json_value '@.id')"
+        case "$id" in ''|*[!0-9]*) printf '{"error":"Invalid profile id"}\n'; exit 0 ;; esac
+        printf '{"id":%s}' "$id" > "$BODY"
+        emit_body_request PUT '/configs/selected'
+        ;;
+    create)
+        jsonfilter -i "$INPUT" -e '@.body' > "$BODY" 2>/dev/null
+        if [ ! -s "$BODY" ]; then printf '{"error":"Missing profile body"}\n'; exit 0; fi
+        emit_body_request POST '/configs'
+        ;;
+    delete)
+        id="$(json_value '@.id')"
+        case "$id" in ''|*[!0-9]*) printf '{"error":"Invalid profile id"}\n'; exit 0 ;; esac
+        : > "$BODY"
+        emit_body_request DELETE "/configs/$id"
+        ;;
+    *)
+        printf '{"error":"Unsupported LuCI API method"}\n'
+        ;;
+esac

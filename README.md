@@ -63,11 +63,14 @@ curl -fsSL https://raw.githubusercontent.com/Endlad2/LaLune/main/Installer/insta
 wget -O - https://raw.githubusercontent.com/Endlad2/LaLune/main/Installer/openwrt.sh | sh
 ```
 
-Что делает: выбирает backend под архитектуру роутера, ставит зависимости для
-TUN/policy routing и запускает `lalune-openwrt-backend` в фоне на
-`0.0.0.0:1062`. CSQTT, CSQTTR и CSQTT 2.1.9 уже встроены в backend. После
-этого роутер виден из UI через
-«Настройки → Экспериментальное → Роутеры → Подключить OpenWRT».
+Что делает: выбирает backend под архитектуру роутера, устанавливает
+`firewall4`/`nftables` и kernel NAT modules, проверяет реальную поддержку
+`masquerade`, устанавливает API и LuCI-панель, затем запускает
+`lalune-openwrt-backend` на `0.0.0.0:1062`. В LuCI появится
+**Службы → LaLune VPN**: профили, Connect/Disconnect/Reconnect, состояние,
+статистика и логи. LuCI обращается к локальному API через rpcd/ubus.
+Мобильный и desktop-клиенты продолжают управлять тем же API на TCP/1062.
+CSQTT, CSQTTR и CSQTT 2.1.9 уже встроены в backend.
 
 ### Android
 
@@ -102,7 +105,8 @@ LaLune/
 ├── Installer/               — установщики
 │   ├── install.ps1          — Windows
 │   ├── install.sh           — Linux
-│   └── openwrt.sh           — OpenWRT
+│   ├── openwrt.sh           — OpenWRT backend + LuCI installer
+│   └── luci-app-lalune/     — LuCI menu/view + rpcd API bridge
 ├── OpenWRT/                 — standalone-клиент для роутера (без SDK)
 ├── Assets/                  — иконки, фоны, шрифты
 ├── build.py                 — единый сборщик Desktop
@@ -150,6 +154,11 @@ python build.py --ci --target linux
 Подробности — в [`BUILD.md`](https://build.md/).
 
 ### OpenWRT backend
+
+Backend использует native nftables masquerade на firewall4; `iptables-nft`
+оставлен только как legacy fallback. Установщик заранее проверяет, что
+текущие kernel modules действительно поддерживают nft `masquerade`, и не
+запускает VPN с полусобранным NAT.
 
 Сборка через официальный OpenWRT SDK (armsr/armv8, musl):
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //
 // OpenWRT VPN runtime. The backend owns a dedicated TUN (lalune0). Router and
-// LAN traffic are selected with iptables marks and policy-routed into that TUN;
+// LAN traffic are selected with nftables marks (iptables only as legacy fallback) and policy-routed into that TUN;
 // the core process itself runs under a dedicated UID and always stays on the
 // physical/main route, preventing a VPN recursion loop.
 
@@ -266,37 +266,43 @@ const NFT_MANGLE_TABLE: &str = "lalune_mangle";
 /// Tries available NAT implementations; callers must reject a missing NAT
 /// before activating packet selection for LAN clients.
 fn install_nat(name: &str, iptables_nat: bool, events: &EventBus) -> NatMode {
-    // 1. classic iptables MASQUERADE (needs xt_MASQUERADE / kmod-ipt-nat)
-    if iptables_nat {
+    // OpenWrt 22.03+ uses firewall4/nftables. Prefer native nft first: the
+    // iptables-nft compatibility frontend may exist while xt_MASQUERADE is
+    // absent, producing the misleading LALUNE_NAT RULE_APPEND failure.
+    try_nft(&["delete", "table", "ip", NFT_NAT_TABLE]);
+    let script = nft_masquerade_script(name);
+    match run_nft_script(&script) {
+        Ok(()) => {
+            events.emit(Event::log("[ROUTE] NAT via native nftables masquerade"));
+            return NatMode::Nft;
+        }
+        Err(error) => events.emit(Event::log(format!(
+            "[ROUTE] native nftables masquerade unavailable ({}); checking legacy iptables",
+            first_line(&error.to_string())
+        ))),
+    }
+    try_nft(&["delete", "table", "ip", NFT_NAT_TABLE]);
+
+    // Legacy firewall3 fallback. Only use the custom chain after verifying it
+    // exists in the same iptables frontend that will append the rule.
+    if iptables_nat && chain_exists("nat", NAT_CHAIN) {
         match iptables(&["-t", "nat", "-A", NAT_CHAIN, "-j", "MASQUERADE"]) {
             Ok(_) => return NatMode::IptMasquerade,
             Err(error) => events.emit(Event::log(format!(
-                "[ROUTE] iptables MASQUERADE unavailable ({}); trying nftables",
+                "[ROUTE] legacy iptables MASQUERADE unavailable ({}); trying SNAT",
                 first_line(&error.to_string())
             ))),
         }
-    }
-
-    // 2. native nftables masquerade (needs nft_masq / kmod-nft-nat)
-    try_nft(&["delete", "table", "ip", NFT_NAT_TABLE]);
-    let script = nft_masquerade_script(name);
-    if run_nft_script(&script).is_ok() {
-        events.emit(Event::log("[ROUTE] NAT via nftables masquerade"));
-        return NatMode::Nft;
-    }
-    try_nft(&["delete", "table", "ip", NFT_NAT_TABLE]);
-
-    // 3. fixed-address SNAT (xt_SNAT is sometimes present without MASQUERADE)
-    if let Some(addr) = tun_ipv4(name).filter(|_| iptables_nat) {
-        if iptables(&["-t", "nat", "-A", NAT_CHAIN, "-j", "SNAT", "--to-source", &addr]).is_ok() {
-            events.emit(Event::log(format!("[ROUTE] NAT via iptables SNAT -> {addr}")));
-            return NatMode::IptSnat;
+        if let Some(addr) = tun_ipv4(name) {
+            if iptables(&["-t", "nat", "-A", NAT_CHAIN, "-j", "SNAT", "--to-source", &addr]).is_ok() {
+                events.emit(Event::log(format!("[ROUTE] NAT via legacy iptables SNAT -> {addr}")));
+                return NatMode::IptSnat;
+            }
         }
     }
 
     events.emit(Event::log(
-        "[ROUTE] NAT недоступен (нет xt_MASQUERADE/nft_masq в ядре). \
-         Установите kmod-ipt-nat и kmod-nft-nat (opkg/apk install) для полной работы",
+        "[ROUTE] NAT unavailable: install a kernel-matched kmod-nft-nat (preferred) or kmod-ipt-nat package",
     ));
     NatMode::None
 }
@@ -359,7 +365,7 @@ impl OpenWrtRouting {
         let nft_ok = Command::new("nft").args(["list", "tables"]).output().is_ok_and(|o| o.status.success());
         let use_nft = nft_ok || iptables_program().is_none();
         if use_nft && !nft_ok {
-            bail!("Не найдены ни iptables, ни работающий nft");
+            bail!("Не найдены ни рабочий nftables, ни legacy iptables; установите nftables");
         }
         try_nft(&["delete", "table", "ip", NFT_MANGLE_TABLE]);
 
@@ -388,7 +394,7 @@ impl OpenWrtRouting {
         routing.prerouting_chain = true;
         // The iptables nat table may be missing entirely on stripped kernels;
         // that only disables LAN NAT (see install_nat), not the whole VPN.
-        routing.nat_chain = routing.create_chain("nat", NAT_CHAIN).is_ok();
+        routing.nat_chain = routing.create_chain("nat", NAT_CHAIN).is_ok() && chain_exists("nat", NAT_CHAIN);
 
         // Пакеты самого ядра не помечаем вовсе. Одного правила `ip rule uidrange` мало: после
         // смены метки в mangle/OUTPUT ядро заново ищет маршрут и (на ряде ядер) теряет UID сокета,
@@ -617,7 +623,7 @@ fn ip_numeric(args: &[&str]) -> Result<String> {
 fn require_program(program: &str) -> Result<()> {
     let status = Command::new(program).arg("--version").output();
     if status.is_err() {
-        bail!("Не найдена команда {program}; установщик OpenWRT должен поставить ip-full и iptables-nft");
+        bail!("Не найдена команда {program}; установщик OpenWRT должен поставить ip-full и nftables");
     }
     Ok(())
 }
@@ -792,7 +798,7 @@ fn cleanup_stale_chains(name: &str, events: &EventBus) {
 
 fn require_nat(mode: NatMode) -> Result<()> {
     if matches!(mode, NatMode::None) {
-        bail!("NAT недоступен: установите совместимые с ядром kmod-nft-nat или kmod-ipt-nat; маршрутизация не включена");
+        bail!("NAT недоступен: установите совпадающий с версией ядра kmod-nft-nat (предпочтительно) или kmod-ipt-nat; маршрутизация не включена");
     }
     Ok(())
 }
@@ -911,6 +917,14 @@ mod routing_tests {
         for mode in [NatMode::IptMasquerade, NatMode::Nft, NatMode::IptSnat] {
             assert!(require_nat(mode).is_ok());
         }
+    }
+
+    #[test]
+    fn native_nft_nat_rule_does_not_depend_on_iptables_chain() {
+        let script = nft_masquerade_script("lalune0");
+        assert!(script.contains("table ip lalune_nat"));
+        assert!(script.contains("oifname \"lalune0\" masquerade"));
+        assert!(!script.contains("LALUNE_NAT"));
     }
 
     fn isolated_network() {

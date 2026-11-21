@@ -414,17 +414,38 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.prepare-version.outputs.build_ref }}
-      - name: Syntax (POSIX sh) and architecture mapping
+      - name: Syntax (POSIX sh), LuCI RPC bridge and architecture mapping
         run: |
           set -euo pipefail
           sh -n Installer/openwrt.sh
+          sh -n Installer/luci-app-lalune/root/usr/libexec/rpcd/lalune
           sh Installer/test-abi.sh Installer/openwrt.sh
+          node --check Installer/luci-app-lalune/root/www/luci-static/resources/view/lalune/status.js
+          Installer/luci-app-lalune/root/usr/libexec/rpcd/lalune list | jq -e '.status and .connect and .create and .delete'
+          python3 - <<'PYARCHIVE'
+          import tarfile
+          from pathlib import Path
+          archive = Path('Assets/openwrt/luci-app-lalune.tar.gz')
+          with tarfile.open(archive, 'r:gz') as tf:
+              names = set(tf.getnames())
+          required = {
+              'usr/libexec/rpcd/lalune',
+              'usr/share/rpcd/acl.d/luci-app-lalune.json',
+              'usr/share/luci/menu.d/luci-app-lalune.json',
+              'www/luci-static/resources/view/lalune/status.js',
+          }
+          missing = required - names
+          if missing:
+              raise SystemExit(f'LuCI archive is missing: {sorted(missing)}')
+          print(f'LuCI archive verified: {archive.stat().st_size} bytes')
+          PYARCHIVE
       - name: Syntax under BusyBox ash (what routers run)
         run: |
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends busybox-static
           busybox ash -n Installer/openwrt.sh
+          busybox ash -n Installer/luci-app-lalune/root/usr/libexec/rpcd/lalune
           busybox ash Installer/test-abi.sh Installer/openwrt.sh
 
   # ============================================================
@@ -933,6 +954,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release/assets
+          tar -czf release/assets/luci-app-lalune.tar.gz -C Installer/luci-app-lalune/root .
           cp release/windows/LaLune-Windows.zip release/assets/
           cp release/windows/Backend-Windows.zip release/assets/
           cp release/windows/Installer-Windows.zip release/assets/
@@ -1030,6 +1052,7 @@ jobs:
             release/assets/lalune-openwrt-cores-armv5.zip
             release/assets/lalune-openwrt-backend-mips
             release/assets/lalune-openwrt-cores-mips.zip
+            release/assets/luci-app-lalune.tar.gz
             release/assets/LaLune-Android.apk
             release/assets/LaLuneTokenFetcher_Windows.zip
             release/assets/LaLuneTokenFetcher_Linux.zip

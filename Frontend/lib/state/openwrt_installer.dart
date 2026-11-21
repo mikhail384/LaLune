@@ -29,7 +29,7 @@ class OpenWrtInstaller {
   /// Каталог релиза; конкретный файл (`lalune-openwrt-backend[-<abi>]`)
   /// скрипт выбирает на роутере по DISTRIB_ARCH.
   static const backendBaseUrl =
-      'https://github.com/mikhail384/LaLune/releases/latest/download';
+      'https://github.com/Endlad2/LaLune/releases/latest/download';
 
   /// Dropbear отвергает слишком длинную exec-команду ("String too long"), а скрипт установки
   /// больше этого лимита. Поэтому сначала кладём его на роутер файлом, потом запускаем коротко.
@@ -196,7 +196,7 @@ class OpenWrtInstaller {
       ('processes', 'ps w 2>/dev/null || ps 2>/dev/null'),
       ('listening sockets', 'netstat -tulnp 2>/dev/null || ss -tulnp 2>/dev/null || true'),
       ('tun & network', 'ls -la /dev/net/tun 2>&1; ip -4 addr show 2>&1; ip -4 route show 2>&1; ip -4 rule show 2>&1'),
-      ('firewall & dns', 'iptables --version 2>&1 || true; nft --version 2>&1 || true; cat /etc/resolv.conf 2>&1 || true'),
+      ('firewall & dns', 'iptables --version 2>&1 || true; nft --version 2>&1 || true; nft list tables 2>&1 | head -n 12; nft list table ip lalune_nat 2>&1 | head -n 20; nft list table ip lalune_mangle 2>&1 | head -n 30; cat /etc/resolv.conf 2>&1 || true'),
       ('pkg log', 'tail -n 120 /tmp/lalune-pkg.log 2>/dev/null || true'),
       ('manager log', r'tail -n 200 "$HOME/.la-lune/LaLuneManager.log" 2>/dev/null || true'),
       ('logread', "logread 2>/dev/null | grep -iE 'lalune|csqtt|oom|kill|tun|dropbear|procd' | tail -n 80 || true"),
@@ -270,6 +270,28 @@ class OpenWrtInstaller {
       );
       await client.authenticated;
       logTrace('SSH connected & authenticated');
+
+      // Bundle the architecture-independent LuCI panel with the app so the
+      // router does not need direct GitHub access to install the web UI.
+      final luciPanel = await _loadAsset('assets/openwrt/luci-app-lalune.tar.gz');
+      if (luciPanel != null) {
+        stage = 'загрузка LuCI панели';
+        onProgress?.call('Передаю LuCI-панель на роутер...');
+        await client.run('rm -f /tmp/luci-app-lalune.tar.gz /tmp/luci-app-lalune.tar.gz.part');
+        void setPanelStage(String value) { stage = value; }
+        final panelError = await _pushFile(
+          client, luciPanel, '/tmp/luci-app-lalune.tar.gz',
+          'LuCI-панель', onProgress, setPanelStage,
+        );
+        if (panelError != null) {
+          final diag = await _collectRouterDiagnostics(client);
+          final fullLog = await buildAndSaveLog(diag: '$panelError\n$diag');
+          return OpenWrtInstallResult(ok: false, message: panelError, log: fullLog);
+        }
+        logTrace('LuCI panel archive uploaded (${luciPanel.length} bytes)');
+      } else {
+        logTrace('LuCI panel asset missing in this app build; router will try the release download');
+      }
 
       // Освобождаем ОЗУ до запуска скрипта: запущенный старый backend с ядром (до 30 воркеров)
       // съедает почти всю память, и OOM-killer убивает уже сам скрипт установки.
@@ -478,6 +500,8 @@ set -eu
 
 BACKEND_BASE="__BACKEND_BASE__"
 BACKEND_URL=""
+LUCI_APP_URL="$BACKEND_BASE/luci-app-lalune.tar.gz"
+LUCI_APP_ARCHIVE="/tmp/luci-app-lalune.tar.gz"
 INSTALL_DIR="$HOME/la-lune"
 DATA_DIR="$HOME/.la-lune"
 BACKEND_PATH="$INSTALL_DIR/lalune-openwrt-backend"
@@ -596,7 +620,7 @@ ensure_downloader || {
   exit 22
 }
 
-# Для iptables/fwmark policy routing нужен полный iproute2 на обеих архитектурах.
+# Для policy routing нужен полный iproute2 на обеих архитектурах.
 have_route_ip() {
   have ip && { ip -N -4 rule show >/dev/null 2>&1 || ip -4 rule show >/dev/null 2>&1; }
 }
@@ -626,26 +650,47 @@ if ! have_route_ip; then
   exit 24
 fi
 
-if ! have iptables && ! have iptables-nft; then
-  log 'iptables missing; trying to install iptables-nft'
-  install_packages iptables-nft || install_packages iptables || true
-fi
-if ! have iptables && ! have iptables-nft; then
-  if have nft; then
-    # OpenWrt 25.x на маленьких роутерах: только nftables. Бэкенд умеет работать без iptables.
-    log 'iptables not available; will use native nftables for marking/NAT'
-  else
-    echo 'Neither iptables-nft nor nft is available: VPN marking/NAT is impossible' >&2
-    pkg_error_tail
-    exit 27
-  fi
-fi
+# firewall4 uses native nftables. Install the nft CLI and kernel NAT modules;
+# iptables-nft alone does not guarantee that xt_MASQUERADE is available.
+install_packages firewall4 nftables kmod-nf-nat kmod-nft-nat rpcd luci-light luci-base uhttpd uhttpd-mod-ubus uhttpd-mod-ucode uclient-fetch jsonfilter || {
+  echo 'Could not install nftables/NAT/LuCI dependencies; check package feeds and kernel-matched kmods' >&2
+  pkg_error_tail
+  exit 27
+}
+/etc/init.d/firewall enable >/dev/null 2>&1 || true
+/etc/init.d/firewall reload >/dev/null 2>&1 || /etc/init.d/firewall restart >/dev/null 2>&1 || true
+have nft || { echo 'nftables package installed but nft command is missing' >&2; exit 27; }
+nft list tables >/dev/null 2>&1 || { echo 'nft cannot access netfilter; check kmod-nft-core/kmod-nft-nat' >&2; exit 27; }
 
-# NAT для клиентов LAN: без xt_MASQUERADE iptables пишет "Extension MASQUERADE
-# revision 0 not supported". Модули ядра ставим по возможности, не фатально.
-for pkg in kmod-ipt-nat kmod-nft-nat kmod-nft-compat iptables-mod-nat-extra iptables-mod-extra kmod-ipt-extra; do
-  install_packages "$pkg" >/dev/null 2>&1 || true
-done
+# Probe the running kernel's masquerade support before any VPN route is enabled.
+nft delete table ip lalune_probe >/dev/null 2>&1 || true
+if ! nft -f - <<'NFT'
+table ip lalune_probe {
+  chain postrouting {
+    type nat hook postrouting priority srcnat; policy accept;
+    oifname "lo" masquerade
+  }
+}
+NFT
+then
+  nft delete table ip lalune_probe >/dev/null 2>&1 || true
+  echo 'Kernel nft masquerade is unavailable; install kmod-nf-nat and kmod-nft-nat matching the running kernel' >&2
+  exit 27
+fi
+nft delete table ip lalune_probe >/dev/null 2>&1 || true
+
+# Install LuCI files as another authenticated frontend to the existing API.
+# Android and desktop clients continue using the same TCP/1062 API unchanged.
+if [ ! -s "$LUCI_APP_ARCHIVE" ]; then
+  download "$LUCI_APP_URL" "$LUCI_APP_ARCHIVE"
+fi
+tar -tzf "$LUCI_APP_ARCHIVE" >/dev/null 2>&1 || { echo 'luci-app-lalune archive is invalid' >&2; exit 27; }
+tar -xzf "$LUCI_APP_ARCHIVE" -C /
+chmod 755 /usr/libexec/rpcd/lalune
+/etc/init.d/rpcd restart >/dev/null 2>&1 || true
+/etc/init.d/uhttpd enable >/dev/null 2>&1 || true
+/etc/init.d/uhttpd restart >/dev/null 2>&1 || true
+log 'LuCI panel installed: Services -> LaLune VPN'
 
 if [ ! -c /dev/net/tun ]; then
   log '/dev/net/tun missing; trying to install/load kmod-tun'
@@ -771,6 +816,7 @@ if ! kill -0 "$pid" 2>/dev/null; then
   exit 23
 fi
 
+rm -f "$LUCI_APP_ARCHIVE"
 printf 'LALUNE_INSTALL_OK pid=%s\n' "$pid"
 ''';
 }

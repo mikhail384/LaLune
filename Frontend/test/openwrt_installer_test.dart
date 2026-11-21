@@ -30,6 +30,15 @@ void main() {
     expect(script, contains('lalune-openwrt-backend-\$abi'));
   });
 
+  test('installer uses native nftables NAT and installs the LuCI API panel', () {
+    final script = OpenWrtInstaller.installScript();
+    expect(script, contains('nftables kmod-nf-nat kmod-nft-nat'));
+    expect(script, contains('luci-app-lalune.tar.gz'));
+    expect(script, contains('/usr/libexec/rpcd/lalune'));
+    expect(script, contains("nft -f -"));
+    expect(script, isNot(contains('iptables -t nat -A LALUNE_NAT')));
+  });
+
   test('in-app lalune_abi matches Installer/openwrt.sh', () {
     expect(shell.existsSync(), isTrue, reason: 'run tests from Frontend/');
     expect(
