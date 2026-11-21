@@ -5,6 +5,7 @@
 // выполняется GlassDialog/GlassCard, а Theme не перекрывает его сплошным цветом.
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 
 const Color kAccent = Color(0xFF2FBF71);
 const Color kAccentRed = Color(0xFFE5484D);
@@ -29,7 +30,7 @@ ThemeData buildAppTheme() {
 
   return base.copyWith(
     scaffoldBackgroundColor: Colors.transparent,
-    splashFactory: InkSparkle.splashFactory,
+    splashFactory: (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) ? InkRipple.splashFactory : InkSparkle.splashFactory,
     colorScheme: base.colorScheme.copyWith(
       primary: kAccent,
       onPrimary: Colors.white,
