@@ -218,6 +218,7 @@ class OpenWrtInstaller {
   
   static Future<OpenWrtInstallResult> install({
     required String host,
+    int port = 22,
     required String username,
     required String password,
     void Function(String message)? onProgress,
@@ -254,10 +255,10 @@ class OpenWrtInstaller {
     }
     await setKeepScreenOn(true);
     try {
-      onProgress?.call('Подключение к SSH $host:22...');
+      onProgress?.call('Подключение к SSH $host:$port...');
       final socket = await SSHSocket.connect(
         host,
-        22,
+        port,
         timeout: const Duration(seconds: 5),
       );
       client = SSHClient(
@@ -498,15 +499,30 @@ final fullLog = await buildAndSaveLog(stdout: stdout, stderr: stderr, diag: diag
   static const _installScript = r'''
 set -eu
 
+IS_KEENETIC=0
+if [ -d /opt/etc ] || [ -x /opt/bin/opkg ] || [ -d /etc/ndm ]; then
+  IS_KEENETIC=1
+fi
+
 BACKEND_BASE="__BACKEND_BASE__"
 BACKEND_URL=""
 LUCI_APP_URL="$BACKEND_BASE/luci-app-lalune.tar.gz"
 LUCI_APP_ARCHIVE="/tmp/luci-app-lalune.tar.gz"
-INSTALL_DIR="$HOME/la-lune"
-DATA_DIR="$HOME/.la-lune"
-BACKEND_PATH="$INSTALL_DIR/lalune-openwrt-backend"
-PID_FILE="$DATA_DIR/backend.pid"
-LOG_FILE="$DATA_DIR/LaLuneManager.log"
+
+if [ "$IS_KEENETIC" = "1" ]; then
+  export PATH="/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+  INSTALL_DIR="/opt/bin"
+  DATA_DIR="/opt/etc/lalune"
+  BACKEND_PATH="$INSTALL_DIR/lalune-backend"
+  PID_FILE="/opt/var/run/lalune.pid"
+  LOG_FILE="/opt/var/log/lalune.log"
+else
+  INSTALL_DIR="$HOME/la-lune"
+  DATA_DIR="$HOME/.la-lune"
+  BACKEND_PATH="$INSTALL_DIR/lalune-openwrt-backend"
+  PID_FILE="$DATA_DIR/backend.pid"
+  LOG_FILE="$DATA_DIR/LaLuneManager.log"
+fi
 
 log() { printf '[lalune-install] %s\n' "$*"; }
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -565,7 +581,15 @@ PKG_UPDATED=0
 # Ставит пакеты и сохраняет вывод менеджера в $PKG_LOG, чтобы при ошибке было видно причину
 # (нет интернета/DNS, пакета нет в фиде, конфликт ip-tiny и т.д.).
 install_packages() {
-  if have apk; then
+  if [ "$IS_KEENETIC" = "1" ]; then
+    if have /opt/bin/opkg; then
+      if [ "$PKG_UPDATED" = 0 ]; then /opt/bin/opkg update >"$PKG_LOG" 2>&1 || true; PKG_UPDATED=1; fi
+      /opt/bin/opkg install "$@" >>"$PKG_LOG" 2>&1
+    elif have opkg; then
+      if [ "$PKG_UPDATED" = 0 ]; then opkg update >"$PKG_LOG" 2>&1 || true; PKG_UPDATED=1; fi
+      opkg install "$@" >>"$PKG_LOG" 2>&1
+    fi
+  elif have apk; then
     if [ "$PKG_UPDATED" = 0 ]; then apk update >"$PKG_LOG" 2>&1 || true; PKG_UPDATED=1; fi
     apk add "$@" >>"$PKG_LOG" 2>&1
   elif have opkg; then
@@ -650,21 +674,26 @@ if ! have_route_ip; then
   exit 24
 fi
 
-# firewall4 uses native nftables. Install the nft CLI and kernel NAT modules;
-# iptables-nft alone does not guarantee that xt_MASQUERADE is available.
-install_packages firewall4 nftables kmod-nf-nat kmod-nft-nat rpcd luci-light luci-base uhttpd uhttpd-mod-ubus uhttpd-mod-ucode uclient-fetch jsonfilter || {
-  echo 'Could not install nftables/NAT/LuCI dependencies; check package feeds and kernel-matched kmods' >&2
-  pkg_error_tail
-  exit 27
-}
-/etc/init.d/firewall enable >/dev/null 2>&1 || true
-/etc/init.d/firewall reload >/dev/null 2>&1 || /etc/init.d/firewall restart >/dev/null 2>&1 || true
-have nft || { echo 'nftables package installed but nft command is missing' >&2; exit 27; }
-nft list tables >/dev/null 2>&1 || { echo 'nft cannot access netfilter; check kmod-nft-core/kmod-nft-nat' >&2; exit 27; }
+if [ "$IS_KEENETIC" = "1" ]; then
+  log 'KeeneticOS (Entware) environment detected'
+  install_packages ip-full iptables curl ca-certificates ca-bundle || true
+  log 'Keenetic Web UI will be available at http://<router-ip>:1062/panel'
+else
+  # firewall4 uses native nftables. Install the nft CLI and kernel NAT modules;
+  # iptables-nft alone does not guarantee that xt_MASQUERADE is available.
+  install_packages firewall4 nftables kmod-nf-nat kmod-nft-nat rpcd luci-light luci-base uhttpd uhttpd-mod-ubus uhttpd-mod-ucode uclient-fetch jsonfilter || {
+    echo 'Could not install nftables/NAT/LuCI dependencies; check package feeds and kernel-matched kmods' >&2
+    pkg_error_tail
+    exit 27
+  }
+  /etc/init.d/firewall enable >/dev/null 2>&1 || true
+  /etc/init.d/firewall reload >/dev/null 2>&1 || /etc/init.d/firewall restart >/dev/null 2>&1 || true
+  have nft || { echo 'nftables package installed but nft command is missing' >&2; exit 27; }
+  nft list tables >/dev/null 2>&1 || { echo 'nft cannot access netfilter; check kmod-nft-core/kmod-nft-nat' >&2; exit 27; }
 
-# Probe the running kernel's masquerade support before any VPN route is enabled.
-nft delete table ip lalune_probe >/dev/null 2>&1 || true
-if ! nft -f - <<'NFT'
+  # Probe the running kernel's masquerade support before any VPN route is enabled.
+  nft delete table ip lalune_probe >/dev/null 2>&1 || true
+  if ! nft -f - <<'NFT'
 table ip lalune_probe {
   chain postrouting {
     type nat hook postrouting priority srcnat; policy accept;
@@ -672,25 +701,25 @@ table ip lalune_probe {
   }
 }
 NFT
-then
+  then
+    nft delete table ip lalune_probe >/dev/null 2>&1 || true
+    echo 'Kernel nft masquerade is unavailable; install kmod-nf-nat and kmod-nft-nat matching the running kernel' >&2
+    exit 27
+  fi
   nft delete table ip lalune_probe >/dev/null 2>&1 || true
-  echo 'Kernel nft masquerade is unavailable; install kmod-nf-nat and kmod-nft-nat matching the running kernel' >&2
-  exit 27
-fi
-nft delete table ip lalune_probe >/dev/null 2>&1 || true
 
-# Install LuCI files as another authenticated frontend to the existing API.
-# Android and desktop clients continue using the same TCP/1062 API unchanged.
-if [ ! -s "$LUCI_APP_ARCHIVE" ]; then
-  download "$LUCI_APP_URL" "$LUCI_APP_ARCHIVE"
+  # Install LuCI files as another authenticated frontend to the existing API.
+  if [ ! -s "$LUCI_APP_ARCHIVE" ]; then
+    download "$LUCI_APP_URL" "$LUCI_APP_ARCHIVE"
+  fi
+  tar -tzf "$LUCI_APP_ARCHIVE" >/dev/null 2>&1 || { echo 'luci-app-lalune archive is invalid' >&2; exit 27; }
+  tar -xzf "$LUCI_APP_ARCHIVE" -C /
+  chmod 755 /usr/libexec/rpcd/lalune
+  /etc/init.d/rpcd restart >/dev/null 2>&1 || true
+  /etc/init.d/uhttpd enable >/dev/null 2>&1 || true
+  /etc/init.d/uhttpd restart >/dev/null 2>&1 || true
+  log 'LuCI panel installed: Services -> LaLune VPN'
 fi
-tar -tzf "$LUCI_APP_ARCHIVE" >/dev/null 2>&1 || { echo 'luci-app-lalune archive is invalid' >&2; exit 27; }
-tar -xzf "$LUCI_APP_ARCHIVE" -C /
-chmod 755 /usr/libexec/rpcd/lalune
-/etc/init.d/rpcd restart >/dev/null 2>&1 || true
-/etc/init.d/uhttpd enable >/dev/null 2>&1 || true
-/etc/init.d/uhttpd restart >/dev/null 2>&1 || true
-log 'LuCI panel installed: Services -> LaLune VPN'
 
 if [ ! -c /dev/net/tun ]; then
   log '/dev/net/tun missing; trying to install/load kmod-tun'
@@ -770,8 +799,46 @@ if have killall; then
   sleep 1
 fi
 
-# Автозапуск после перезагрузки роутера: служба procd (respawn при падении).
-if [ -f /etc/rc.common ] && [ -d /etc/init.d ]; then
+if [ "$IS_KEENETIC" = "1" ]; then
+  log 'installing Entware init service /opt/etc/init.d/S99lalune'
+  mkdir -p /opt/etc/init.d /opt/var/run /opt/var/log /opt/var/lalune
+  cat > /opt/etc/init.d/S99lalune <<LALUNE_KEENETIC_INIT
+#!/bin/sh
+ENABLED=yes
+NAME=lalune-backend
+BIN_PATH="$BACKEND_PATH"
+PID_FILE="$PID_FILE"
+LOG_FILE="$LOG_FILE"
+RUN_DIR="/opt/var/lalune"
+export PATH="/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin:\$PATH"
+export HOME="/opt/root"
+
+start() {
+  [ "\$ENABLED" = "yes" ] || exit 0
+  if [ -f "\$PID_FILE" ] && kill -0 \$(cat "\$PID_FILE") 2>/dev/null; then return 0; fi
+  mkdir -p /opt/var/run /opt/var/log /opt/var/lalune /dev/net
+  [ -c /dev/net/tun ] || mknod /dev/net/tun c 10 200 2>/dev/null || true
+  cd "\$RUN_DIR"
+  nohup "\$BIN_PATH" >> "\$LOG_FILE" 2>&1 &
+  echo \$! > "\$PID_FILE"
+}
+stop() {
+  if [ -f "\$PID_FILE" ]; then
+    PID=\$(cat "\$PID_FILE" 2>/dev/null)
+    [ -n "\$PID" ] && kill "\$PID" 2>/dev/null || true
+    rm -f "\$PID_FILE"
+  fi
+}
+case "\$1" in
+  start) start ;;
+  stop) stop ;;
+  restart) stop; sleep 1; start ;;
+  *) "\$BIN_PATH" "\$@" ;;
+esac
+LALUNE_KEENETIC_INIT
+  chmod +x /opt/etc/init.d/S99lalune
+  USE_KEENETIC_START=1
+elif [ -f /etc/rc.common ] && [ -d /etc/init.d ]; then
   log 'installing autostart service /etc/init.d/lalune'
   cat > /etc/init.d/lalune <<LALUNE_INITD
 #!/bin/sh /etc/rc.common
@@ -798,7 +865,12 @@ fi
 
 log 'starting backend in background'
 cd "$INSTALL_DIR"
-if [ "${USE_PROCD_START:-0}" = 1 ]; then
+if [ "${USE_KEENETIC_START:-0}" = 1 ]; then
+  /opt/etc/init.d/S99lalune restart >/dev/null 2>&1 || /opt/etc/init.d/S99lalune start >/dev/null 2>&1 || true
+  sleep 2
+  pid="$(cat "$PID_FILE" 2>/dev/null || pidof lalune-backend 2>/dev/null | awk '{print $1}')"
+  [ -n "$pid" ] || pid=0
+elif [ "${USE_PROCD_START:-0}" = 1 ]; then
   /etc/init.d/lalune restart >/dev/null 2>&1 || /etc/init.d/lalune start >/dev/null 2>&1 || true
   sleep 2
   pid="$(pidof lalune-openwrt-backend 2>/dev/null | awk '{print $1}')"

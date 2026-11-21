@@ -14,8 +14,8 @@ Future<String?> showOpenWrtActionDialog(BuildContext context) {
     context: context,
     barrierColor: Colors.transparent,
     builder: (context) => GlassAlertDialog(
-      title: const Text('OpenWRT'),
-      content: const Text('Что сделать с роутером?'),
+      title: const Text('Роутер (OpenWRT / Keenetic)'),
+      content: const Text('Что сделать с роутером? Поддерживаются OpenWRT и KeeneticOS.'),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
@@ -60,6 +60,7 @@ Future<void> showOpenWrtInstallFlow(BuildContext context) async {
     barrierColor: Colors.transparent,
     builder: (_) => _InstallProgressDialog(
       host: host,
+      port: credentials.port,
       username: credentials.username,
       password: credentials.password,
     ),
@@ -69,8 +70,9 @@ Future<void> showOpenWrtInstallFlow(BuildContext context) async {
 class _SshCredentials {
   final String username;
   final String password;
+  final int port;
 
-  const _SshCredentials(this.username, this.password);
+  const _SshCredentials(this.username, this.password, {this.port = 22});
 }
 
 Future<_SshCredentials?> _showCredentialsDialog(
@@ -96,6 +98,7 @@ class _SshCredentialsDialog extends StatefulWidget {
 class _SshCredentialsDialogState extends State<_SshCredentialsDialog> {
   late final TextEditingController _userCtl;
   late final TextEditingController _passCtl;
+  late final TextEditingController _portCtl;
   bool _obscure = true;
 
   @override
@@ -103,19 +106,22 @@ class _SshCredentialsDialogState extends State<_SshCredentialsDialog> {
     super.initState();
     _userCtl = TextEditingController(text: 'root');
     _passCtl = TextEditingController();
+    _portCtl = TextEditingController(text: '22');
   }
 
   void _submit() {
     final user = _userCtl.text.trim();
     if (user.isEmpty) return;
+    final port = int.tryParse(_portCtl.text.trim()) ?? 22;
     FocusScope.of(context).unfocus();
-    Navigator.pop(context, _SshCredentials(user, _passCtl.text));
+    Navigator.pop(context, _SshCredentials(user, _passCtl.text, port: port));
   }
 
   @override
   void dispose() {
     _userCtl.dispose();
     _passCtl.dispose();
+    _portCtl.dispose();
     super.dispose();
   }
 
@@ -128,13 +134,32 @@ class _SshCredentialsDialogState extends State<_SshCredentialsDialog> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            TextField(
-              controller: _userCtl,
-              autofocus: true,
-              decoration: const InputDecoration(
-                labelText: 'Логин SSH',
-                hintText: 'root',
-              ),
+            Row(
+              children: [
+                Expanded(
+                  flex: 3,
+                  child: TextField(
+                    controller: _userCtl,
+                    autofocus: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Логин SSH',
+                      hintText: 'root',
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  flex: 2,
+                  child: TextField(
+                    controller: _portCtl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'Порт SSH',
+                      hintText: '22 (Keenetic: 222)',
+                    ),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 10),
             TextField(
@@ -153,8 +178,9 @@ class _SshCredentialsDialogState extends State<_SshCredentialsDialog> {
             ),
             const SizedBox(height: 10),
             Text(
-              'Клиент подключится к порту 22, создаст ~/la-lune/, '
-              'установит backend и при необходимости CSQTT-ядро.',
+              'Поддерживаются OpenWRT и KeeneticOS (через Entware). '
+              'Порт по умолчанию 22 (для Keenetic может быть 222). '
+              'Для KN-3012 Speedster включите OPKG во внутренней памяти.',
               style: TextStyle(
                 fontSize: 11.5,
                 height: 1.45,
@@ -430,11 +456,13 @@ class _SshHostModalState extends State<_SshHostModal> {
 
 class _InstallProgressDialog extends StatefulWidget {
   final String host;
+  final int port;
   final String username;
   final String password;
 
   const _InstallProgressDialog({
     required this.host,
+    this.port = 22,
     required this.username,
     required this.password,
   });
@@ -477,6 +505,7 @@ class _InstallProgressDialogState extends State<_InstallProgressDialog> {
   Future<void> _run() async {
     final result = await OpenWrtInstaller.install(
       host: widget.host,
+      port: widget.port,
       username: widget.username,
       password: widget.password,
       onProgress: (message) {
