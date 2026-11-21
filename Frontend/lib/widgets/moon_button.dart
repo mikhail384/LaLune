@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../theme/assets.dart';
@@ -83,8 +84,8 @@ class _MoonButtonState extends State<MoonButton> {
                       width: 130,
                       height: 130,
                       // Ресурс 512 px: декодируем не больше нужного.
-                      cacheWidth: 390,
-                      filterQuality: FilterQuality.medium,
+                      cacheWidth: 260,
+                      filterQuality: (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) ? FilterQuality.low : FilterQuality.medium,
                       errorBuilder: (_, __, ___) => Container(
                         width: 130,
                         height: 130,
@@ -123,15 +124,15 @@ class _Glow extends StatelessWidget {
       duration: const Duration(milliseconds: 260),
       curve: Curves.easeOut,
       child: RepaintBoundary(
-        child: Container(
-          width: 150,
-          height: 150,
-          decoration: BoxDecoration(
+        child: SizedBox(
+          width: 210,
+          height: 210,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
             shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(color: color, blurRadius: 34, spreadRadius: 4),
-            ],
-          ),
+            gradient: RadialGradient(colors: [color, color.withOpacity(0.26), Colors.transparent], stops: const [0.42, 0.70, 1.0]),
+          ),),
+          
         ),
       ),
     );
