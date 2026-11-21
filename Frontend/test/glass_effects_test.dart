@@ -157,6 +157,73 @@ void main() {
     await expectPixel(60, 255, 0);
   });
 
+  testWidgets('keyboard insets do not replace a focused field in cached glass',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(400, 640);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetViewInsets);
+
+    final wallpaper = await tester.runAsync(() async {
+      final recorder = ui.PictureRecorder();
+      Canvas(recorder).drawColor(Colors.green, BlendMode.src);
+      final picture = recorder.endRecording();
+      final image = await picture.toImage(16, 16);
+      final bytes = (await image.toByteData(format: ui.ImageByteFormat.png))!;
+      image.dispose();
+      picture.dispose();
+      return MemoryImage(bytes.buffer.asUint8List());
+    });
+    final controller = TextEditingController(text: '1');
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: CachedGlassBackdrop(
+          wallpaper: wallpaper!,
+          tint: const LinearGradient(colors: [Colors.transparent, Colors.transparent]),
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: GlassCard(blur: 14, child: TextField(controller: controller)),
+          ),
+        ),
+      ),
+    ));
+
+    final cached = find.descendant(
+      of: find.byType(GlassCard),
+      matching: find.byType(CompositedTransformFollower),
+    );
+    Future<void> waitForWallpaper() async {
+      for (var i = 0; i < 50 && cached.evaluate().isEmpty; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)),
+        );
+        await tester.pump();
+      }
+      expect(cached, findsOneWidget);
+    }
+
+    await waitForWallpaper();
+    final field = find.byType(EditableText);
+    final original = tester.state<EditableTextState>(field);
+    await tester.showKeyboard(find.byType(TextField));
+    expect(original.widget.focusNode.hasFocus, isTrue);
+
+    tester.view.viewInsets = const FakeViewPadding(bottom: 220);
+    await tester.pump();
+    expect(find.byType(BackdropFilter), findsOneWidget);
+    expect(tester.state<EditableTextState>(field), same(original));
+    expect(original.widget.focusNode.hasFocus, isTrue);
+
+    tester.testTextInput.enterText('12');
+    await tester.pump();
+    await waitForWallpaper();
+    expect(tester.state<EditableTextState>(field), same(original));
+    expect(original.widget.focusNode.hasFocus, isTrue);
+    expect(controller.text, '12');
+  });
+
   testWidgets('modal glass stays independent from the app backdrop group',
       (tester) async {
     await tester.pumpWidget(
