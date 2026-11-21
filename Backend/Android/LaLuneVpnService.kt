@@ -23,18 +23,19 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.IpPrefix
+import android.net.LocalServerSocket
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
-import android.system.Os
-import android.system.OsConstants
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -42,13 +43,16 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.io.RandomAccessFile
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
+import java.util.UUID
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -193,7 +197,7 @@ class LaLuneVpnService : VpnService() {
                 establishing = false
                 if (established && isRunning) {
                     publishState("connected", true, "Подключено")
-                    Log.i(TAG, "ToTS TUN established and core started with --tun-fd")
+                    Log.i(TAG, "ToTS TUN established and core received its descriptor over SCM_RIGHTS")
                 } else if (isRunning) {
                     publishState("error", false, "Не удалось запустить ToTS")
                     stopFlow()
@@ -468,36 +472,52 @@ class LaLuneVpnService : VpnService() {
 
             if (isTots) {
                 val inherited = try {
-                    ParcelFileDescriptor.dup(iface.fileDescriptor).also { dup ->
-                        // libtots is spawned after VpnService creates the TUN. Clear CLOEXEC
-                        // so the child can use the descriptor passed in --tun-fd.
-                        Os.fcntlInt(dup.fileDescriptor, OsConstants.F_SETFD, 0)
-                    }
+                    ParcelFileDescriptor.dup(iface.fileDescriptor)
                 } catch (e: Exception) {
                     try { iface.close() } catch (_: Exception) {}
                     Log.e(TAG, "cannot duplicate ToTS TUN fd: ${e.message}", e)
                     return@withLock false
                 }
+                // Do not pass the numeric fd through ProcessBuilder. Android's
+                // child-process launcher may close non-standard descriptors even
+                // after FD_CLOEXEC has been cleared. Transfer it explicitly with
+                // SCM_RIGHTS over an abstract AF_UNIX socket instead.
+                val fdSocketName = "lalune-tots-${UUID.randomUUID().toString().replace("-", "")}"
+                val fdServer = try {
+                    LocalServerSocket(fdSocketName)
+                } catch (e: Exception) {
+                    try { inherited.close() } catch (_: Exception) {}
+                    try { iface.close() } catch (_: Exception) {}
+                    Log.e(TAG, "cannot create ToTS fd handoff socket: ${e.message}", e)
+                    notifyLog(this@LaLuneVpnService, "[VPN] cannot create ToTS fd handoff socket: ${e.message.orEmpty()}")
+                    return@withLock false
+                }
                 val jsonArgs = runtime!!.optJSONArray("args") ?: JSONArray()
                 val args = mutableListOf<String>()
                 for (i in 0 until jsonArgs.length()) args += jsonArgs.optString(i)
-                args += "--tun-fd"
-                args += inherited.fd.toString()
+                args += "--tun-fd-socket"
+                args += fdSocketName
 
                 tunnelGeneration++
                 vpnInterface = iface
                 totsTunFd = inherited
                 tunEstablished = true
                 notifyLog(this@LaLuneVpnService, "[VPN] TUN fd=${inherited.fd} ready; starting ToTS")
+                val coreTunReady = CompletableDeferred<Boolean>()
                 val started = coreManager.startCore(
                     protocol = CoreManager.PROTO_TOTS,
                     args = args,
                     onLog = { line ->
                         Log.i(TAG, line)
                         notifyLog(this@LaLuneVpnService, line, core = true)
+                        when {
+                            line.contains("ToTS Android TUN connected") -> coreTunReady.complete(true)
+                            line.contains("[CORE] process exited") || line.contains("Error:") -> coreTunReady.complete(false)
+                        }
                     },
                 )
                 if (!started) {
+                    try { fdServer.close() } catch (_: Exception) {}
                     notifyLog(this@LaLuneVpnService, "[VPN] ToTS process failed to start")
                     tunEstablished = false
                     try { inherited.close() } catch (_: Exception) {}
@@ -506,8 +526,51 @@ class LaLuneVpnService : VpnService() {
                     vpnInterface = null
                     return@withLock false
                 }
-                Log.i(TAG, "ToTS TUN up: IP=$tunIP MTU=$tunMtu fd=${inherited.fd}")
-                notifyLog(this@LaLuneVpnService, "[VPN] ToTS started; TUN up IP=$tunIP MTU=$tunMtu")
+                val handedOff = try {
+                    val acceptJob = scope.async(Dispatchers.IO) { fdServer.accept() }
+                    val client = withTimeoutOrNull(15_000) { acceptJob.await() }
+                    if (client == null) {
+                        try { fdServer.close() } catch (_: Exception) {}
+                        acceptJob.cancel()
+                        throw IOException("ToTS did not request the TUN descriptor within 15 seconds")
+                    }
+                    client.use { socket ->
+                        socket.setFileDescriptorsForSend(arrayOf(inherited.fileDescriptor))
+                        // Android attaches SCM_RIGHTS descriptors to the next write.
+                        socket.outputStream.write(1)
+                        socket.outputStream.flush()
+                    }
+                    true
+                } catch (e: Exception) {
+                    Log.e(TAG, "ToTS TUN fd handoff failed: ${e.message}", e)
+                    notifyLog(this@LaLuneVpnService, "[VPN] ToTS TUN fd handoff failed: ${e.message.orEmpty()}")
+                    false
+                } finally {
+                    try { fdServer.close() } catch (_: Exception) {}
+                }
+                if (!handedOff) {
+                    coreManager.stopCore()
+                    tunEstablished = false
+                    try { inherited.close() } catch (_: Exception) {}
+                    totsTunFd = null
+                    try { iface.close() } catch (_: Exception) {}
+                    vpnInterface = null
+                    return@withLock false
+                }
+                notifyLog(this@LaLuneVpnService, "[VPN] TUN descriptor transferred; waiting for ToTS to confirm epoll readiness")
+                val ready = withTimeoutOrNull(15_000) { coreTunReady.await() } == true
+                if (!ready) {
+                    notifyLog(this@LaLuneVpnService, "[VPN] ToTS did not confirm TUN readiness")
+                    coreManager.stopCore()
+                    tunEstablished = false
+                    try { inherited.close() } catch (_: Exception) {}
+                    totsTunFd = null
+                    try { iface.close() } catch (_: Exception) {}
+                    vpnInterface = null
+                    return@withLock false
+                }
+                Log.i(TAG, "ToTS TUN up and epoll-ready: IP=$tunIP MTU=$tunMtu fd=${inherited.fd}")
+                notifyLog(this@LaLuneVpnService, "[VPN] ToTS TUN connected; IP=$tunIP MTU=$tunMtu")
                 updateNotification()
                 return@withLock true
             }
