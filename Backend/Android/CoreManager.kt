@@ -80,6 +80,10 @@ class CoreManager(private val context: Context) {
         private val STATS_RE = Pattern.compile(
             "\\[СТАТИСТИКА\\]\\s*Активных:\\s*(\\d+)\\s*\\|\\s*Трафи[кф]+:\\s*([\\d.]+)"
         )
+        private val ANSI_RE = Regex("\u001B\\[[0-9;]*[a-zA-Z]")
+        private val TOTS_ACTIVE_RE = Regex("""active(?:[_\s]+(?:workers|sessions|conns|connections|streams))?\s*[:=]\s*(\d+)""", RegexOption.IGNORE_CASE)
+        private val TOTS_WORKERS_RE = Regex("""workers\s*[:=]\s*(\d+)\s*/\s*\d+""", RegexOption.IGNORE_CASE)
+        private val TOTS_TRAFFIC_RE = Regex("""(?:traffic|total|bytes|rx\+tx)[^\d]*([\d.]+)\s*(mb|mib|kb|kib|gb|gib)?""", RegexOption.IGNORE_CASE)
     }
 
     private val appDir = File(context.filesDir, "la-lune").apply { mkdirs() }
@@ -378,7 +382,7 @@ class CoreManager(private val context: Context) {
                     var line: String?
                     while (reader.readLine().also { line = it } != null) {
                         val l = line ?: continue
-                        val safe = LogRedactor.redact(l)
+                        val safe = LogRedactor.redact(stripAnsi(l))
                         try { logsFile.appendText(safe + "\n") } catch (_: Exception) {}
                         onLog(safe)
                     }
@@ -557,7 +561,7 @@ class CoreManager(private val context: Context) {
         }
         return null
     }
-
+fun stripAnsi(line: String): String = ANSI_RE.replace(line, "")
     fun parseStats(line: String): Pair<Int, Double>? {
         STATS_RE.matcher(line).let { m ->
             if (m.find()) {
@@ -565,6 +569,22 @@ class CoreManager(private val context: Context) {
                 val traffic = m.group(2).toDoubleOrNull() ?: 0.0
                 return active to traffic
             }
+        }
+        val m = TOTS_ACTIVE_RE.find(line) ?: TOTS_WORKERS_RE.find(line)
+        if (m != null) {
+            val active = m.groupValues[1].toIntOrNull() ?: return null
+            val trafficMatch = TOTS_TRAFFIC_RE.find(line)
+            val trafficMb = if (trafficMatch != null) {
+               val value = trafficMatch.groupValues[1].toDoubleOrNull() ?: 0.0
+               when (trafficMatch.groupValues[2].lowercase()) {
+                   "kb", "kib" -> value / 1024.0
+                   "gb", "gib" -> value * 1024.0
+                   else -> value
+               }
+               } else {
+                0.0
+            }
+            return active to trafficMb
         }
         return null
     }
