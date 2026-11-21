@@ -326,6 +326,7 @@ class SubscriptionsNotifier extends StateNotifier<SubscriptionsState> {
         final generation = _connectionGeneration;
         final j = await _ref.read(apiClientProvider).getJson('/vpn/stats');
         if (!mounted || generation != _connectionGeneration) return;
+        if (j['trafficAvailable'] == false) return;
         final currentVpn = _ref.read(vpnProvider);
         if (!currentVpn.connected ||
             (configId > 0 && currentVpn.configId != configId)) return;

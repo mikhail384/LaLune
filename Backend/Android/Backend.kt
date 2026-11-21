@@ -98,9 +98,7 @@ class Backend(private val context: Context) {
     private val activeCallIds = CopyOnWriteArrayList<String>()
     private var httpServer: ServerSocket? = null
 
-    @Volatile private var lastStatsAt = 0L
-    @Volatile private var lastRx = 0L
-    @Volatile private var lastTx = 0L
+    private val trafficRates = TrafficRates()
 
     @Volatile private var running = false
     @Volatile private var vpnConnected = false
@@ -491,35 +489,18 @@ class Backend(private val context: Context) {
 
                 path == "/vpn/connect" && method == "POST" -> vpnConnect(body)
                 path == "/vpn/disconnect" && method == "POST" -> vpnDisconnect()
-                path == "/vpn/status" && method == "GET" -> 200 to jsonOk(
-                    "state" to vpnState,
-                    "connected" to vpnConnected, "uptimeSec" to 0,
-                    "configId" to LaLuneVpnService.snapshotConfigId, "message" to vpnMessage, "since" to "",
-                    "socks5Port" to socks5Port
-                )
+                path == "/vpn/status" && method == "GET" -> 200 to vpnTraffic().apply {
+                    put("state", vpnState)
+                    put("connected", vpnConnected)
+                    put("uptimeSec", 0)
+                    put("configId", LaLuneVpnService.snapshotConfigId)
+                    put("message", vpnMessage)
+                    put("since", "")
+                }.toString()
                 path == "/vpn/reconnect" && method == "POST" -> {
                     vpnDisconnect(); Thread.sleep(300); vpnConnect("{}")
                 }
-                path == "/vpn/stats" && method == "GET" -> {
-                    // Real counters from the TUN bridge, rates from the delta
-                    // between two consecutive calls.
-                    val sessionBefore = LaLuneVpnService.snapshotSessionId
-                    val rx = LaLuneVpnService.tunRxBytes.get()
-                    val tx = LaLuneVpnService.tunTxBytes.get()
-                    val sessionAfter = LaLuneVpnService.snapshotSessionId
-                    val now = System.currentTimeMillis()
-                    val dt = (now - lastStatsAt).coerceAtLeast(1)
-                    val rxRate = if (lastStatsAt > 0 && rx >= lastRx) (rx - lastRx) * 1000 / dt else 0L
-                    val txRate = if (lastStatsAt > 0 && tx >= lastTx) (tx - lastTx) * 1000 / dt else 0L
-                    lastStatsAt = now; lastRx = rx; lastTx = tx
-                    200 to jsonOk(
-                        "rxBytes" to rx, "txBytes" to tx,
-                        "sessionId" to if (sessionBefore == sessionAfter) sessionBefore else "",
-                        "rxRate" to rxRate, "txRate" to txRate,
-                        "activeSessions" to if (vpnConnected) LaLuneVpnService.snapshotActiveSessions else 0,
-                        "socks5Port" to socks5Port
-                    )
-                }
+                path == "/vpn/stats" && method == "GET" -> 200 to vpnTraffic().toString()
                 path == "/vpn/tunconf" && method == "GET" -> 200 to "{}"
 
                 path == "/logs" && method == "GET" ->
@@ -1971,6 +1952,31 @@ class Backend(private val context: Context) {
                 Triple(callId, hash, 0)
             }
         } catch (_: Exception) { Triple("", "", -1) }
+    }
+
+    @Synchronized
+    private fun vpnTraffic(): JSONObject {
+        val session = LaLuneVpnService.snapshotSessionId
+        val sample = LaLuneVpnService.trafficBytes()
+        val stable = session.isNotEmpty() && session == LaLuneVpnService.snapshotSessionId
+        val available = stable && sample != null
+        val bytes = if (available) requireNotNull(sample) else TunnelBytes(0, 0)
+        val rates = trafficRates.sample(
+            if (available) session else "",
+            android.os.SystemClock.elapsedRealtime(),
+            bytes,
+        )
+        val connected = vpnConnected
+        return JSONObject().apply {
+            put("trafficAvailable", available)
+            put("sessionId", if (stable) session else "")
+            put("rxBytes", bytes.rx)
+            put("txBytes", bytes.tx)
+            put("rxRate", if (connected) rates.rx else 0L)
+            put("txRate", if (connected) rates.tx else 0L)
+            put("activeSessions", if (connected) LaLuneVpnService.snapshotActiveSessions else 0)
+            put("socks5Port", socks5Port)
+        }
     }
 
     private fun jsonOk(vararg pairs: Pair<String, Any?>): String {

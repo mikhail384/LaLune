@@ -94,6 +94,12 @@ class LaLuneVpnService : VpnService() {
          */
         val tunTxBytes = java.util.concurrent.atomic.AtomicLong(0)
         val tunRxBytes = java.util.concurrent.atomic.AtomicLong(0)
+        @Volatile private var usesNativeTun = false
+        @Volatile private var nativeTraffic: NativeTunTraffic? = null
+
+        internal fun trafficBytes(): TunnelBytes? =
+            if (usesNativeTun) nativeTraffic?.read()
+            else TunnelBytes(tunRxBytes.get(), tunTxBytes.get())
 
         @Volatile var snapshotConnected: Boolean = false
         @Volatile var snapshotActiveSessions: Int = 0
@@ -177,6 +183,8 @@ class LaLuneVpnService : VpnService() {
         // Empty during counter reset, so a concurrent reader cannot associate
         // a previous session ID with the next session's counters.
         snapshotSessionId = ""
+        usesNativeTun = false
+        nativeTraffic = null
         tunTxBytes.set(0)
         tunRxBytes.set(0)
         snapshotSessionId = java.util.UUID.randomUUID().toString()
@@ -191,6 +199,7 @@ class LaLuneVpnService : VpnService() {
                 null
             }
             if (totsRuntime != null) {
+                usesNativeTun = true
                 notifyLog(this@LaLuneVpnService, "[VPN] ToTS runtime loaded; creating TUN")
                 establishing = true
                 val established = establishTun()
@@ -501,6 +510,7 @@ class LaLuneVpnService : VpnService() {
                 tunnelGeneration++
                 vpnInterface = iface
                 totsTunFd = inherited
+                nativeTraffic = NativeTunTraffic.forAddress(tunIP)
                 tunEstablished = true
                 notifyLog(this@LaLuneVpnService, "[VPN] TUN fd=${inherited.fd} ready; starting ToTS")
                 val coreTunReady = CompletableDeferred<Boolean>()
@@ -517,6 +527,7 @@ class LaLuneVpnService : VpnService() {
                     },
                 )
                 if (!started) {
+                    nativeTraffic?.finish()
                     try { fdServer.close() } catch (_: Exception) {}
                     notifyLog(this@LaLuneVpnService, "[VPN] ToTS process failed to start")
                     tunEstablished = false
@@ -549,6 +560,7 @@ class LaLuneVpnService : VpnService() {
                     try { fdServer.close() } catch (_: Exception) {}
                 }
                 if (!handedOff) {
+                    nativeTraffic?.finish()
                     coreManager.stopCore()
                     tunEstablished = false
                     try { inherited.close() } catch (_: Exception) {}
@@ -560,6 +572,7 @@ class LaLuneVpnService : VpnService() {
                 notifyLog(this@LaLuneVpnService, "[VPN] TUN descriptor transferred; waiting for ToTS to confirm epoll readiness")
                 val ready = withTimeoutOrNull(15_000) { coreTunReady.await() } == true
                 if (!ready) {
+                    nativeTraffic?.finish()
                     notifyLog(this@LaLuneVpnService, "[VPN] ToTS did not confirm TUN readiness")
                     coreManager.stopCore()
                     tunEstablished = false
@@ -658,6 +671,7 @@ class LaLuneVpnService : VpnService() {
         }
         tunnelGeneration++
         tunEstablished = false
+        nativeTraffic?.finish()
         bridgeJobs.forEach { it.cancel() }
         bridgeJobs.clear()
         try { udpSocket?.close() } catch (_: Exception) {}
@@ -679,6 +693,7 @@ class LaLuneVpnService : VpnService() {
 
         tunnelGeneration++
         tunEstablished = false
+        nativeTraffic?.finish()
         bridgeJobs.forEach { it.cancel() }
         bridgeJobs.clear()
         try { udpSocket?.close() } catch (_: Exception) {}

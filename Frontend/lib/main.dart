@@ -34,14 +34,17 @@ import 'pages/logs_page.dart';
 import 'pages/settings_page.dart';
 import 'state/configs_notifier.dart';
 import 'theme/app_theme.dart';
+import 'theme/cached_glass.dart';
 import 'widgets/navbar.dart';
 import 'widgets/router_banner.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   startFrameMetrics();
+  final preferCachedGlass = CachedGlassBackdrop.isPreferred();
   await ApiClient.initializeLocalPort();
-  runApp(const ProviderScope(child: LaLuneApp()));
+  final cachedGlass = await preferCachedGlass;
+  runApp(ProviderScope(child: LaLuneApp(cachedGlass: cachedGlass)));
 }
 
 class _NoStretchScrollBehavior extends MaterialScrollBehavior {
@@ -58,7 +61,9 @@ class _NoStretchScrollBehavior extends MaterialScrollBehavior {
 }
 
 class LaLuneApp extends StatelessWidget {
-  const LaLuneApp({super.key});
+  const LaLuneApp({super.key, this.cachedGlass = false});
+
+  final bool cachedGlass;
 
   @override
   Widget build(BuildContext context) {
@@ -67,28 +72,48 @@ class LaLuneApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: buildAppTheme(),
       scrollBehavior: const _NoStretchScrollBehavior(),
-      home: const RootShell(),
+      home: RootShell(cachedGlass: cachedGlass),
     );
   }
 }
 
 class RootShell extends ConsumerStatefulWidget {
-  const RootShell({super.key});
+  const RootShell({super.key, this.cachedGlass = false});
+
+  final bool cachedGlass;
 
   @override
   ConsumerState<RootShell> createState() => _RootShellState();
 }
 
-class _RootShellState extends ConsumerState<RootShell> {
+class _RootShellState extends ConsumerState<RootShell>
+    with SingleTickerProviderStateMixin {
   static const _pageTransitionDuration = Duration(milliseconds: 280);
 
   int _currentPage = 0;
   late final PageController _pageController;
+  TabController? _tabController;
+  late final _pages = [
+    _RetainedPage(
+      key: const ValueKey('connection'),
+      child: ConnectionPage(onReload: _reloadConnection),
+    ),
+    const _RetainedPage(key: ValueKey('settings'), child: SettingsPage()),
+    const _RetainedPage(key: ValueKey('info'), child: InfoPage()),
+    const _RetainedPage(key: ValueKey('logs'), child: LogsPage()),
+  ];
 
   @override
   void initState() {
     super.initState();
     _pageController = PageController();
+    if (widget.cachedGlass) {
+      _tabController = TabController(
+        length: _pages.length,
+        vsync: this,
+        animationDuration: const Duration(milliseconds: 260),
+      );
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(backendWatchdogProvider);
     });
@@ -96,6 +121,7 @@ class _RootShellState extends ConsumerState<RootShell> {
 
   @override
   void dispose() {
+    _tabController?.dispose();
     _pageController.dispose();
     super.dispose();
   }
@@ -105,13 +131,19 @@ class _RootShellState extends ConsumerState<RootShell> {
   void _reloadConnection() {}
 
   void _onNavSelect(int i) {
+    final tabs = _tabController;
+    if (tabs != null) {
+      tabs.animateTo(i);
+      return;
+    }
     if (i == _currentPage || i < 0 || i >= 4) return;
     setState(() => _currentPage = i);
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
-      // Sliding four backdrop-heavy pages at once is noticeably expensive on
-      // mobile GPUs. Android gets an immediate tab switch; desktop keeps the
-      // animated transition.
-      _pageController.animateToPage(i, duration: const Duration(milliseconds: 260), curve: Curves.easeOutCubic);
+      _pageController.animateToPage(
+        i,
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
+      );
     } else {
       _pageController.animateToPage(
         i,
@@ -132,78 +164,79 @@ class _RootShellState extends ConsumerState<RootShell> {
       }
     });
 
-    return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          image: DecorationImage(
-            image: AssetImage('assets/background.png'),
-            fit: BoxFit.cover,
-          ),
-        ),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                kAccent.withOpacity(0.18),
-                Colors.transparent,
-                kAccentRed.withOpacity(0.14),
-              ],
-              stops: const [0, 0.52, 1],
-            ),
-          ),
-          child: BackdropGroup(
-            child: SafeArea(
-              child: Column(
-                children: [
-                  // Глобальный зелёный баннер, если подключены к OpenWRT-роутеру.
-                  const RouterBanner(),
-                  if (backendStatus == BackendStatus.dead)
-                    _BackendOfflineBanner(),
-                  Expanded(
-                    child: RepaintBoundary(
-                      child: PageView(
-                        controller: _pageController,
-                        physics: const PageScrollPhysics(
-                          parent: ClampingScrollPhysics(),
+    const wallpaper = AssetImage('assets/background.png');
+    final tint = LinearGradient(
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+      colors: [
+        kAccent.withOpacity(0.18),
+        Colors.transparent,
+        kAccentRed.withOpacity(0.14),
+      ],
+      stops: const [0, 0.52, 1],
+    );
+    final tabs = _tabController;
+    const physics = PageScrollPhysics(parent: ClampingScrollPhysics());
+    final content = BackdropGroup(
+      child: SafeArea(
+        child: Column(
+          children: [
+            // Глобальный зелёный баннер, если подключены к OpenWRT-роутеру.
+            const RouterBanner(),
+            if (backendStatus == BackendStatus.dead) _BackendOfflineBanner(),
+            Expanded(
+              child: RepaintBoundary(
+                child:
+                    tabs == null
+                        ? PageView(
+                          controller: _pageController,
+                          physics: physics,
+                          onPageChanged: (i) {
+                            if (_currentPage != i) {
+                              setState(() => _currentPage = i);
+                            }
+                          },
+                          children: _pages,
+                        )
+                        : TabBarView(
+                          controller: tabs,
+                          physics: physics,
+                          children: _pages,
                         ),
-                        onPageChanged: (i) {
-                          if (_currentPage != i) {
-                            setState(() => _currentPage = i);
-                          }
-                        },
-                        children: [
-                          _RetainedPage(
-                            key: const ValueKey('connection'),
-                            child: ConnectionPage(onReload: _reloadConnection),
-                          ),
-                          const _RetainedPage(
-                            key: ValueKey('settings'),
-                            child: SettingsPage(),
-                          ),
-                          const _RetainedPage(
-                            key: ValueKey('info'),
-                            child: InfoPage(),
-                          ),
-                          const _RetainedPage(
-                            key: ValueKey('logs'),
-                            child: LogsPage(),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  NavBar(
-                    currentIndex: _currentPage,
-                    onSelect: _onNavSelect,
-                  ),
-                ],
               ),
             ),
-          ),
+            if (tabs == null)
+              NavBar(currentIndex: _currentPage, onSelect: _onNavSelect)
+            else
+              ListenableBuilder(
+                listenable: tabs,
+                builder:
+                    (_, _) => NavBar(
+                      currentIndex: tabs.index,
+                      onSelect: _onNavSelect,
+                    ),
+              ),
+          ],
         ),
       ),
+    );
+    return Scaffold(
+      body:
+          widget.cachedGlass
+              ? CachedGlassBackdrop(
+                wallpaper: wallpaper,
+                tint: tint,
+                child: content,
+              )
+              : DecoratedBox(
+                decoration: const BoxDecoration(
+                  image: DecorationImage(image: wallpaper, fit: BoxFit.cover),
+                ),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(gradient: tint),
+                  child: content,
+                ),
+              ),
     );
   }
 }

@@ -6,6 +6,7 @@ class VpnStatus {
   final int uptimeSec;
   final int configId;
   final String message;
+  final bool trafficAvailable;
   final int rxBytes;
   final int txBytes;
   final int rxRate;
@@ -25,6 +26,7 @@ class VpnStatus {
     this.uptimeSec = 0,
     this.configId = 0,
     this.message = '',
+    this.trafficAvailable = true,
     this.rxBytes = 0,
     this.txBytes = 0,
     this.rxRate = 0,
@@ -45,6 +47,7 @@ class VpnStatus {
         uptimeSec: ((j['uptimeSec'] ?? 0) as num).toInt(),
         configId: ((j['configId'] ?? 0) as num).toInt(),
         message: (j['message'] ?? '') as String,
+        trafficAvailable: j['trafficAvailable'] != false,
         rxBytes: ((j['rxBytes'] ?? 0) as num).toInt(),
         txBytes: ((j['txBytes'] ?? 0) as num).toInt(),
         rxRate: ((j['rxRate'] ?? 0) as num).toInt(),
@@ -65,6 +68,7 @@ class VpnStatus {
     int? uptimeSec,
     int? configId,
     String? message,
+    bool? trafficAvailable,
     int? rxBytes,
     int? txBytes,
     int? rxRate,
@@ -84,6 +88,7 @@ class VpnStatus {
         uptimeSec: uptimeSec ?? this.uptimeSec,
         configId: configId ?? this.configId,
         message: message ?? this.message,
+        trafficAvailable: trafficAvailable ?? this.trafficAvailable,
         rxBytes: rxBytes ?? this.rxBytes,
         txBytes: txBytes ?? this.txBytes,
         rxRate: rxRate ?? this.rxRate,
