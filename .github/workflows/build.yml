@@ -682,10 +682,33 @@ jobs:
         working-directory: Frontend
         run: flutter pub run flutter_launcher_icons
   
+      - name: Restore Android debug keystore
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: lalune-android-debug-keystore-v1
+
+      - name: Ensure persistent Android debug keystore
+        shell: bash
+        run: |
+          if [ ! -f ~/.android/debug.keystore ]; then
+            mkdir -p ~/.android
+            keytool -genkeypair -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          
       - name: Build Android APK (debug)
         working-directory: Frontend
         run: flutter build apk --debug --build-number=${{ github.run_number }}
 
+      - name: Align, sign & verify debug APK
+        shell: bash
+        run: |
+          BT_DIR=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)
+          "$BT_DIR/zipalign" -f -p 4 Frontend/build/app/outputs/flutter-apk/app-debug.apk Frontend/build/app/outputs/flutter-apk/app-debug-aligned.apk && mv Frontend/build/app/outputs/flutter-apk/app-debug-aligned.apk Frontend/build/app/outputs/flutter-apk/app-debug.apk
+          "$BT_DIR/apksigner" sign --ks ~/.android/debug.keystore --ks-pass pass:android --ks-key-alias androiddebugkey --key-pass pass:android --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true Frontend/build/app/outputs/flutter-apk/app-debug.apk
+          "$BT_DIR/apksigner" verify --verbose --print-certs Frontend/build/app/outputs/flutter-apk/app-debug.apk
+          "$BT_DIR/aapt2" dump badging Frontend/build/app/outputs/flutter-apk/app-debug.apk | head -n 40
+          
       - name: Verify csqtt-link in APK
         shell: bash
         run: |
