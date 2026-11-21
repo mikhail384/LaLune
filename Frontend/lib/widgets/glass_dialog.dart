@@ -7,19 +7,20 @@ import 'package:flutter/material.dart';
 
 double _dialogBlurSigma() {
   if (kIsWeb) return 14.0;
-  return defaultTargetPlatform == TargetPlatform.android ? 16.0 : 18.0;
+  return defaultTargetPlatform == TargetPlatform.android ? 0.0 : 18.0;
 }
 
 BoxDecoration _dialogGlassDecoration(
   BorderRadius borderRadius,
   Color? requested,
 ) {
-  final baseTop = requested != null
+  final isAndroid = !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+  final baseTop = isAndroid ? (requested?.withOpacity(0.88) ?? const Color(0xFF0B2118).withOpacity(0.90)) : (requested != null
       ? requested.withOpacity(0.54)
-      : const Color(0xFF0B2118).withOpacity(0.56);
-  final baseBottom = requested != null
+      : const Color(0xFF0B2118).withOpacity(0.56));
+  final baseBottom = isAndroid ? (requested?.withOpacity(0.84) ?? const Color(0xFF07160F).withOpacity(0.86)) : (requested != null
       ? requested.withOpacity(0.46)
-      : const Color(0xFF07160F).withOpacity(0.48);
+      : const Color(0xFF07160F).withOpacity(0.48));
 
   return BoxDecoration(
     gradient: LinearGradient(
@@ -29,7 +30,7 @@ BoxDecoration _dialogGlassDecoration(
     ),
     borderRadius: borderRadius,
     border: Border.all(color: Colors.white.withOpacity(0.18), width: 1),
-    boxShadow: [
+    boxShadow: isAndroid ? null : [
       BoxShadow(
         color: Colors.black.withOpacity(0.38),
         blurRadius: 28,
@@ -46,16 +47,11 @@ Widget _glassLayer(
   Color? backgroundColor,
 }) {
   final blur = _dialogBlurSigma();
-  final filter = ImageFilter.blur(
-    sigmaX: blur,
-    sigmaY: blur,
-    tileMode: TileMode.clamp,
-  );
   final surface = DecoratedBox(
     decoration: _dialogGlassDecoration(borderRadius, backgroundColor),
     child: child,
   );
-  return RepaintBoundary(
+  if (blur <= 0) { return RepaintBoundary(child: ClipRRect(borderRadius: borderRadius, child: surface)); } final filter = ImageFilter.blur(sigmaX: blur, sigmaY: blur, tileMode: TileMode.clamp); return RepaintBoundary(
     child: ClipRRect(
       borderRadius: borderRadius,
       child: BackdropFilter(
