@@ -4,7 +4,7 @@
 
 Кроссплатформенный VPN-клиент для протокола **CSQTT**. Единый Flutter UI,
 платформенные бэкенды на Rust / Kotlin / Swift, поддержка десктопа,
-мобильных устройств и OpenWRT-роутеров.
+мобильных устройств и роутеров OpenWRT / KeeneticOS.
 
 ## Что это
 
@@ -23,6 +23,7 @@ VK Calls, TURN используется для обхода NAT, WRAP — для
 | Android | ✅ | Flutter + Kotlin + VpnService | `libclient-android-*.so` |
 | iOS 17+ | ✅ | Flutter + Swift + NetworkExtension | `csqtt-core` (static lib) |
 | OpenWRT | ✅ | Rust (axum) + `lalune0` + policy routing | встроенные CSQTT / CSQTTR / CSQTT 2.1.9 |
+| KeeneticOS | ✅ | Rust (axum) + Entware (OPKG) + `lalune0` | встроенные CSQTT / CSQTTR / CSQTT 2.1.9 |
 
 ## Быстрая установка
 
@@ -71,6 +72,18 @@ wget -O - https://raw.githubusercontent.com/Endlad2/LaLune/main/Installer/openwr
 статистика и логи. LuCI обращается к локальному API через rpcd/ubus.
 Мобильный и desktop-клиенты продолжают управлять тем же API на TCP/1062.
 CSQTT, CSQTTR и CSQTT 2.1.9 уже встроены в backend.
+
+### KeeneticOS (KN-3012 Speedster, Hopper, Giga, Titan, Viva, Ultra)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/mikhail384/LaLune/feature/keenetic-openwrt-router-support/Installer/keenetic.sh | sh
+```
+
+Что делает: определяет архитектуру процессора (MIPS `ramips` для KN-3012 Speedster, ARM для Titan/Ultra),
+проверяет модули Entware, загружает оптимизированный бинарник, создает сервис автозапуска `/opt/etc/init.d/S99lalune`
+и запускает автономный веб-интерфейс на порту `http://192.168.1.1:1062/panel`.
+Подробное руководство (включая настройку моделей без USB во внутреннюю память): [README-KEENETIC.md](Installer/README-KEENETIC.md).
+
 
 ### Android
 
