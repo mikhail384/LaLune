@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 
 /// Общий стиль "стеклянной" карточки – полупрозрачный градиент + рамка + мягкая тень.
 BoxDecoration glassCard({double radius = 14, double opacity = 0.08}) {
@@ -18,7 +19,7 @@ BoxDecoration glassCard({double radius = 14, double opacity = 0.08}) {
     ),
     borderRadius: BorderRadius.circular(radius),
     border: Border.all(color: Colors.white.withOpacity(0.14), width: 1),
-    boxShadow: [
+    boxShadow: (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) ? null : [
       BoxShadow(
         color: Colors.black.withOpacity(0.24),
         blurRadius: 20,
