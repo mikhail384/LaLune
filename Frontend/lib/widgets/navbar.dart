@@ -6,7 +6,7 @@ import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
 import '../theme/assets.dart';
-import '../theme/ui_effects.dart';
+import '../theme/cached_glass.dart';
 
 class NavBar extends StatelessWidget {
   final int currentIndex;
@@ -57,8 +57,11 @@ class NavBar extends StatelessWidget {
       ),
     );
 
-    Widget surface = bar;
-    if (!UiEffects.reduceEffectsOf(context)) {
+    final sample = CachedGlassBackdrop.sample(context, 16, fixed: true);
+    Widget surface;
+    if (sample != null) {
+      surface = Stack(children: [Positioned.fill(child: sample), bar]);
+    } else {
       final filter = ImageFilter.blur(
         sigmaX: 16,
         sigmaY: 16,

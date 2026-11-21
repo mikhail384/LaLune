@@ -93,7 +93,7 @@ class MainActivity : FlutterActivity() {
         methodChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
                 "getApiPort" -> result.success(apiPort)
-                "preferReducedEffects" -> {
+                "preferCachedGlass" -> {
                     val activityManager = getSystemService(ActivityManager::class.java)
                     result.success(
                         Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||

@@ -5,7 +5,7 @@ import 'dart:ui';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
-import '../theme/ui_effects.dart';
+import '../theme/cached_glass.dart';
 
 class GlassCard extends StatelessWidget {
   final Widget child;
@@ -28,7 +28,6 @@ class GlassCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final borderRadius = BorderRadius.circular(radius);
-    final reduceEffects = UiEffects.reduceEffectsOf(context);
     final topAlpha = (0.38 + opacity * 0.45).clamp(0.0, 0.65);
     final bottomAlpha = (0.28 + opacity * 0.35).clamp(0.0, 0.58);
 
@@ -75,8 +74,16 @@ class GlassCard extends StatelessWidget {
             : blur;
 
     Widget body;
-    if (reduceEffects || effectiveBlur <= 0) {
+    final sample = CachedGlassBackdrop.sample(context, effectiveBlur);
+    if (effectiveBlur <= 0) {
       body = surface;
+    } else if (sample != null) {
+      // The wallpaper follows the screen, but the text and controls follow
+      // the card. Cache their painting separately as the card scrolls.
+      body = Stack(children: [
+        Positioned.fill(child: sample),
+        RepaintBoundary(child: surface),
+      ]);
     } else {
       final filter = ImageFilter.blur(
         sigmaX: effectiveBlur,
@@ -88,11 +95,10 @@ class GlassCard extends StatelessWidget {
           : BackdropFilter.grouped(filter: filter, child: surface);
     }
 
-    return RepaintBoundary(
-      child: ClipRRect(
-        borderRadius: borderRadius,
-        child: body,
-      ),
+    final card = ClipRRect(
+      borderRadius: borderRadius,
+      child: body,
     );
+    return sample == null ? RepaintBoundary(child: card) : card;
   }
 }
