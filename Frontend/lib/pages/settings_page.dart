@@ -753,14 +753,19 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           ),
           const SizedBox(width: 8),
           SizedBox(
-            width: 64,
+            width: 84,
             child: TextField(
               controller: controller,
               readOnly: !active,
               onTap: active ? null : () => _missingTotsProviderData(provider),
               keyboardType: TextInputType.number,
               textAlign: TextAlign.center,
-              decoration: const InputDecoration(isDense: true, suffixText: '%'),
+              style: const TextStyle(fontSize: 14),
+              decoration: const InputDecoration(
+                isDense: true,
+                suffixText: '%',
+                contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+              ),
               onChanged: (raw) {
                 final parsed = int.tryParse(raw);
                 if (parsed != null) onChanged(parsed.clamp(0, 100).toInt());

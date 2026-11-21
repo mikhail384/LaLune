@@ -286,9 +286,19 @@ fn build_tots_args(config: &ConfigItem, settings: &Settings) -> Result<Vec<Strin
             if let Some(value) = parse_json_object(raw) { provider_data.insert(name.into(), value); }
         }
     }
-    if settings.tots_jazz_enabled && !settings.tots_jazz_room_name.trim().is_empty() {
+    if settings.tots_jazz_enabled {
         if let Some(Value::Object(jazz)) = provider_data.get_mut("jazz") {
-            jazz.insert("room_name".into(), Value::String(settings.tots_jazz_room_name.trim().to_string()));
+            let workers = settings.tots_workers.clamp(1, 256);
+            let provisioned = jazz.get("worker_count")
+                .and_then(Value::as_i64)
+                .unwrap_or(0)
+                .clamp(0, 256) as i32;
+            if provisioned < workers {
+                jazz.insert("worker_count".into(), Value::from(workers));
+            }
+            if !settings.tots_jazz_room_name.trim().is_empty() {
+                jazz.insert("room_name".into(), Value::String(settings.tots_jazz_room_name.trim().to_string()));
+            }
         }
     }
 

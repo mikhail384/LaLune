@@ -1556,6 +1556,9 @@ class Backend(private val context: Context) {
 
         if (settings.optBoolean("totsJazzEnabled", true) && providerData.has("jazz")) {
             val jazz = JSONObject((providerData.optJSONObject("jazz") ?: JSONObject()).toString())
+            val workers = settings.optInt("totsWorkers", 1).coerceIn(1, 256)
+            val provisioned = jazz.optInt("worker_count", 0)
+            if (provisioned < workers) jazz.put("worker_count", workers)
             val roomName = if (settings.optBoolean("totsJazzRandomName", true)) {
                 val names = listOf(
                     "Иван", "Владимир", "Алексей", "Михаил", "Александр", "Дмитрий",
