@@ -1193,7 +1193,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           child: ElevatedButton.icon(
             onPressed: _onOpenWrtTap,
             icon: const Icon(Icons.router, size: 16),
-            label: const Text('Подключить OpenWRT'),
+            label: const Text('Подключить роутер (OpenWRT / Keenetic)'),
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFF2FBF71),
               foregroundColor: Colors.white,
