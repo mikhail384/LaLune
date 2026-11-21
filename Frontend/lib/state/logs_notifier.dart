@@ -235,7 +235,12 @@ class LogsNotifier extends StateNotifier<LogsState> {
         tag == 'CSQTT' ||
         tag == 'LUA' ||
         tag == 'SMART-TUNNEL' ||
-        tag == 'WINTUN');
+        tag == 'WINTUN' ||
+                   tag == 'TOTS' ||
+                   tag == 'WEBRTC' ||
+                   tag == 'ICE' ||
+                   tag == 'DTLS' ||
+                   tag == 'SCTP');
   }
 
   Future<void> _refresh() async {
