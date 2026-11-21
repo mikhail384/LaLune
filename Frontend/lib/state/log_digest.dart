@@ -69,9 +69,12 @@ class _Rule {
 }
 
 final RegExp _digits = RegExp(r'\d+');
+final RegExp _ansi = RegExp(r'\x1B\[[0-9;]*[a-zA-Z]');
 
 final List<_Rule> _rules = [
   // --- шум ядра: отбрасываем полностью ---
+  _Rule(RegExp(r'\[ToTS\].*\b(candidate|stun|keepalive|heartbeat|trace|debug)\b', caseSensitive: false), null, DigestLevel.info, ''),
+  _Rule(RegExp(r'ToTS runtime loaded; creating TUN|TUN fd=\d+ ready; starting ToTS'), null, DigestLevel.info, ''),
   _Rule(RegExp(r'\[TURN\]'), null, DigestLevel.info, ''),
   _Rule(RegExp(r'\[СЕССИЯ #?\d+\] (Relay:|\[DIRECT\])'), null, DigestLevel.info, ''),
   _Rule(RegExp(r'\[СЕССИЯ #?\d+\] DTLS: (старт|полёт|рукопожатие)'), null,
@@ -92,9 +95,13 @@ final List<_Rule> _rules = [
       'limit', DigestLevel.error,
       'Сервер отклонил параметры потока (×{n}). Проверьте согласованное число Workers и версии клиента и сервера'),
 
-  _Rule(RegExp(r'\[BACKEND\] .*started'), 'backend', DigestLevel.ok,
+  _Rule(RegExp(r'ToTS runtime prepared'), 'tots_prep', DigestLevel.info, 'ToTS: подготовка туннеля'),
+        _Rule(RegExp(r'\[BACKEND\] .*started'), 'backend', DigestLevel.ok,
       'Backend запущен'),
-
+  _Rule(RegExp(r'ToTS process failed to start|Не удалось запустить ToTS|invalid ToTS runtime'), 'tots_err', DigestLevel.error, 'ToTS: ошибка запуска ядра'),
+    _Rule(RegExp(r'\[ToTS\].*\b(ready|connected|established)\b', caseSensitive: false), 'tots_ready', DigestLevel.ok, 'ToTS: активных подключений: {n}'),
+    _Rule(RegExp(r'\[ToTS\].*\b(reconnect|retry|timeout|closed|disconnected)\b', caseSensitive: false), 'tots_retry', DigestLevel.warn, 'ToTS: переподключение ×{n}'),
+    _Rule(RegExp(r'ToTS started; TUN up'), 'tots_up', DigestLevel.ok, 'ToTS: туннель запущен'),
   // --- события, которые стоит показать ---
   _Rule(RegExp(r'\[VK Auth\] Success|VKCalls\] SUCCESS'), 'vkauth', DigestLevel.ok,
       'VK: авторизация успешна'),
@@ -161,7 +168,8 @@ List<DigestEntry> digestLogs(List<String> raw,
 
   outer:
   for (var index = 0; index < raw.length; index++) {
-    final s = raw[index].trim();
+    final line = raw[index].replaceAll(_ansi, '');
+    final s = line.trim();
     if (s.isEmpty) continue;
     currentTime = (times != null && index < times.length) ? times[index] : '';
 
