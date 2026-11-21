@@ -843,7 +843,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
       onPressed: () => Toast.show(
         context,
-        'Jazz не требует VK-хешей: для комнаты используется её название, а transport data берутся из provider data.',
+        'Jazz требует отдельную заранее созданную сервером комнату на каждый ToTS Worker, даже как fallback. Для N Worker создай новый tots:// конфиг через API с provider_data.jazz.worker_count=N. Нельзя просто менять worker_count в готовом конфиге.',
         duration: const Duration(seconds: 5),
       ),
       icon: const Icon(Icons.error_outline, size: 19, color: Color(0xFF63E68B)),

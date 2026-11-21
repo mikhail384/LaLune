@@ -1467,6 +1467,45 @@ class Backend(private val context: Context) {
         return 200 to jsonOk("ok" to true, "status" to "connecting")
     }
 
+    private fun validateJazzWorkerCapacity(jazz: JSONObject, requestedWorkers: Int) {
+        val roomCount = if (jazz.has("worker_rooms")) {
+            val rooms = jazz.optJSONArray("worker_rooms")
+                ?: throw IllegalArgumentException("Jazz worker_rooms must be an array")
+            if (rooms.length() !in 1..50) {
+                throw IllegalArgumentException("Jazz worker_rooms must contain 1..50 server-provisioned rooms")
+            }
+            val declared = if (jazz.has("worker_count")) jazz.optInt("worker_count", -1) else rooms.length()
+            if (declared != rooms.length()) {
+                throw IllegalArgumentException("Jazz worker_count does not match worker_rooms (${rooms.length()} rooms)")
+            }
+            val links = HashSet<String>()
+            for (index in 0 until rooms.length()) {
+                val room = rooms.optJSONObject(index)
+                    ?: throw IllegalArgumentException("Jazz worker_rooms[$index] is invalid")
+                val joinLink = room.optString("join_link", "").trim()
+                val connectorUrl = room.optString("connector_url", "").trim()
+                if (joinLink.isEmpty() || connectorUrl.isEmpty() || !links.add(joinLink)) {
+                    throw IllegalArgumentException("Jazz worker_rooms[$index] is incomplete or duplicated")
+                }
+            }
+            rooms.length()
+        } else {
+            // A legacy Jazz invite is exactly one worker slot. A worker_count
+            // field without worker_rooms does not create server-side bridges.
+            if (jazz.optString("join_link", "").trim().isEmpty()) {
+                throw IllegalArgumentException("Jazz provider data has no server-provisioned join_link")
+            }
+            1
+        }
+        if (roomCount < requestedWorkers) {
+            throw IllegalArgumentException(
+                "Jazz has $roomCount provisioned room(s), but ToTS --n $requestedWorkers requires $requestedWorkers. " +
+                    "Create a new ToTS config through the server API with provider_data.jazz.worker_count=$requestedWorkers; " +
+                    "do not change worker_count manually."
+            )
+        }
+    }
+
     private fun buildTotsRuntime(rawLink: String, settings: JSONObject): JSONObject {
         // Keep the native Android core responsible for decoding/validating the
         // effective tots:// config. This tracks upstream ToTS more closely than
@@ -1557,8 +1596,7 @@ class Backend(private val context: Context) {
         if (settings.optBoolean("totsJazzEnabled", true) && providerData.has("jazz")) {
             val jazz = JSONObject((providerData.optJSONObject("jazz") ?: JSONObject()).toString())
             val workers = settings.optInt("totsWorkers", 1).coerceIn(1, 256)
-            val provisioned = jazz.optInt("worker_count", 0)
-            if (provisioned < workers) jazz.put("worker_count", workers)
+            validateJazzWorkerCapacity(jazz, workers)
             val roomName = if (settings.optBoolean("totsJazzRandomName", true)) {
                 val names = listOf(
                     "Иван", "Владимир", "Алексей", "Михаил", "Александр", "Дмитрий",
@@ -1567,7 +1605,7 @@ class Backend(private val context: Context) {
                 )
                 names[(System.nanoTime().ushr(4) % names.size).toInt()]
             } else settings.optString("totsJazzRoomName", "").trim()
-            if (roomName.isNotEmpty()) jazz.put("room_name", roomName)
+            if (roomName.isNotEmpty()) jazz.put("name", roomName)
             providerData.put("jazz", jazz)
         }
 

@@ -249,6 +249,46 @@ fn normalize_worker_percentages(entries: &[(&str, bool, i32, bool)]) -> Option<V
     Some(Value::Object(out))
 }
 
+fn validate_jazz_worker_capacity(data: &Value, requested_workers: usize) -> Result<()> {
+    let jazz = data.as_object().ok_or_else(|| anyhow!("Jazz provider_data must be an object"))?;
+    let room_count = if let Some(value) = jazz.get("worker_rooms") {
+        let rooms = value.as_array().ok_or_else(|| anyhow!("Jazz worker_rooms must be an array"))?;
+        if rooms.is_empty() || rooms.len() > 50 {
+            return Err(anyhow!("Jazz worker_rooms must contain 1..=50 server-provisioned rooms"));
+        }
+        if let Some(count) = jazz.get("worker_count") {
+            if count.as_u64() != Some(rooms.len() as u64) {
+                return Err(anyhow!("Jazz worker_count does not match worker_rooms ({} rooms)", rooms.len()));
+            }
+        }
+        let mut links = std::collections::HashSet::new();
+        for (index, room) in rooms.iter().enumerate() {
+            let object = room.as_object().ok_or_else(|| anyhow!("Jazz worker_rooms[{}] is invalid", index))?;
+            let join_link = object.get("join_link").and_then(Value::as_str).unwrap_or("").trim();
+            let connector = object.get("connector_url").and_then(Value::as_str).unwrap_or("").trim();
+            if join_link.is_empty() || connector.is_empty() || !links.insert(join_link) {
+                return Err(anyhow!("Jazz worker_rooms[{}] is incomplete or duplicated", index));
+            }
+        }
+        rooms.len()
+    } else {
+        // A legacy invite provides one slot. worker_count alone is only a
+        // provisioning request and cannot manufacture server-side bridges.
+        if jazz.get("join_link").and_then(Value::as_str).unwrap_or("").trim().is_empty() {
+            return Err(anyhow!("Jazz provider_data has no server-provisioned join_link"));
+        }
+        1
+    };
+
+    if room_count < requested_workers {
+        return Err(anyhow!(
+            "Jazz has {} provisioned room(s), but ToTS --n {} requires {}. Create a new ToTS config through the server API with provider_data.jazz.worker_count={}; do not change worker_count manually.",
+            room_count, requested_workers, requested_workers, requested_workers
+        ));
+    }
+    Ok(())
+}
+
 fn build_tots_args(config: &ConfigItem, settings: &Settings) -> Result<Vec<String>> {
     // Always decode the URI and pass explicit flags. Intentionally never use --config.
     let parsed = parse_tots_uri(&config.raw_link)?;
@@ -287,17 +327,12 @@ fn build_tots_args(config: &ConfigItem, settings: &Settings) -> Result<Vec<Strin
         }
     }
     if settings.tots_jazz_enabled {
-        if let Some(Value::Object(jazz)) = provider_data.get_mut("jazz") {
-            let workers = settings.tots_workers.clamp(1, 256);
-            let provisioned = jazz.get("worker_count")
-                .and_then(Value::as_i64)
-                .unwrap_or(0)
-                .clamp(0, 256) as i32;
-            if provisioned < workers {
-                jazz.insert("worker_count".into(), Value::from(workers));
-            }
-            if !settings.tots_jazz_room_name.trim().is_empty() {
-                jazz.insert("room_name".into(), Value::String(settings.tots_jazz_room_name.trim().to_string()));
+        if let Some(jazz) = provider_data.get_mut("jazz") {
+            validate_jazz_worker_capacity(jazz, settings.tots_workers.clamp(1, 256) as usize)?;
+            if let Some(object) = jazz.as_object_mut() {
+                if !settings.tots_jazz_room_name.trim().is_empty() {
+                    object.insert("name".into(), Value::String(settings.tots_jazz_room_name.trim().to_string()));
+                }
             }
         }
     }
@@ -448,5 +483,42 @@ pub fn link_placeholder(kind: ProtocolKind) -> &'static str {
             "csqtt://connect?v=2&host=...&peer=...&password=...&hashes=h1+h2"
         }
         ProtocolKind::Tots => "tots://<base64url-json>",
+    }
+}
+
+
+#[cfg(test)]
+mod jazz_pool_validation_tests {
+    use super::validate_jazz_worker_capacity;
+    use serde_json::json;
+
+    #[test]
+    fn rejects_a_single_room_for_a_multi_worker_pool() {
+        let data = json!({"join_link":"invite"});
+        let error = validate_jazz_worker_capacity(&data, 30).unwrap_err().to_string();
+        assert!(error.contains("has 1 provisioned room"));
+        assert!(error.contains("--n 30"));
+    }
+
+    #[test]
+    fn accepts_a_server_provisioned_pool_with_matching_count() {
+        let data = json!({
+            "worker_count": 2,
+            "worker_rooms": [
+                {"join_link":"room-1", "connector_url":"connector-1"},
+                {"join_link":"room-2", "connector_url":"connector-2"}
+            ]
+        });
+        assert!(validate_jazz_worker_capacity(&data, 2).is_ok());
+    }
+
+    #[test]
+    fn rejects_mismatched_worker_count_and_room_array() {
+        let data = json!({
+            "worker_count": 30,
+            "worker_rooms": [{"join_link":"room-1", "connector_url":"connector-1"}]
+        });
+        let error = validate_jazz_worker_capacity(&data, 1).unwrap_err().to_string();
+        assert!(error.contains("does not match worker_rooms"));
     }
 }
