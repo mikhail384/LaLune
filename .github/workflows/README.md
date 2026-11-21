@@ -66,17 +66,26 @@ ubuntu-latest
 ├── python 3.12
 ├── flutter 3.47.5
 ├── java 17
-├── Android SDK (preinstalled)
-├── copy Backend/Android/*.kt → Frontend/android/.../com/lalune/backend/
-├── copy Assets/ → Frontend/assets/
-├── copy Core/SmartTunnel.lua → Frontend/android/.../assets/
-├── download libclient-android-*.so → jniLibs/
+├── Android SDK + NDK 27
+├── restore Assets/apk-key/my-release-key.jks ONLY from ANDROID_KEYSTORE_BASE64 secret
+├── validate keystore password + alias my-key
+├── write temporary Frontend/android/key.properties from password secrets
+├── build native Android dependencies for supported ABIs
 ├── flutter pub get
-├── flutter build apk --debug
-└── cp app-debug.apk → Output/LaLune-Android.apk
+├── flutter build apk --release
+├── verify APK signature with apksigner
+└── cp signed app-release.apk → Output/LaLune-Android.apk
 ```
 
-Артефакт: `Output-Android` (`LaLune-Android.apk`).
+Артефакт: `Output-Android` (`LaLune-Android.apk`), release-подпись обязательна.
+
+Для сборки нужны GitHub Actions Secrets:
+
+- `ANDROID_KEYSTORE_BASE64` — Base64 содержимое `my-release-key.jks`.
+- `ANDROID_KEYSTORE_PASSWORD` — пароль keystore.
+- `ANDROID_KEY_PASSWORD` — пароль приватного ключа.
+
+CI удаляет любой JKS, пришедший из checkout, и восстанавливает keystore только из `ANDROID_KEYSTORE_BASE64`. Если секрет отсутствует или невалиден, job завершается ошибкой. После сборки временный JKS и `key.properties` удаляются.
 
 ### `build-token-fetcher`
 

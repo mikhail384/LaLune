@@ -9,11 +9,27 @@
 //
 // LuaJ — чистый Java Lua 5.2 интерпретатор, используется в LuaRuntime.kt.
 
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
     id("dev.flutter.flutter-gradle-plugin")
 }
+
+// Release signing is configured by CI through Frontend/android/key.properties.
+// CI recreates the repository-level Assets/apk-key/my-release-key.jks exclusively
+// from the ANDROID_KEYSTORE_BASE64 GitHub Actions secret before building.
+val releaseSigningProperties = Properties().apply {
+    val propertiesFile = rootProject.file("key.properties")
+    if (propertiesFile.isFile) {
+        propertiesFile.inputStream().use { load(it) }
+    }
+}
+val releaseKeystorePath = releaseSigningProperties.getProperty(
+    "storeFile",
+    "../../Assets/apk-key/my-release-key.jks",
+)
 
 android {
     namespace = "com.lalune.lalune"
@@ -37,9 +53,18 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile = rootProject.file(releaseKeystorePath)
+            storePassword = releaseSigningProperties.getProperty("storePassword")
+            keyAlias = releaseSigningProperties.getProperty("keyAlias", "my-key")
+            keyPassword = releaseSigningProperties.getProperty("keyPassword")
+        }
+    }
+
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
             // LuaJ is used through reflective library registration; R8 removed
             // an inner LuaJ class in the release APK on Android 7.
             isMinifyEnabled = false

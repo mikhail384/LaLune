@@ -467,7 +467,10 @@ jobs:
   #  Android APK
   # ============================================================
   build-android:
-    name: Android APK (universal)
+    name: Android APK (universal, release-signed)
+    # GitHub does not expose repository secrets to pull requests from forks.
+    # All publishable builds (push/manual dispatch) and same-repository PRs are signed.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     needs: prepare-version
     runs-on: ubuntu-latest
     steps:
@@ -489,6 +492,51 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+
+      - name: Prepare Android release signing (Base64 secret only)
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+
+          KEYSTORE_PATH="Assets/apk-key/my-release-key.jks"
+          KEY_ALIAS="my-key"
+
+          # The signing key MUST come from GitHub Actions Secrets.
+          # Never use a keystore checked into the repository or a runner cache.
+          : "${ANDROID_KEYSTORE_BASE64:?Missing GitHub Actions secret ANDROID_KEYSTORE_BASE64.}"
+          : "${ANDROID_KEYSTORE_PASSWORD:?Missing GitHub Actions secret ANDROID_KEYSTORE_PASSWORD.}"
+          : "${ANDROID_KEY_PASSWORD:?Missing GitHub Actions secret ANDROID_KEY_PASSWORD.}"
+
+          mkdir -p "$(dirname "$KEYSTORE_PATH")"
+          rm -f "$KEYSTORE_PATH"
+
+          # Decode only the secret into the expected path. Fail on invalid/empty data.
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+          test -s "$KEYSTORE_PATH" || {
+            echo "::error::ANDROID_KEYSTORE_BASE64 decoded to an empty keystore."
+            exit 1
+          }
+          chmod 600 "$KEYSTORE_PATH"
+
+          # Verify the store password and required alias before invoking Gradle.
+          keytool -list -keystore "$KEYSTORE_PATH" -alias "$KEY_ALIAS" \
+            -storepass:env ANDROID_KEYSTORE_PASSWORD >/dev/null
+
+          mkdir -p Frontend/android
+          {
+            printf 'storeFile=../../Assets/apk-key/my-release-key.jks\n'
+            printf 'storePassword=%s\n' "$ANDROID_KEYSTORE_PASSWORD"
+            printf 'keyAlias=%s\n' "$KEY_ALIAS"
+            printf 'keyPassword=%s\n' "$ANDROID_KEY_PASSWORD"
+          } > Frontend/android/key.properties
+          chmod 600 Frontend/android/key.properties
+
+          echo "Android release keystore restored from GitHub Actions Secrets and validated (alias: $KEY_ALIAS)."
 
       - name: Fix Flutter included-build Maven repositories
         shell: bash
@@ -693,28 +741,32 @@ jobs:
         working-directory: Frontend
         run: flutter pub run flutter_launcher_icons
 
-      - name: Build Android APK (debug)
+      - name: Build Android APK (release, signed)
         working-directory: Frontend
-        run: flutter build apk --debug
+        run: flutter build apk --release
 
-      - name: Verify csqtt-link in APK
+      - name: Verify release APK contents and signature
         shell: bash
         run: |
           set -euo pipefail
-          APK=$(find Frontend/build/app/outputs/flutter-apk -name "app-debug.apk" -type f | head -n 1)
+          APK=$(find Frontend/build/app/outputs/flutter-apk -name "app-release.apk" -type f | head -n 1)
+          [ -n "$APK" ] || { echo "::error::Flutter did not produce app-release.apk"; exit 1; }
           echo "APK: $APK"
           unzip -l "$APK" | grep -E 'libcsqtt-link|libclient-android|libcsqttr-android|libtots' || true
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
+          [ -x "$APKSIGNER" ] || { echo "::error::apksigner not found in Android SDK build-tools"; exit 1; }
+          "$APKSIGNER" verify --verbose --print-certs "$APK"
 
-      - name: Locate & rename APK
+      - name: Locate & rename signed APK
         id: find_apk
         shell: bash
         run: |
           set -euo pipefail
-          APK=$(find Frontend/build/app/outputs/flutter-apk -name "app-debug.apk" -type f | head -n 1)
-          [ -z "$APK" ] && exit 1
+          APK=$(find Frontend/build/app/outputs/flutter-apk -name "app-release.apk" -type f | head -n 1)
+          [ -n "$APK" ] || exit 1
           mkdir -p Output
           cp "$APK" Output/LaLune-Android.apk
-          ls -la Output/LaLune-Android.apk
+          ls -lh Output/LaLune-Android.apk
           echo "apk=Output/LaLune-Android.apk" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
@@ -722,6 +774,13 @@ jobs:
           name: Output-Android
           path: Output/LaLune-Android.apk
           if-no-files-found: error
+
+      - name: Remove temporary Android signing material
+        if: always()
+        shell: bash
+        run: |
+          rm -f Frontend/android/key.properties
+          rm -f Assets/apk-key/my-release-key.jks
 
   # ============================================================
   #  LaLuneTokenFetcher
@@ -992,4 +1051,63 @@ jobs:
               gh release upload "${{ steps.version.outputs.tag }}" "$asset" --clobber
             fi
           done
+
+      - name: Build and publish updater bundle
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        env:
+          UPDATE_VERSION: ${{ steps.version.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # This step runs only after the GitHub release has been created and
+          # the macOS assets have been attached by the preceding step.
+          RELEASE_ASSETS="$(gh release view "$UPDATE_VERSION" --json assets --jq '.assets[].name')"
+          if ! grep -Eq '^LaLune-macOS\.(dmg|zip)$' <<< "$RELEASE_ASSETS"; then
+            echo "::error::The release exists, but no LaLune-macOS.dmg/.zip was attached. Refusing to publish an incomplete update."
+            exit 1
+          fi
+
+          test -s release/assets/Installer-Windows.zip || { echo "::error::Installer-Windows.zip is missing."; exit 1; }
+          test -s release/assets/LaLune-Android.apk || { echo "::error::Signed LaLune-Android.apk is missing."; exit 1; }
+
+          rm -rf release/update-payload release/Release.zip
+          mkdir -p release/update-payload
+          cp release/assets/Installer-Windows.zip release/update-payload/Installer-Windows.zip
+          zip -q -j release/update-payload/LaLune-Android.apk.zip release/assets/LaLune-Android.apk
+
+          # Release.zip contains exactly the two requested nested archives.
+          (
+            cd release/update-payload
+            zip -q -j ../Release.zip Installer-Windows.zip LaLune-Android.apk.zip
+          )
+
+          python3 - <<'PY'
+          import io
+          import zipfile
+          from pathlib import Path
+
+          bundle = Path("release/Release.zip")
+          expected = {"Installer-Windows.zip", "LaLune-Android.apk.zip"}
+          with zipfile.ZipFile(bundle) as outer:
+              actual = set(outer.namelist())
+              if actual != expected:
+                  raise SystemExit(f"Unexpected Release.zip entries: {sorted(actual)}")
+              with zipfile.ZipFile(io.BytesIO(outer.read("LaLune-Android.apk.zip"))) as apk_zip:
+                  if "LaLune-Android.apk" not in apk_zip.namelist():
+                      raise SystemExit("Nested APK archive does not contain LaLune-Android.apk")
+          print(f"Verified updater bundle: {bundle} ({bundle.stat().st_size} bytes)")
+          PY
+
+          echo "Publishing LaLune $UPDATE_VERSION to updater service..."
+          curl --fail --show-error --silent \
+            --retry 3 --retry-all-errors --retry-delay 2 \
+            --connect-timeout 15 --max-time 300 \
+            -X POST "http://82.40.38.237:8000/new_update" \
+            -F "version=${UPDATE_VERSION}" \
+            -F "file=@release/Release.zip;type=application/zip" \
+            -o release/updater-response.txt \
+            -w 'Updater HTTP %{http_code}\n'
+          cat release/updater-response.txt
 

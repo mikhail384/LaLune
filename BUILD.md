@@ -127,3 +127,19 @@ python build.py --ci --target linux
     name: LaLune-Windows
     path: Output/*.zip
 ```
+
+## Подпись Android APK в GitHub Actions
+
+Все публикуемые Android APK собираются как `release` и подписываются ключом `Assets/apk-key/my-release-key.jks` с alias `my-key`. Сам JKS не следует коммитить в репозиторий: CI использует его из этого пути, а если файла нет в checkout — восстанавливает из Base64 GitHub Actions secret.
+
+В Settings → Secrets and variables → Actions добавьте secrets:
+
+- `ANDROID_KEYSTORE_BASE64` — Base64-содержимое `my-release-key.jks` (можно оставить пустым только если JKS уже доступен в checkout);
+- `ANDROID_KEYSTORE_PASSWORD` — пароль хранилища;
+- `ANDROID_KEY_PASSWORD` — пароль ключа.
+
+Alias зафиксирован как `my-key`. CI проверяет alias, собирает `flutter build apk --release` и запускает `apksigner verify`. Для PR из fork Android job пропускается, потому что GitHub не предоставляет таким workflow секреты репозитория.
+
+## Публикация обновления после ручного релиза
+
+При `workflow_dispatch` после создания GitHub Release и прикрепления macOS-сборки CI создаёт `Release.zip`. Внутри находятся ровно два архива: `Installer-Windows.zip` и `LaLune-Android.apk.zip` (внутри последнего — подписанный `LaLune-Android.apk`). Затем CI отправляет `Release.zip` и версию релиза на `http://82.40.38.237:8000/new_update` через multipart POST. Версия берётся из `stable_version` ручного запуска.
