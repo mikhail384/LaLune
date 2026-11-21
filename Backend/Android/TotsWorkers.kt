@@ -6,12 +6,13 @@ internal data class TotsWorkers(
     val active: Int,
     val target: Int,
     val providers: Map<String, Int>?,
+    val tunnelRttMs: Int? = null,
 ) {
     companion object {
         val providerKeys = listOf("vk", "jazz", "ya_docs", "mail_docs", "cups", "max")
         private val ansi = Regex("\u001b\\[[0-?]*[ -/]*[@-~]")
         private val counter = Regex(
-            """\b(workers|workers_target|workers_(?:vk|jazz|ya_docs|mail_docs|cups|max))=(\d+)\b""",
+            """\b(rtt_p50_ms|workers|workers_target|workers_(?:vk|jazz|ya_docs|mail_docs|cups|max))=(\d+)\b""",
         )
 
         fun parse(line: String): TotsWorkers? {
@@ -30,10 +31,15 @@ internal data class TotsWorkers(
             }.toMap()
             // A worker can change provider health while the core samples it.
             // Keep its authoritative total without inventing a breakdown.
-            return TotsWorkers(active, target, providers.takeIf { counts ->
-                counts.keys.containsAll(providerKeys.dropLast(1)) &&
-                    counts.values.all { it <= active } && counts.values.sum() == active
-            })
+            return TotsWorkers(
+                active,
+                target,
+                providers.takeIf { counts ->
+                    counts.keys.containsAll(providerKeys.dropLast(1)) &&
+                        counts.values.all { it <= active } && counts.values.sum() == active
+                },
+                fields["rtt_p50_ms"]?.takeIf { active > 0 && it in 1..60_000 },
+            )
         }
     }
 }

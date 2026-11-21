@@ -574,6 +574,16 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
                                 'ToTS Workers: $activeWorkers/$targetWorkers',
                                 style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(0.62)),
                               ),
+                              if (vpn.tunnelRttMs > 0) ...[
+                                const Spacer(),
+                                Text(
+                                  'RTT туннеля · ${vpn.tunnelRttMs} мс',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: Colors.white.withValues(alpha: 0.62),
+                                  ),
+                                ),
+                              ],
                             ],
                           ),
                           const SizedBox(height: 5),

@@ -730,24 +730,29 @@ jobs:
           file "$DEST/armeabi-v7a/libcsqttr-android-armeabi-v7a.so"
           file "$DEST/x86_64/libcsqttr-android-x86_64.so"
 
-      - name: Refresh ToTS core binaries (jniLibs)
+      - name: Build ToTS with adaptive path scheduling (jniLibs)
         shell: bash
         run: |
           set -euo pipefail
           TMP_TOTS=$(mktemp -d)
-          URL=https://github.com/Endlad2/ToTS/releases/latest/download/tots-android-multiabi.zip
-          if curl -L --fail --retry 3 -o "$TMP_TOTS/tots-android-multiabi.zip" "$URL"; then
-            unzip -o "$TMP_TOTS/tots-android-multiabi.zip" -d "$TMP_TOTS/extracted"
-            for abi in arm64-v8a armeabi-v7a x86_64; do
-              src="$TMP_TOTS/extracted/jniLibs/$abi/libtots.so"
-              [ -f "$src" ] || { echo "Missing ToTS ABI in release: $abi" >&2; exit 1; }
-              mkdir -p "Frontend/android/app/src/main/jniLibs/$abi"
-              cp "$src" "Frontend/android/app/src/main/jniLibs/$abi/libtots.so"
-            done
-          else
-            echo "ToTS multi-ABI release asset is unavailable; using the binaries bundled in the repository."
-          fi
-          rm -rf "$TMP_TOTS"
+          git -C "$TMP_TOTS" init -q
+          git -C "$TMP_TOTS" fetch --depth 1 https://github.com/Endlad2/ToTS.git e9474c5d34e5a955c816cec5a63fb2803dba13b1
+          git -C "$TMP_TOTS" checkout --detach FETCH_HEAD
+          git -C "$TMP_TOTS" apply "$GITHUB_WORKSPACE/patches/tots-adaptive-paths-e9474c5.patch"
+          export ANDROID_API=24
+          export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_HOME/ndk/27.0.12077973}"
+          export CARGO_PROFILE_RELEASE_LTO=thin CARGO_PROFILE_RELEASE_CODEGEN_UNITS=8
+          cd "$TMP_TOTS"
+          for entry in aarch64-linux-android:arm64-v8a armv7-linux-androideabi:armeabi-v7a x86_64-linux-android:x86_64; do
+            target=${entry%:*}
+            abi=${entry#*:}
+            bash scripts/build-android.sh "$target"
+            install -D "dist/android/$abi/libtots.so" "$GITHUB_WORKSPACE/Frontend/android/app/src/main/jniLibs/$abi/libtots.so"
+          done
+          notices="$GITHUB_WORKSPACE/Frontend/android/app/src/main/assets/tots-notices"
+          mkdir -p "$notices"
+          cp LICENSE NOTICE "$notices/"
+          cp Providers/jazz-session/LICENSE "$notices/JAZZ-SESSION-LICENSE"
 
       - name: Copy Lua scripts to assets
         shell: bash

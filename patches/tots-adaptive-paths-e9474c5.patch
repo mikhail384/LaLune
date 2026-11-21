@@ -1,0 +1,1096 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 0445abd..df5a1e9 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -2,6 +2,12 @@
+ # It is not intended for manual editing.
+ version = 4
+ 
++[[package]]
++name = "adler2"
++version = "2.0.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
++
+ [[package]]
+ name = "aead"
+ version = "0.5.2"
+@@ -153,7 +159,7 @@ dependencies = [
+  "asn1-rs-derive",
+  "asn1-rs-impl",
+  "displaydoc",
+- "nom",
++ "nom 7.1.3",
+  "num-traits",
+  "rusticata-macros",
+  "thiserror 1.0.69",
+@@ -418,6 +424,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "4ff2a8126fff0f8c839080d619675a585e61720bb12d2baceae45769fd66f155"
+ dependencies = [
+  "find-msvc-tools",
++ "jobserver",
++ "libc",
+  "shlex",
+ ]
+ 
+@@ -572,6 +580,35 @@ version = "0.10.2"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
+ 
++[[package]]
++name = "cookie"
++version = "0.18.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "1a373e3602691c3cdea496d2f0ee5935151e6168fe87739483c463db1b2f2f87"
++dependencies = [
++ "percent-encoding",
++ "time",
++ "version_check",
++]
++
++[[package]]
++name = "cookie_store"
++version = "0.22.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "15b2c103cf610ec6cae3da84a766285b42fd16aad564758459e6ecf128c75206"
++dependencies = [
++ "cookie",
++ "document-features",
++ "idna",
++ "log",
++ "publicsuffix",
++ "serde",
++ "serde_derive",
++ "serde_json",
++ "time",
++ "url",
++]
++
+ [[package]]
+ name = "core-foundation-sys"
+ version = "0.8.7"
+@@ -626,6 +663,15 @@ dependencies = [
+  "cfg-if",
+ ]
+ 
++[[package]]
++name = "crossbeam-queue"
++version = "0.3.14"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "03e8bd762f7479489c70ed6c768ddca99d7296857de437a68dcb2a94365b3fae"
++dependencies = [
++ "crossbeam-utils",
++]
++
+ [[package]]
+ name = "crossbeam-utils"
+ version = "0.8.23"
+@@ -754,7 +800,7 @@ checksum = "5cd0a5c643689626bec213c4d8bd4d96acc8ffdb4ad4bb6bc16abf27d5f4b553"
+ dependencies = [
+  "asn1-rs",
+  "displaydoc",
+- "nom",
++ "nom 7.1.3",
+  "num-bigint",
+  "num-traits",
+  "rusticata-macros",
+@@ -800,6 +846,15 @@ dependencies = [
+  "syn 3.0.10",
+ ]
+ 
++[[package]]
++name = "document-features"
++version = "0.2.12"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "d4b8a88685455ed29a21542a33abd9cb6510b6b129abadabdcef0f4c55bc8f61"
++dependencies = [
++ "litrs",
++]
++
+ [[package]]
+ name = "dtls"
+ version = "0.17.3"
+@@ -955,6 +1010,17 @@ version = "0.1.15"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
+ 
++[[package]]
++name = "flate2"
++version = "1.1.11"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "626d4928326b646e70f65ed36fc7cf9f206bdb68a0019ee7c6b4709da4e084c4"
++dependencies = [
++ "crc32fast",
++ "miniz_oxide",
++ "zlib-rs",
++]
++
+ [[package]]
+ name = "form_urlencoded"
+ version = "1.2.2"
+@@ -1510,10 +1576,21 @@ dependencies = [
+  "serde_json",
+  "thiserror 2.0.21",
+  "tokio",
+- "tokio-tungstenite",
++ "tokio-tungstenite 0.28.0",
+  "url",
+  "uuid",
+  "webrtc",
++ "webrtc-ice",
++]
++
++[[package]]
++name = "jobserver"
++version = "0.1.35"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "1c00acbd29eabad4a2392fa0e921c874934dbbf4194312ad20f04a0ed67a3cb3"
++dependencies = [
++ "getrandom 0.4.3",
++ "libc",
+ ]
+ 
+ [[package]]
+@@ -1527,6 +1604,27 @@ dependencies = [
+  "wasm-bindgen",
+ ]
+ 
++[[package]]
++name = "kolibri-net"
++version = "0.1.4"
++source = "git+https://github.com/KometTeam/kolibri#7ffa90e69204f6e07a38b0927ab62bf41b47bbe0"
++dependencies = [
++ "base64 0.22.1",
++ "futures-util",
++ "lz4_flex",
++ "rmpv",
++ "rustls",
++ "rustls-pemfile",
++ "serde_json",
++ "sha2 0.10.9",
++ "thiserror 2.0.21",
++ "tokio",
++ "tokio-rustls",
++ "tokio-tungstenite 0.26.2",
++ "webpki-roots 0.26.11",
++ "zstd",
++]
++
+ [[package]]
+ name = "lazy_static"
+ version = "1.5.1"
+@@ -1566,6 +1664,12 @@ version = "0.8.3"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
+ 
++[[package]]
++name = "litrs"
++version = "1.0.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "4744e383959f0db86ede514b809b1c53251889093803c05267acc7d4e7030d70"
++
+ [[package]]
+ name = "lock_api"
+ version = "0.4.14"
+@@ -1587,6 +1691,15 @@ version = "0.1.3"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "4050469837a6ff301cd14c1f8f24f88549e6d548f24f64e2148eb0f72cebc51f"
+ 
++[[package]]
++name = "lz4_flex"
++version = "0.11.7"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "13591d77a9b6d941f7e6fcade7f9dfd9e801308752bde50c0a9bb5852778c22c"
++dependencies = [
++ "twox-hash",
++]
++
+ [[package]]
+ name = "matchers"
+ version = "0.2.0"
+@@ -1639,6 +1752,16 @@ version = "0.2.1"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
+ 
++[[package]]
++name = "miniz_oxide"
++version = "0.9.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"
++dependencies = [
++ "adler2",
++ "simd-adler32",
++]
++
+ [[package]]
+ name = "mio"
+ version = "1.2.4"
+@@ -1705,6 +1828,15 @@ dependencies = [
+  "minimal-lexical",
+ ]
+ 
++[[package]]
++name = "nom"
++version = "8.0.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "df9761775871bdef83bee530e60050f7e54b1105350d6884eb0fb4f46c2f9405"
++dependencies = [
++ "memchr",
++]
++
+ [[package]]
+ name = "nu-ansi-term"
+ version = "0.50.3"
+@@ -1867,6 +1999,26 @@ version = "2.3.2"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
+ 
++[[package]]
++name = "pin-project"
++version = "1.2.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "a6c2123f4708bbd422630a6dae7c03f678b1ce1f1c99e4c4b3beac69c8174cc9"
++dependencies = [
++ "pin-project-internal",
++]
++
++[[package]]
++name = "pin-project-internal"
++version = "1.2.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "358938fd6df944c1e44bb328b60fb275f13c804aac47ba26a1165d45a3f87756"
++dependencies = [
++ "proc-macro2",
++ "quote",
++ "syn 3.0.10",
++]
++
+ [[package]]
+ name = "pin-project-lite"
+ version = "0.2.17"
+@@ -2028,6 +2180,12 @@ dependencies = [
+  "unicode-ident",
+ ]
+ 
++[[package]]
++name = "psl-types"
++version = "2.0.11"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "33cb294fe86a74cbcf50d4445b37da762029549ebeea341421c7c70370f86cac"
++
+ [[package]]
+ name = "ptr_meta"
+ version = "0.3.2"
+@@ -2048,6 +2206,16 @@ dependencies = [
+  "syn 3.0.10",
+ ]
+ 
++[[package]]
++name = "publicsuffix"
++version = "2.3.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "6f42ea446cab60335f76979ec15e12619a2165b5ae2c12166bef27d283a9fadf"
++dependencies = [
++ "idna",
++ "psl-types",
++]
++
+ [[package]]
+ name = "quinn"
+ version = "0.11.12"
+@@ -2294,6 +2462,8 @@ checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
+ dependencies = [
+  "base64 0.22.1",
+  "bytes",
++ "cookie",
++ "cookie_store",
+  "futures-core",
+  "http",
+  "http-body",
+@@ -2378,6 +2548,24 @@ dependencies = [
+  "syn 3.0.10",
+ ]
+ 
++[[package]]
++name = "rmp"
++version = "0.8.15"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "4ba8be72d372b2c9b35542551678538b562e7cf86c3315773cae48dfbfe7790c"
++dependencies = [
++ "num-traits",
++]
++
++[[package]]
++name = "rmpv"
++version = "1.3.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "7a4e1d4b9b938a26d2996af33229f0ca0956c652c1375067f0b45291c1df8417"
++dependencies = [
++ "rmp",
++]
++
+ [[package]]
+ name = "rtcp"
+ version = "0.17.3"
+@@ -2439,7 +2627,7 @@ version = "4.1.0"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "faf0c4a6ece9950b9abdb62b1cfcf2a68b3b67a10ba445b3bb85be2a293d0632"
+ dependencies = [
+- "nom",
++ "nom 7.1.3",
+ ]
+ 
+ [[package]]
+@@ -2448,6 +2636,7 @@ version = "0.23.46"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
+ dependencies = [
++ "log",
+  "once_cell",
+  "ring",
+  "rustls-pki-types",
+@@ -2456,6 +2645,15 @@ dependencies = [
+  "zeroize",
+ ]
+ 
++[[package]]
++name = "rustls-pemfile"
++version = "2.2.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "dce314e5fee3f39953d46bb63bb8a46d40c2f8fb7cc5a3b6cab2bde9721d6e50"
++dependencies = [
++ "rustls-pki-types",
++]
++
+ [[package]]
+ name = "rustls-pki-types"
+ version = "1.15.1"
+@@ -2671,6 +2869,12 @@ dependencies = [
+  "rand_core 0.10.1",
+ ]
+ 
++[[package]]
++name = "simd-adler32"
++version = "0.3.10"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
++
+ [[package]]
+ name = "simdutf8"
+ version = "0.1.5"
+@@ -2960,6 +3164,22 @@ dependencies = [
+  "tokio",
+ ]
+ 
++[[package]]
++name = "tokio-tungstenite"
++version = "0.26.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "7a9daff607c6d2bf6c16fd681ccb7eecc83e4e2cdc1ca067ffaadfca5de7f084"
++dependencies = [
++ "futures-util",
++ "log",
++ "rustls",
++ "rustls-pki-types",
++ "tokio",
++ "tokio-rustls",
++ "tungstenite 0.26.2",
++ "webpki-roots 0.26.11",
++]
++
+ [[package]]
+ name = "tokio-tungstenite"
+ version = "0.28.0"
+@@ -2972,7 +3192,7 @@ dependencies = [
+  "rustls-pki-types",
+  "tokio",
+  "tokio-rustls",
+- "tungstenite",
++ "tungstenite 0.28.0",
+  "webpki-roots 0.26.11",
+ ]
+ 
+@@ -3032,12 +3252,16 @@ dependencies = [
+  "bytes",
+  "chacha20poly1305",
+  "crc32fast",
++ "flate2",
++ "futures-util",
+  "hmac 0.12.1",
+  "jazz-session",
++ "kolibri-net",
+  "md-5",
+  "parking_lot",
+  "rand 0.8.8",
+  "reqwest",
++ "rmpv",
+  "serde",
+  "serde_json",
+  "sha1",
+@@ -3045,9 +3269,11 @@ dependencies = [
+  "socket2 0.6.5",
+  "thiserror 2.0.21",
+  "tokio",
++ "tokio-tungstenite 0.28.0",
+  "tracing",
+  "url",
+  "uuid",
++ "yawc",
+ ]
+ 
+ [[package]]
+@@ -3225,6 +3451,25 @@ dependencies = [
+  "wintun-bindings",
+ ]
+ 
++[[package]]
++name = "tungstenite"
++version = "0.26.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "4793cb5e56680ecbb1d843515b23b6de9a75eb04b66643e256a396d43be33c13"
++dependencies = [
++ "bytes",
++ "data-encoding",
++ "http",
++ "httparse",
++ "log",
++ "rand 0.9.5",
++ "rustls",
++ "rustls-pki-types",
++ "sha1",
++ "thiserror 2.0.21",
++ "utf-8",
++]
++
+ [[package]]
+ name = "tungstenite"
+ version = "0.28.0"
+@@ -3267,6 +3512,12 @@ dependencies = [
+  "webrtc-util",
+ ]
+ 
++[[package]]
++name = "twox-hash"
++version = "2.1.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "86a801b3cea342a06d468c8710662aa29e5e05e4f5c0d62f00bbb7f2ad7941c2"
++
+ [[package]]
+ name = "typenum"
+ version = "1.20.1"
+@@ -3906,7 +4157,7 @@ dependencies = [
+  "data-encoding",
+  "der-parser",
+  "lazy_static",
+- "nom",
++ "nom 7.1.3",
+  "oid-registry",
+  "ring",
+  "rusticata-macros",
+@@ -3923,6 +4174,39 @@ dependencies = [
+  "time",
+ ]
+ 
++[[package]]
++name = "yawc"
++version = "0.5.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "d7b69940f68e6cbe7d7f85350b81e51fafe62786d812b92c263727addc13a272"
++dependencies = [
++ "base64 0.22.1",
++ "bytes",
++ "crossbeam-queue",
++ "flate2",
++ "futures",
++ "getrandom 0.2.17",
++ "http-body-util",
++ "hyper",
++ "hyper-util",
++ "js-sys",
++ "log",
++ "nom 8.0.0",
++ "percent-encoding",
++ "pin-project",
++ "rand 0.8.8",
++ "sha1",
++ "thiserror 2.0.21",
++ "tokio",
++ "tokio-rustls",
++ "tokio-util",
++ "url",
++ "wasm-bindgen",
++ "wasm-bindgen-futures",
++ "web-sys",
++ "webpki-roots 1.0.11",
++]
++
+ [[package]]
+ name = "yoke"
+ version = "0.8.4"
+@@ -4040,8 +4324,42 @@ dependencies = [
+  "syn 3.0.10",
+ ]
+ 
++[[package]]
++name = "zlib-rs"
++version = "0.6.8"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "b268e58e7c693d7c271f93ffc4ba3b380412554231c85bf61ca7af91042a4112"
++
+ [[package]]
+ name = "zmij"
+ version = "1.0.23"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
++
++[[package]]
++name = "zstd"
++version = "0.13.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "50adf04cf3ec914b0b9905c9dde90c80fe74bfd701e331fc80a39c512c525278"
++dependencies = [
++ "zstd-safe",
++]
++
++[[package]]
++name = "zstd-safe"
++version = "7.4.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "498d94ad68720c89b4fbe41b9090850651e68cb2dd9210ce7ffbff3a94653819"
++dependencies = [
++ "zstd-sys",
++]
++
++[[package]]
++name = "zstd-sys"
++version = "2.1.3+zstd.1.5.7"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "f729a06d0257428fd9d997ac8db7e1407bd0262ab016b085b36bc52957c0052d"
++dependencies = [
++ "cc",
++ "pkg-config",
++]
+diff --git a/tots-android/src/main.rs b/tots-android/src/main.rs
+index 8aaa539..22d8e83 100644
+--- a/tots-android/src/main.rs
++++ b/tots-android/src/main.rs
+@@ -110,7 +110,7 @@ async fn main() -> Result<()> {
+             manager.shutdown().await;
+             return Err(error);
+         }
+-        manager.log_status();
++        manager.log_status().await;
+         manager.shutdown().await;
+         return Ok(());
+     }
+@@ -149,7 +149,7 @@ async fn main() -> Result<()> {
+         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+         loop {
+             tick.tick().await;
+-            status_manager.log_status();
++            status_manager.log_status().await;
+         }
+     });
+ 
+diff --git a/tots-android/src/workers.rs b/tots-android/src/workers.rs
+index 78d5aad..a0e06c9 100644
+--- a/tots-android/src/workers.rs
++++ b/tots-android/src/workers.rs
+@@ -483,7 +483,7 @@ impl WorkerManager {
+         }
+     }
+ 
+-    pub fn log_status(&self) {
++    pub async fn log_status(&self) {
+         let tx = self.stats.tun_tx_bytes.load(Ordering::Relaxed);
+         let rx = self.stats.tun_rx_bytes.load(Ordering::Relaxed);
+         let total = tx.saturating_add(rx);
+@@ -523,6 +523,8 @@ impl WorkerManager {
+         let mut ack_queue_wait_ns_max = 0u64;
+         let mut tun_inbound_wait_ns_sum = 0u64;
+         let mut tun_inbound_wait_ns_max = 0u64;
++        let mut path_weights = Vec::new();
++        let mut path_rtts = Vec::new();
+         for slot in &self.slots {
+             let receive = &slot.receive;
+             path_rx_datagrams += receive.path_datagrams.load(Ordering::Relaxed);
+@@ -547,7 +549,10 @@ impl WorkerManager {
+                 continue;
+             }
+             queued += WORKER_QUEUE - slot.sender.capacity();
+-            if let Ok(recovery) = slot.recovery.try_lock() {
++            if let Ok(mut recovery) = slot.recovery.try_lock() {
++                if let Some(weight) = recovery.sample_path_weight() {
++                    path_weights.push((slot.id as u64, weight));
++                }
+                 recovery_sampled_workers += 1;
+                 let stats = recovery.stats();
+                 recovery_stats.sent_packets += stats.sent_packets;
+@@ -563,6 +568,7 @@ impl WorkerManager {
+                 cwnd_bytes += recovery.cwnd();
+                 inflight_bytes += recovery.bytes_in_flight();
+                 if let Some(rtt) = recovery.srtt() {
++                    path_rtts.push(rtt.as_micros());
+                     rtt_min_us = rtt_min_us.min(rtt.as_micros());
+                     rtt_max_us = rtt_max_us.max(rtt.as_micros());
+                 }
+@@ -579,7 +585,16 @@ impl WorkerManager {
+                 }
+             }
+         }
++        if !path_weights.is_empty() {
++            let mut scheduler = self.scheduler.lock().await;
++            for &(worker, weight) in &path_weights {
++                scheduler.update_path_weight(worker, weight);
++            }
++        }
++        path_rtts.sort_unstable();
++        let rtt_p50_ms = path_rtts.get(path_rtts.len() / 2).map_or(0, |us| us.div_ceil(1000) as u64);
+         info!(
++            rtt_p50_ms,
+             tun_tx_mb = tx as f64 / 1_048_576.0,
+             tun_rx_mb = rx as f64 / 1_048_576.0,
+             tun_total_mb = total as f64 / 1_048_576.0,
+diff --git a/tots-client/src/lib.rs b/tots-client/src/lib.rs
+index d36fbdc..fe6a4f4 100644
+--- a/tots-client/src/lib.rs
++++ b/tots-client/src/lib.rs
+@@ -232,7 +232,7 @@ pub async fn run() -> Result<()> {
+             manager.shutdown().await;
+             return Err(error);
+         }
+-        manager.log_status();
++        manager.log_status().await;
+         if let Some(path) = args.status_file.as_deref() {
+             if let Err(error) = write_status_file(
+                 path,
+@@ -399,7 +399,7 @@ pub async fn run() -> Result<()> {
+             }
+             log_tick = log_tick.wrapping_add(1);
+             if log_tick >= 5 {
+-                status_manager.log_status();
++                status_manager.log_status().await;
+                 log_tick = 0;
+             }
+         }
+diff --git a/tots-client/src/workers.rs b/tots-client/src/workers.rs
+index efc8d85..c46fee4 100644
+--- a/tots-client/src/workers.rs
++++ b/tots-client/src/workers.rs
+@@ -502,7 +502,7 @@ impl WorkerManager {
+         }
+     }
+ 
+-    pub fn log_status(&self) {
++    pub async fn log_status(&self) {
+         let tx = self.stats.tun_tx_bytes.load(Ordering::Relaxed);
+         let rx = self.stats.tun_rx_bytes.load(Ordering::Relaxed);
+         let total = tx.saturating_add(rx);
+@@ -542,6 +542,8 @@ impl WorkerManager {
+         let mut ack_queue_wait_ns_max = 0u64;
+         let mut tun_inbound_wait_ns_sum = 0u64;
+         let mut tun_inbound_wait_ns_max = 0u64;
++        let mut path_weights = Vec::new();
++        let mut path_rtts = Vec::new();
+         for slot in &self.slots {
+             let receive = &slot.receive;
+             path_rx_datagrams += receive.path_datagrams.load(Ordering::Relaxed);
+@@ -566,7 +568,10 @@ impl WorkerManager {
+                 continue;
+             }
+             queued += WORKER_QUEUE - slot.sender.capacity();
+-            if let Ok(recovery) = slot.recovery.try_lock() {
++            if let Ok(mut recovery) = slot.recovery.try_lock() {
++                if let Some(weight) = recovery.sample_path_weight() {
++                    path_weights.push((slot.id as u64, weight));
++                }
+                 recovery_sampled_workers += 1;
+                 let stats = recovery.stats();
+                 recovery_stats.sent_packets += stats.sent_packets;
+@@ -582,6 +587,7 @@ impl WorkerManager {
+                 cwnd_bytes += recovery.cwnd();
+                 inflight_bytes += recovery.bytes_in_flight();
+                 if let Some(rtt) = recovery.srtt() {
++                    path_rtts.push(rtt.as_micros());
+                     rtt_min_us = rtt_min_us.min(rtt.as_micros());
+                     rtt_max_us = rtt_max_us.max(rtt.as_micros());
+                 }
+@@ -598,7 +604,16 @@ impl WorkerManager {
+                 }
+             }
+         }
++        if !path_weights.is_empty() {
++            let mut scheduler = self.scheduler.lock().await;
++            for &(worker, weight) in &path_weights {
++                scheduler.update_path_weight(worker, weight);
++            }
++        }
++        path_rtts.sort_unstable();
++        let rtt_p50_ms = path_rtts.get(path_rtts.len() / 2).map_or(0, |us| us.div_ceil(1000) as u64);
+         info!(
++            rtt_p50_ms,
+             tun_tx_mb = tx as f64 / 1_048_576.0,
+             tun_rx_mb = rx as f64 / 1_048_576.0,
+             tun_total_mb = total as f64 / 1_048_576.0,
+diff --git a/tots-core/src/flow.rs b/tots-core/src/flow.rs
+index 5240990..920ee21 100644
+--- a/tots-core/src/flow.rs
++++ b/tots-core/src/flow.rs
+@@ -166,6 +166,7 @@ impl StripeState {
+ struct WorkerBudget {
+     tokens: f64,
+     rate: f64,
++    path_weight: f64,
+     last_update: Instant,
+     last_adjust: Instant,
+     congested: bool,
+@@ -176,6 +177,7 @@ impl WorkerBudget {
+         Self {
+             tokens: ALLOCATION_TOKEN_CAPACITY,
+             rate: ALLOCATION_RATE_BYTES_PER_SEC,
++            path_weight: 1.0,
+             last_update: now,
+             last_adjust: now,
+             congested: false,
+@@ -187,7 +189,8 @@ impl WorkerBudget {
+             .saturating_duration_since(self.last_update)
+             .as_secs_f64();
+         self.last_update = now;
+-        self.tokens = (self.tokens + elapsed * self.rate).min(ALLOCATION_TOKEN_CAPACITY);
++        self.tokens =
++            (self.tokens + elapsed * self.rate * self.path_weight).min(ALLOCATION_TOKEN_CAPACITY);
+ 
+         if now.saturating_duration_since(self.last_adjust) >= RATE_ADJUST_INTERVAL {
+             if self.congested {
+@@ -211,7 +214,8 @@ impl WorkerBudget {
+ /// * if that UDP exceeds roughly 75% of one estimated allocation, it becomes bulk;
+ /// * TCP and bulk UDP move only on 16 KiB flowlet boundaries;
+ /// * workers are selected by a deficit/token model whose nominal weight is about 2 Mbit/s each;
+-/// * congestion reduces a worker's scheduling weight temporarily without imposing a hard cap.
++/// * ACK goodput, delivery failures, RTT and jitter adjust the worker's credit;
++/// * queue congestion temporarily reduces refill without imposing a hard cap.
+ #[derive(Debug, Default)]
+ pub struct FlowScheduler {
+     flows: HashMap<FlowKey, StripeState>,
+@@ -265,8 +269,7 @@ impl FlowScheduler {
+                 });
+             }
+ 
+-            let avoid = (candidates.len() > 1 && assigned_alive).then_some(state.worker_id);
+-            let worker_id = self.choose_worker(candidates, avoid, now)?;
++            let worker_id = self.choose_worker(candidates, now)?;
+             state.worker_id = worker_id;
+             state.flowlet_left = FLOWLET_BYTES.saturating_sub(packet.len());
+             let latency_sensitive = sticky;
+@@ -279,7 +282,7 @@ impl FlowScheduler {
+             });
+         }
+ 
+-        let worker_id = self.choose_worker(candidates, None, now)?;
++        let worker_id = self.choose_worker(candidates, now)?;
+         self.debit(worker_id, packet.len());
+         self.flows.insert(
+             key,
+@@ -292,6 +295,15 @@ impl FlowScheduler {
+         })
+     }
+ 
++    pub fn update_path_weight(&mut self, worker_id: u64, observation: f64) {
++        let now = Instant::now();
++        let budget = self.budgets.entry(worker_id).or_insert_with(|| WorkerBudget::new(now));
++        budget.update(now);
++        // A bad sample reduces new assignments quickly, while recovery ramps up gradually.
++        let mix = if observation < budget.path_weight { 0.60 } else { 0.30 };
++        budget.path_weight += mix * (observation - budget.path_weight);
++    }
++
+     pub fn mark_congested(&mut self, worker_id: u64) {
+         let now = Instant::now();
+         let budget = self
+@@ -322,7 +334,7 @@ impl FlowScheduler {
+         }
+     }
+ 
+-    fn choose_worker(&mut self, workers: &[u64], avoid: Option<u64>, now: Instant) -> Option<u64> {
++    fn choose_worker(&mut self, workers: &[u64], now: Instant) -> Option<u64> {
+         if workers.len() == 1 {
+             return workers.first().copied();
+         }
+@@ -330,16 +342,14 @@ impl FlowScheduler {
+         let mut best: Option<(u64, f64)> = None;
+         for offset in 0..workers.len() {
+             let worker_id = workers[(start + offset) % workers.len()];
+-            if Some(worker_id) == avoid {
+-                continue;
+-            }
+             let budget = self
+                 .budgets
+                 .entry(worker_id)
+                 .or_insert_with(|| WorkerBudget::new(now));
+             budget.update(now);
+-            if best.is_none_or(|(_, tokens)| budget.tokens > tokens) {
+-                best = Some((worker_id, budget.tokens));
++            let score = budget.tokens + (budget.path_weight - 1.0) * ALLOCATION_TOKEN_CAPACITY * 0.5;
++            if best.is_none_or(|(_, highest)| score > highest) {
++                best = Some((worker_id, score));
+             }
+         }
+         let chosen = best
+@@ -484,6 +494,32 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn measured_path_degradation_moves_bulk_at_the_next_flowlet() {
++        let mut scheduler = FlowScheduler::default();
++        let packet = ipv4_packet(6, 50000, 443, 1400, 1);
++        let workers = [1, 2];
++        let first = scheduler.select(&packet, &workers).unwrap().worker_id;
++        let alternate = if first == 1 { 2 } else { 1 };
++        scheduler.update_path_weight(first, 0.2);
++        scheduler.update_path_weight(alternate, 1.6);
++        for _ in 1..11 {
++            assert_eq!(scheduler.select(&packet, &workers).unwrap().worker_id, first);
++        }
++        assert_eq!(scheduler.select(&packet, &workers).unwrap().worker_id, alternate);
++        for _ in 0..5 {
++            scheduler.update_path_weight(first, 1.9);
++            scheduler.update_path_weight(alternate, 0.2);
++        }
++        // Credit needs time to refill after the first flow used this worker.
++        let past = Instant::now() - Duration::from_secs(1);
++        for budget in scheduler.budgets.values_mut() {
++            budget.last_update = past;
++        }
++        let new_flow = ipv4_packet(6, 51000, 443, 1400, 1);
++        assert_eq!(scheduler.select(&new_flow, &workers).unwrap().worker_id, first);
++    }
++
+     #[test]
+     fn tcp_bulk_rotates_on_flowlet_boundaries() {
+         let mut scheduler = FlowScheduler::default();
+diff --git a/tots-core/src/recovery.rs b/tots-core/src/recovery.rs
+index f0e6873..090758c 100644
+--- a/tots-core/src/recovery.rs
++++ b/tots-core/src/recovery.rs
+@@ -1,4 +1,7 @@
+-use crate::{flow::Reliability, protocol::AckRange};
++use crate::{
++    flow::{Reliability, ALLOCATION_RATE_BYTES_PER_SEC},
++    protocol::AckRange,
++};
+ use std::{collections::BTreeMap, time::Duration};
+ use tokio::time::Instant;
+ 
+@@ -50,9 +53,29 @@ struct SentPacket {
+ #[derive(Clone, Debug)]
+ struct BestEffortSample {
+     sent_at: Instant,
++    wire_bytes: usize,
+     retired: bool,
+ }
+ 
++#[derive(Debug)]
++struct PathWindow {
++    since: Instant,
++    sent_bytes: usize,
++    delivered_bytes: usize,
++    baseline: RecoveryStats,
++}
++
++impl PathWindow {
++    fn new(baseline: RecoveryStats) -> Self {
++        Self {
++            since: Instant::now(),
++            sent_bytes: 0,
++            delivered_bytes: 0,
++            baseline,
++        }
++    }
++}
++
+ /// QUIC-inspired, packet-number based recovery for ToTS packets.
+ /// It intentionally does not implement QUIC wire format; it provides congestion,
+ /// pacing and bounded recovery for reliable control over any DatagramPath.
+@@ -62,6 +85,7 @@ pub struct RecoveryController {
+     in_flight: BTreeMap<u32, SentPacket>,
+     best_effort: BTreeMap<u32, BestEffortSample>,
+     stats: RecoveryStats,
++    path_window: PathWindow,
+     bytes_in_flight: usize,
+     cwnd: usize,
+     ssthresh: usize,
+@@ -79,6 +103,7 @@ impl Default for RecoveryController {
+             in_flight: BTreeMap::new(),
+             best_effort: BTreeMap::new(),
+             stats: RecoveryStats::default(),
++            path_window: PathWindow::new(RecoveryStats::default()),
+             bytes_in_flight: 0,
+             cwnd: INITIAL_CWND,
+             ssthresh: 64 * MSS,
+@@ -146,6 +171,7 @@ impl RecoveryController {
+     ) {
+         let now = Instant::now();
+         self.stats.sent_packets = self.stats.sent_packets.saturating_add(1);
++        self.path_window.sent_bytes = self.path_window.sent_bytes.saturating_add(wire_bytes);
+         if let Some(old) = self.in_flight.remove(&packet_id) {
+             self.bytes_in_flight = self.bytes_in_flight.saturating_sub(old.wire_bytes);
+         }
+@@ -156,6 +182,7 @@ impl RecoveryController {
+                 packet_id,
+                 BestEffortSample {
+                     sent_at: now,
++                    wire_bytes,
+                     retired: false,
+                 },
+             );
+@@ -214,6 +241,7 @@ impl RecoveryController {
+             }
+         }
+         self.stats.acked_packets = self.stats.acked_packets.saturating_add(acked.len() as u64);
++        let mut delivered_bytes = acked_bytes;
+         let mut best_effort_acked = 0;
+         for range in ranges.iter().filter(|range| range.start <= range.end) {
+             let samples: Vec<_> = self
+@@ -223,6 +251,7 @@ impl RecoveryController {
+                 .collect();
+             for packet_id in samples {
+                 if let Some(sent) = self.best_effort.remove(&packet_id) {
++                    delivered_bytes = delivered_bytes.saturating_add(sent.wire_bytes);
+                     if sent.retired {
+                         self.stats.late_acked_packets =
+                             self.stats.late_acked_packets.saturating_add(1);
+@@ -239,6 +268,7 @@ impl RecoveryController {
+             .stats
+             .acked_packets
+             .saturating_add(best_effort_acked as u64);
++        self.path_window.delivered_bytes = self.path_window.delivered_bytes.saturating_add(delivered_bytes);
+         if let Some(sample) = newest_rtt {
+             self.update_rtt(sample);
+         }
+@@ -370,6 +400,7 @@ impl RecoveryController {
+         self.largest_acked = None;
+         // Late ACK timestamps from the old path cannot estimate the new path's RTT.
+         self.best_effort.clear();
++        self.path_window = PathWindow::new(self.stats);
+         self.recovery_started = None;
+         self.pacing_credit = INITIAL_CWND.min(PACING_BURST_BYTES) as f64;
+         self.pacing_updated = Instant::now();
+@@ -396,6 +427,41 @@ impl RecoveryController {
+         retries
+     }
+ 
++    /// Consume a window of authenticated delivery feedback. Idle or lightly used
++    /// paths do not appear slow just because the application sent little traffic.
++    pub fn sample_path_weight(&mut self) -> Option<f64> {
++        let elapsed = self.path_window.since.elapsed().as_secs_f64();
++        if elapsed < 1.0 {
++            return None;
++        }
++        let window = std::mem::replace(&mut self.path_window, PathWindow::new(self.stats));
++        let before = window.baseline;
++        let acked = self.stats.acked_packets.saturating_sub(before.acked_packets);
++        let late = self.stats.late_acked_packets.saturating_sub(before.late_acked_packets);
++        let loss = self.stats.packet_threshold_losses.saturating_sub(before.packet_threshold_losses)
++            .saturating_add(self.stats.time_threshold_losses.saturating_sub(before.time_threshold_losses))
++            .saturating_add(self.stats.pto_expirations.saturating_sub(before.pto_expirations))
++            .saturating_sub(late);
++        let outcomes = acked.saturating_add(late).saturating_add(loss);
++        let reliability = if outcomes >= 8 {
++            let loss_fraction = loss as f64 / outcomes as f64;
++            1.0 - 0.8 * loss_fraction
++        } else {
++            1.0
++        };
++        let throughput = if window.sent_bytes as f64 / elapsed >= ALLOCATION_RATE_BYTES_PER_SEC * 0.5 {
++            let delivered_rate = window.delivered_bytes as f64 / elapsed;
++            (0.5 + delivered_rate / ALLOCATION_RATE_BYTES_PER_SEC).min(1.8)
++        } else {
++            1.0
++        };
++        let latency = self.srtt.map_or(1.0, |rtt| {
++            let delay = rtt.saturating_add(self.rttvar).as_secs_f64();
++            (0.160 / (0.080 + delay)).clamp(0.35, 1.25)
++        });
++        Some((throughput * reliability * latency).clamp(0.2, 2.0))
++    }
++
+     pub fn srtt(&self) -> Option<Duration> {
+         self.srtt
+     }
+@@ -441,6 +507,37 @@ impl RecoveryController {
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn delivery_feedback_prefers_goodput_over_a_lossy_path_at_equal_rtt() {
++        let mut fast = RecoveryController::default();
++        let mut lossy = RecoveryController::default();
++        for id in 1..=300 {
++            for path in [&mut fast, &mut lossy] {
++                path.on_sent(id, 1, Vec::new(), 1200, Reliability::Unreliable);
++            }
++        }
++        fast.on_ack_ranges(&[AckRange { start: 1, end: 300 }]);
++        lossy.on_ack_ranges(&[
++            AckRange { start: 1, end: 20 },
++            AckRange { start: 300, end: 300 },
++        ]);
++        lossy.poll_losses();
++        for path in [&mut fast, &mut lossy] {
++            path.srtt = Some(Duration::from_millis(60));
++            path.rttvar = Duration::from_millis(10);
++            path.path_window.since = Instant::now() - Duration::from_secs(2);
++        }
++        assert!(fast.sample_path_weight().unwrap() > lossy.sample_path_weight().unwrap() * 2.0);
++        assert!(fast.sample_path_weight().is_none());
++    }
++
++    #[test]
++    fn idle_path_is_not_penalized_for_zero_delivered_bytes() {
++        let mut recovery = RecoveryController::default();
++        recovery.path_window.since = Instant::now() - Duration::from_secs(2);
++        assert_eq!(recovery.sample_path_weight(), Some(1.0));
++    }
++
+     #[test]
+     fn best_effort_ack_blackout_cannot_consume_reliable_credit_or_stall_forwarding() {
+         let mut recovery = RecoveryController::default();
+diff --git a/tots-server/src/dataplane.rs b/tots-server/src/dataplane.rs
+index c1eacb7..7cab512 100644
+--- a/tots-server/src/dataplane.rs
++++ b/tots-server/src/dataplane.rs
+@@ -498,6 +498,7 @@ pub async fn run(args: Args, db: Db) -> Result<()> {
+                     let mut bytes_in_flight_sum = 0usize;
+                     let mut queued_packets = 0usize;
+                     let mut recovery_stats = RecoveryStats::default();
++                    let mut path_weights = Vec::new();
+                     let mut rtt_workers = 0usize;
+                     let mut replay_rejections_sum = 0u64;
+                     let mut best_effort_samples = 0usize;
+@@ -525,7 +526,10 @@ pub async fn run(args: Args, db: Db) -> Result<()> {
+                             .outbound
+                             .max_capacity()
+                             .saturating_sub(peer.outbound.capacity());
+-                        let recovery = peer.recovery.lock().await;
++                        let mut recovery = peer.recovery.lock().await;
++                        if let Some(weight) = recovery.sample_path_weight() {
++                            path_weights.push((session, weight));
++                        }
+                         let stats = recovery.stats();
+                         recovery_stats.sent_packets += stats.sent_packets;
+                         recovery_stats.acked_packets += stats.acked_packets;
+@@ -545,6 +549,13 @@ pub async fn run(args: Args, db: Db) -> Result<()> {
+                             srtt_max = Some(srtt_max.map_or(srtt, |old| old.max(srtt)));
+                         }
+                     }
++                    let scheduler = schedulers.get(&device).map(|entry| entry.value().clone());
++                    if let Some(scheduler) = scheduler {
++                        let mut scheduler = scheduler.lock().await;
++                        for (session, weight) in path_weights {
++                            scheduler.update_path_weight(session, weight);
++                        }
++                    }
+                     if workers != 0 {
+                         tracing::info!(
+                             device_id = %device,

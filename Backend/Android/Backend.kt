@@ -1979,6 +1979,7 @@ class Backend(private val context: Context) {
             put("txRate", if (connected) rates.tx else 0L)
             put("activeSessions", if (connected) workers?.active ?: LaLuneVpnService.snapshotActiveSessions else 0)
             put("workersAvailable", workers != null)
+            put("tunnelRttMs", workers?.tunnelRttMs ?: 0)
             put("workerProvidersAvailable", byProvider != null)
             put("workers", workers?.active ?: 0)
             put("workersTarget", if (connected) workers?.target ?: LaLuneVpnService.totsWorkersTarget else 0)

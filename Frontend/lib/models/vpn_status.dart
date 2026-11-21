@@ -15,6 +15,7 @@ class VpnStatus {
   final bool workerProvidersAvailable;
   final int workers;
   final int workersTarget;
+  final int tunnelRttMs;
   final int workersVk;
   final int workersJazz;
   final int workersYaDocs;
@@ -38,6 +39,7 @@ class VpnStatus {
     this.workerProvidersAvailable = false,
     this.workers = 0,
     this.workersTarget = 0,
+    this.tunnelRttMs = 0,
     this.workersVk = 0,
     this.workersJazz = 0,
     this.workersYaDocs = 0,
@@ -63,6 +65,7 @@ class VpnStatus {
             (j['workerProvidersAvailable'] ?? j.containsKey('workersVk')) == true,
         workers: ((j['workers'] ?? 0) as num).toInt(),
         workersTarget: ((j['workersTarget'] ?? 0) as num).toInt(),
+        tunnelRttMs: ((j['tunnelRttMs'] ?? 0) as num).toInt(),
         workersVk: ((j['workersVk'] ?? 0) as num).toInt(),
         workersJazz: ((j['workersJazz'] ?? 0) as num).toInt(),
         workersYaDocs: ((j['workersYaDocs'] ?? 0) as num).toInt(),
@@ -87,6 +90,7 @@ class VpnStatus {
     bool? workerProvidersAvailable,
     int? workers,
     int? workersTarget,
+    int? tunnelRttMs,
     int? workersVk,
     int? workersJazz,
     int? workersYaDocs,
@@ -111,6 +115,7 @@ class VpnStatus {
             workerProvidersAvailable ?? this.workerProvidersAvailable,
         workers: workers ?? this.workers,
         workersTarget: workersTarget ?? this.workersTarget,
+        tunnelRttMs: tunnelRttMs ?? this.tunnelRttMs,
         workersVk: workersVk ?? this.workersVk,
         workersJazz: workersJazz ?? this.workersJazz,
         workersYaDocs: workersYaDocs ?? this.workersYaDocs,

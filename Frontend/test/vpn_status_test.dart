@@ -14,6 +14,7 @@ void main() {
       'txRate': 256,
       'workers': 8,
       'workersTarget': 10,
+      'tunnelRttMs': 67,
       'workersVk': 3,
       'workersJazz': 2,
       'workersYaDocs': 1,
@@ -29,6 +30,8 @@ void main() {
     expect(status.txRate, 256);
     expect(status.workers, 8);
     expect(status.workersTarget, 10);
+    expect(status.tunnelRttMs, 67);
+    expect(VpnStatus.fromJson({}).tunnelRttMs, 0);
     expect(status.workersVk, 3);
     expect(status.workersJazz, 2);
     expect(status.workersYaDocs, 1);
