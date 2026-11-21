@@ -111,7 +111,7 @@ class _RootShellState extends ConsumerState<RootShell> {
       // Sliding four backdrop-heavy pages at once is noticeably expensive on
       // mobile GPUs. Android gets an immediate tab switch; desktop keeps the
       // animated transition.
-      _pageController.animateToPage(i, duration: const Duration(milliseconds: 260), curve: Curves.easeOutCubic);
+      _pageController.animateToPage(i, duration: const Duration(milliseconds: 200), curve: Curves.easeOutCubic);
     } else {
       _pageController.animateToPage(
         i,
@@ -123,7 +123,6 @@ class _RootShellState extends ConsumerState<RootShell> {
 
   @override
   Widget build(BuildContext context) {
-    final backendStatus = ref.watch(backendWatchdogProvider);
     // Backend снова отвечает — догружаем список конфигов, если прошлая
     // загрузка не удалась (no-op, когда список уже загружен).
     ref.listen<BackendStatus>(backendWatchdogProvider, (prev, next) {
@@ -132,34 +131,12 @@ class _RootShellState extends ConsumerState<RootShell> {
       }
     });
 
-    return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          image: DecorationImage(
-            image: AssetImage('assets/background.png'),
-            fit: BoxFit.cover,
-          ),
-        ),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                kAccent.withOpacity(0.18),
-                Colors.transparent,
-                kAccentRed.withOpacity(0.14),
-              ],
-              stops: const [0, 0.52, 1],
-            ),
-          ),
-          child: BackdropGroup(
-            child: SafeArea(
+  final isAndroid = !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+            final content = SafeArea(
               child: Column(
                 children: [
                   // Глобальный зелёный баннер, если подключены к OpenWRT-роутеру.
                   const RouterBanner(),
-                  if (backendStatus == BackendStatus.dead)
                     _BackendOfflineBanner(),
                   Expanded(
                     child: RepaintBoundary(
@@ -200,11 +177,45 @@ class _RootShellState extends ConsumerState<RootShell> {
                   ),
                 ],
               ),
-            ),
+        );
+return Scaffold(
+  body: Stack(
+    fit: StackFit.expand,
+    children: [
+      Positioned.fill(
+        child: RepaintBoundary(
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              Image.asset(
+                'assets/background.png',
+                fit: BoxFit.cover,
+                cacheWidth: isAndroid ? 720 : null,
+                filterQuality: isAndroid ? FilterQuality.low : FilterQuality.medium,
+                gaplessPlayback: true,
+              ),
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      kAccent.withOpacity(0.18),
+                      Colors.transparent,
+                      kAccentRed.withOpacity(0.14),
+                    ],
+                    stops: const [0, 0.52, 1],
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),
-    );
+      if (isAndroid) content else BackdropGroup(child: content),
+    ],
+  ),
+);  
   }
 }
 
@@ -226,13 +237,15 @@ class _RetainedPageState extends State<_RetainedPage>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return widget.child;
+    return RepaintBoundary(child: widget.child);
   }
 }
 
-class _BackendOfflineBanner extends StatelessWidget {
+class _BackendOfflineBanner extends ConsumerWidget  {
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final status = ref.watch(backendWatchdogProvider);
+    if (status != BackendStatus.dead) return const SizedBox.shrink();
     return Container(
       width: double.infinity,
       color: const Color(0xFFB22A2A),
