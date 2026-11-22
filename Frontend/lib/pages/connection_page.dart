@@ -169,10 +169,15 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
       _measuringPings = false;
     });
     final total = jobs.length;
+    final hasTots = plain.any((config) => config.isTots) ||
+        subsState.items.any((sub) =>
+            sub.configs.any((config) => config.isTots && !config.expired));
     Toast.show(
       context,
       total == 0
-          ? 'Задержка ToTS измеряется при подключении'
+          ? (hasTots
+              ? 'Задержка ToTS измеряется при подключении'
+              : 'Нет профилей для проверки')
           : 'Задержка измерена: ${results.length} из $total',
       isError: total > 0 && results.isEmpty,
     );

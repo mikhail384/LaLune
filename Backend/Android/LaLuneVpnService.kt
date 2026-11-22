@@ -26,6 +26,8 @@ import android.net.IpPrefix
 import android.net.LocalServerSocket
 import android.net.VpnService
 import android.os.Build
+import android.os.SystemClock
+import android.os.ResultReceiver
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -77,6 +79,8 @@ class LaLuneVpnService : VpnService() {
         const val ACTION_STATUS = "com.lalune.lalune.VPN_STATUS"
         const val ACTION_LOG = "com.lalune.lalune.VPN_LOG"
         const val EXTRA_CONFIG_ID = "configId"
+        const val EXTRA_TOTS_RUNTIME = "totsRuntime"
+        const val EXTRA_STOP_RECEIVER = "stopReceiver"
         const val EXTRA_CONNECTED = "connected"
         const val EXTRA_STATE = "state"
         const val EXTRA_MESSAGE = "message"
@@ -176,6 +180,7 @@ class LaLuneVpnService : VpnService() {
     private var notificationTickerJob: Job? = null
     private var flowJob: Job? = null
     private val bridgeJobs = mutableListOf<Job>()
+    private val stopReceivers = mutableListOf<ResultReceiver>()
 
     override fun onCreate() {
         super.onCreate()
@@ -199,14 +204,19 @@ class LaLuneVpnService : VpnService() {
                 notifyLog(this, "[VPN] START received; configId=$configId")
                 isRunning = true
                 publishState("connecting", false, "Подключение")
-                startFlow(configId)
+                startFlow(configId, intent.getStringExtra(EXTRA_TOTS_RUNTIME))
             }
-            "STOP", ACTION_STOP -> stopFlow()
+            "STOP", ACTION_STOP -> {
+                @Suppress("DEPRECATION")
+                val receiver = intent.getParcelableExtra<ResultReceiver>(EXTRA_STOP_RECEIVER)
+                if (receiver != null) stopReceivers.add(receiver)
+                stopFlow()
+            }
         }
         return START_STICKY
     }
 
-    private fun startFlow(configId: Long) {
+    private fun startFlow(configId: Long, runtime: String?) {
         Log.d(TAG, "startFlow")
         // Empty during counter reset, so a concurrent reader cannot associate
         // a previous session ID with the next session's counters.
@@ -220,14 +230,7 @@ class LaLuneVpnService : VpnService() {
         snapshotSessionId = java.util.UUID.randomUUID().toString()
         flowJob?.cancel()
         flowJob = scope.launch {
-            val runtimeFile = File(filesDir, "la-lune/tots_runtime.json")
-            totsRuntime = try {
-                if (runtimeFile.exists()) JSONObject(runtimeFile.readText()) else null
-            } catch (e: Exception) {
-                Log.e(TAG, "invalid ToTS runtime: ${e.message}")
-                notifyLog(this@LaLuneVpnService, "[VPN] invalid ToTS runtime: ${e.message.orEmpty()}")
-                null
-            }
+            totsRuntime = runtime?.let { JSONObject(it) }
             if (totsRuntime != null) {
                 usesNativeTun = true
                 totsWorkersRequested = totsRuntime?.optInt("workersRequested", 0) ?: 0
@@ -718,7 +721,7 @@ class LaLuneVpnService : VpnService() {
         vpnInterface = null
     }
 
-    private fun stopFlow() {
+    private fun stopFlow(stopService: Boolean = true) {
         Log.d(TAG, "stopFlow")
         isRunning = false
         establishing = false
@@ -740,10 +743,7 @@ class LaLuneVpnService : VpnService() {
         try { vpnInterface?.close() } catch (_: Exception) {}
         vpnInterface = null
 
-        if (totsRuntime != null) {
-            coreManager.stopCore()
-            try { File(filesDir, "la-lune/tots_runtime.json").delete() } catch (_: Exception) {}
-        }
+        if (totsRuntime != null) coreManager.stopCore()
         totsRuntime = null
 
         activeSessions = 0
@@ -756,11 +756,11 @@ class LaLuneVpnService : VpnService() {
         connectionMessage = ""
         notifyStatus(this, false, "disconnected", "")
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
-        stopSelf()
+        if (stopService) stopSelf()
     }
 
     override fun onDestroy() {
-        stopFlow()
+        stopFlow(stopService = false)
         scope.cancel()
         snapshotConnected = false
         snapshotSessionId = ""
@@ -768,6 +768,8 @@ class LaLuneVpnService : VpnService() {
         snapshotState = "disconnected"
         snapshotMessage = ""
         super.onDestroy()
+        stopReceivers.forEach { it.send(0, null) }
+        stopReceivers.clear()
     }
 
     private fun buildNotification(): Notification {

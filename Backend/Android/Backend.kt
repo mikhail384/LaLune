@@ -17,6 +17,7 @@ import android.net.VpnService
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.ResultReceiver
 import android.util.Log
 import android.util.Base64
 import org.json.JSONArray
@@ -41,6 +42,8 @@ import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.zip.ZipFile
 import kotlin.concurrent.thread
 
@@ -91,7 +94,6 @@ class Backend(private val context: Context) {
     private val logsFile = File(appDir, "logs.log")
     private val tokenFile = File(appDir, "token.json")
     private val selectedConfigFile = File(appDir, "selected_config.json")
-    private val totsRuntimeFile = File(appDir, "tots_runtime.json")
 
     private val eventSubscribers = CopyOnWriteArrayList<EventStream>()
     private val logs = CopyOnWriteArrayList<String>()
@@ -499,7 +501,8 @@ class Backend(private val context: Context) {
                     put("since", "")
                 }.toString()
                 path == "/vpn/reconnect" && method == "POST" -> {
-                    vpnDisconnect(); Thread.sleep(300); vpnConnect("{}")
+                    val stopped = vpnDisconnect()
+                    if (stopped.first == 200) vpnConnect("{}") else stopped
                 }
                 path == "/vpn/stats" && method == "GET" -> {
                     // Real counters from the TUN bridge, rates from the delta
@@ -1404,11 +1407,9 @@ class Backend(private val context: Context) {
             if (raw.isBlank()) return 400 to jsonErr("no ToTS config link")
             val runtime = try { buildTotsRuntime(raw, settings) }
             catch (e: Exception) { return 400 to jsonErr(e.message ?: "invalid ToTS config") }
-            try { totsRuntimeFile.writeText(runtime.toString()) }
-            catch (_: Exception) { return 500 to jsonErr("cannot prepare ToTS runtime") }
             addLog("[VPN] ToTS runtime prepared; requesting Android VPN service")
 
-            markVpnConnecting(selectedId)
+            markVpnConnecting(selectedId, runtime.toString())
             mainHandler.post {
                 val act = activity
                 if (act == null) { startVpnService(); return@post }
@@ -1418,8 +1419,6 @@ class Backend(private val context: Context) {
             }
             luaRuntime?.onConnect()
             return 200 to jsonOk("ok" to true, "status" to "connecting")
-        } else {
-            try { totsRuntimeFile.delete() } catch (_: Exception) {}
         }
 
         val peer = sel.optString("peer", settings.optString("peer", ""))
@@ -1808,10 +1807,11 @@ class Backend(private val context: Context) {
         }
     }
 
-    @Volatile private var pendingVpnConfigId = 0L
+    private data class VpnStart(val configId: Long, val totsRuntime: String?)
+    @Volatile private var pendingVpnStart: VpnStart? = null
 
-    private fun markVpnConnecting(configId: Long) {
-        pendingVpnConfigId = configId
+    private fun markVpnConnecting(configId: Long, totsRuntime: String? = null) {
+        pendingVpnStart = VpnStart(configId, totsRuntime)
         vpnConnected = false
         vpnState = "connecting"
         vpnMessage = "Подключение"
@@ -1827,7 +1827,7 @@ class Backend(private val context: Context) {
     }
 
     fun onVpnPermissionDenied() {
-        pendingVpnConfigId = 0L
+        pendingVpnStart = null
         addLog("[VPN] permission denied")
         vpnConnected = false
         vpnState = "error"
@@ -1839,11 +1839,11 @@ class Backend(private val context: Context) {
     }
 
     private fun startVpnService() {
-        val configId = pendingVpnConfigId
-        if (configId == 0L) return
+        val request = pendingVpnStart ?: return
         val i = Intent(context, LaLuneVpnService::class.java).apply {
             action = "START"
-            putExtra(LaLuneVpnService.EXTRA_CONFIG_ID, configId)
+            putExtra(LaLuneVpnService.EXTRA_CONFIG_ID, request.configId)
+            request.totsRuntime?.let { putExtra(LaLuneVpnService.EXTRA_TOTS_RUNTIME, it) }
         }
         addLog("[VPN] starting LaLuneVpnService")
         try {
@@ -1865,11 +1865,24 @@ class Backend(private val context: Context) {
     }
 
     private fun vpnDisconnect(): Pair<Int, String> {
-        pendingVpnConfigId = 0L
-        val i = Intent(context, LaLuneVpnService::class.java).apply { action = "STOP" }
-        try { context.startService(i) } catch (_: Exception) {}
+        pendingVpnStart = null
+        if (LaLuneVpnService.snapshotSessionId.isNotEmpty() || vpnConnected || vpnState == "connecting") {
+            val stopped = CountDownLatch(1)
+            val receiver = object : ResultReceiver(mainHandler) {
+                override fun onReceiveResult(resultCode: Int, resultData: android.os.Bundle?) {
+                    stopped.countDown()
+                }
+            }
+            val request = Intent(context, LaLuneVpnService::class.java).apply {
+                action = "STOP"
+                putExtra(LaLuneVpnService.EXTRA_STOP_RECEIVER, receiver)
+            }
+            context.startService(request)
+            if (!stopped.await(5, TimeUnit.SECONDS)) {
+                return 503 to jsonErr("Android VPN is still stopping")
+            }
+        }
         coreManager?.stopCore()
-        try { totsRuntimeFile.delete() } catch (_: Exception) {}
         stopSocks5()
         vpnConnected = false
         vpnState = "disconnected"
