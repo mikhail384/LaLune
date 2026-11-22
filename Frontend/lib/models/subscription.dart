@@ -169,6 +169,9 @@ class SubConfig {
   /// Идентичность конфига внутри подписки.
   String get key => '$protocol|$config';
 
+  bool get isTots => normalizeSubProtocol(protocol).toLowerCase() == 'tots' ||
+      config.trimLeft().toLowerCase().startsWith('tots://');
+
   bool get expired =>
       expires != null && DateTime.now().toUtc().isAfter(expires!);
 

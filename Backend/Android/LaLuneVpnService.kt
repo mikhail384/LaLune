@@ -76,6 +76,7 @@ class LaLuneVpnService : VpnService() {
 
         const val ACTION_STATUS = "com.lalune.lalune.VPN_STATUS"
         const val ACTION_LOG = "com.lalune.lalune.VPN_LOG"
+        const val EXTRA_CONFIG_ID = "configId"
         const val EXTRA_CONNECTED = "connected"
         const val EXTRA_STATE = "state"
         const val EXTRA_MESSAGE = "message"
@@ -94,11 +95,35 @@ class LaLuneVpnService : VpnService() {
          */
         val tunTxBytes = java.util.concurrent.atomic.AtomicLong(0)
         val tunRxBytes = java.util.concurrent.atomic.AtomicLong(0)
+        @Volatile internal var usesNativeTun = false
+            private set
+        private data class WorkerSample(val session: String, val at: Long, val value: TotsWorkers)
+        @Volatile private var workerSample: WorkerSample? = null
+        @Volatile internal var totsWorkersRequested = 0
+            private set
+
+        private fun freshTotsSample(): WorkerSample? = workerSample?.takeIf {
+            it.session == snapshotSessionId && SystemClock.elapsedRealtime() - it.at <= 15_000
+        }
+
+        internal fun currentTotsWorkers(): TotsWorkers? = freshTotsSample()?.value
+
+        internal fun trafficSample(): TunnelTrafficSample? {
+            if (usesNativeTun) {
+                val sample = freshTotsSample() ?: return null
+                return sample.value.bytes?.let { TunnelTrafficSample(it, sample.at) }
+            }
+            return TunnelTrafficSample(
+                TunnelBytes(tunRxBytes.get(), tunTxBytes.get()),
+                SystemClock.elapsedRealtime(),
+            )
+        }
 
         @Volatile var snapshotConnected: Boolean = false
         @Volatile var snapshotActiveSessions: Int = 0
         @Volatile var snapshotSessionId: String = ""
         @Volatile var snapshotConfigId: Long = 0
+            private set
         @Volatile var snapshotState: String = "disconnected"
         @Volatile var snapshotMessage: String = ""
 
@@ -162,21 +187,27 @@ class LaLuneVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             "START" -> if (!isRunning) {
-                notifyLog(this, "[VPN] START received; configId=$snapshotConfigId")
+                val configId = intent.getLongExtra(EXTRA_CONFIG_ID, 0L)
+                if (configId == 0L) return START_NOT_STICKY
+                notifyLog(this, "[VPN] START received; configId=$configId")
                 isRunning = true
                 publishState("connecting", false, "Подключение")
-                startFlow()
+                startFlow(configId)
             }
             "STOP", ACTION_STOP -> stopFlow()
         }
         return START_STICKY
     }
 
-    private fun startFlow() {
+    private fun startFlow(configId: Long) {
         Log.d(TAG, "startFlow")
         // Empty during counter reset, so a concurrent reader cannot associate
         // a previous session ID with the next session's counters.
         snapshotSessionId = ""
+        snapshotConfigId = configId
+        usesNativeTun = false
+        workerSample = null
+        totsWorkersRequested = 0
         tunTxBytes.set(0)
         tunRxBytes.set(0)
         snapshotSessionId = java.util.UUID.randomUUID().toString()
@@ -191,6 +222,8 @@ class LaLuneVpnService : VpnService() {
                 null
             }
             if (totsRuntime != null) {
+                usesNativeTun = true
+                totsWorkersRequested = totsRuntime?.optInt("workersRequested", 0) ?: 0
                 notifyLog(this@LaLuneVpnService, "[VPN] ToTS runtime loaded; creating TUN")
                 establishing = true
                 val established = establishTun()
@@ -499,6 +532,8 @@ class LaLuneVpnService : VpnService() {
                 args += fdSocketName
 
                 tunnelGeneration++
+                val session = snapshotSessionId
+                val generation = tunnelGeneration
                 vpnInterface = iface
                 totsTunFd = inherited
                 tunEstablished = true
@@ -510,6 +545,13 @@ class LaLuneVpnService : VpnService() {
                     onLog = { line ->
                         Log.i(TAG, line)
                         notifyLog(this@LaLuneVpnService, line, core = true)
+                        if (generation == tunnelGeneration && session == snapshotSessionId) {
+                            TotsWorkers.parse(line)?.let {
+                                workerSample = WorkerSample(session, SystemClock.elapsedRealtime(), it)
+                                updateNotification()
+                            }
+                            if (line.contains("[CORE] process exited")) workerSample = null
+                        }
                         when {
                             line.contains("ToTS Android TUN connected") -> coreTunReady.complete(true)
                             line.contains("[CORE] process exited") || line.contains("Error:") -> coreTunReady.complete(false)
@@ -658,6 +700,7 @@ class LaLuneVpnService : VpnService() {
         }
         tunnelGeneration++
         tunEstablished = false
+        workerSample = null
         bridgeJobs.forEach { it.cancel() }
         bridgeJobs.clear()
         try { udpSocket?.close() } catch (_: Exception) {}
@@ -679,6 +722,8 @@ class LaLuneVpnService : VpnService() {
 
         tunnelGeneration++
         tunEstablished = false
+        workerSample = null
+        totsWorkersRequested = 0
         bridgeJobs.forEach { it.cancel() }
         bridgeJobs.clear()
         try { udpSocket?.close() } catch (_: Exception) {}
@@ -747,7 +792,15 @@ class LaLuneVpnService : VpnService() {
 
         val text = when (connectionState) {
             "checking" -> "Проверка"
-            "connected" -> "Активных: $activeSessions | Трафик: $trafficMB МБ"
+            "connected" -> if (usesNativeTun) {
+                val workers = currentTotsWorkers()
+                val active = workers?.active?.toString() ?: "—"
+                val target = workers?.target?.toString() ?: "—"
+                val traffic = trafficSample()?.bytes?.let {
+                    String.format(java.util.Locale.getDefault(), "%.2f МБ", (it.rx + it.tx) / 1048576.0)
+                } ?: "—"
+                "Активных: $active/$target | Трафик: $traffic"
+            } else "Активных: $activeSessions | Трафик: $trafficMB МБ"
             else -> "Подключение"
         }
 

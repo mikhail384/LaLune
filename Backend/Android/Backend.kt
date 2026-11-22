@@ -54,7 +54,7 @@ class Backend(private val context: Context) {
         // next to the original app (1062) without a bind conflict.
         const val LALUNE_TEST_PORT = 1064
         const val HOST = "127.0.0.1"
-        const val VERSION = "0.9.18"
+        const val VERSION = "0.9.19"
 
         /** Single source of truth for the loopback API port of a package. */
         fun portFor(packageName: String): Int = when {
@@ -491,12 +491,13 @@ class Backend(private val context: Context) {
 
                 path == "/vpn/connect" && method == "POST" -> vpnConnect(body)
                 path == "/vpn/disconnect" && method == "POST" -> vpnDisconnect()
-                path == "/vpn/status" && method == "GET" -> 200 to jsonOk(
-                    "state" to vpnState,
-                    "connected" to vpnConnected, "uptimeSec" to 0,
-                    "configId" to LaLuneVpnService.snapshotConfigId, "message" to vpnMessage, "since" to "",
-                    "socks5Port" to socks5Port
-                )
+                path == "/vpn/status" && method == "GET" -> 200 to vpnTraffic().apply {
+                    put("state", vpnState)
+                    put("connected", vpnConnected)
+                    put("uptimeSec", 0)
+                    put("message", vpnMessage)
+                    put("since", "")
+                }.toString()
                 path == "/vpn/reconnect" && method == "POST" -> {
                     vpnDisconnect(); Thread.sleep(300); vpnConnect("{}")
                 }
@@ -1407,8 +1408,7 @@ class Backend(private val context: Context) {
             catch (_: Exception) { return 500 to jsonErr("cannot prepare ToTS runtime") }
             addLog("[VPN] ToTS runtime prepared; requesting Android VPN service")
 
-            LaLuneVpnService.snapshotConfigId = selectedId
-            markVpnConnecting()
+            markVpnConnecting(selectedId)
             mainHandler.post {
                 val act = activity
                 if (act == null) { startVpnService(); return@post }
@@ -1458,8 +1458,7 @@ class Backend(private val context: Context) {
 
         if (settings.optBoolean("shareVpn", false)) startSocks5()
 
-        LaLuneVpnService.snapshotConfigId = selectedId
-        markVpnConnecting()
+        markVpnConnecting(selectedId)
         mainHandler.post {
             val act = activity
             if (act == null) { startVpnService(); return@post }
@@ -1547,6 +1546,15 @@ class Backend(private val context: Context) {
                 val value = try { JSONObject(text) } catch (_: Exception) {
                     throw IllegalArgumentException("$name provider data is not valid JSON")
                 }
+                val issued = providerData.optJSONObject(name)
+                if (name == "jazz" || name == "cups") {
+                    if (issued != null) for (field in listOf(
+                        "worker_count", "worker_rooms", "join_link", "connector_url", "room_id",
+                    )) {
+                        if (issued.has(field)) value.put(field, issued.get(field))
+                        else value.remove(field)
+                    }
+                }
                 providerData.put(name, value)
             }
         }
@@ -1561,6 +1569,9 @@ class Backend(private val context: Context) {
         providers.filter { !settings.optBoolean(it.enabledKey, true) }
             .forEach { providerData.remove(it.name) }
 
+        val requestedWorkers = settings.optInt("totsWorkers", 1).coerceIn(1, 256)
+        val jazz = providerData.optJSONObject("jazz")
+
         if (settings.optBoolean("totsVkEnabled", true)) {
             var links = settings.optString("totsVkCallLinks", "")
                 .split(Regex("[\\s,+;]+"))
@@ -1573,7 +1584,7 @@ class Backend(private val context: Context) {
                 val token = readVkToken() ?: throw IllegalArgumentException("Auto API requires VK token")
                 val workers = settings.optInt("totsWorkers", 1).coerceIn(1, 256)
                 val count = callCountForWorkers(
-                    workers,
+                    requestedWorkers,
                     settings.optInt("autoApiWorkers", DEFAULT_AUTO_API_WORKERS),
                 )
                 val generated = mutableListOf<String>()
@@ -1624,20 +1635,19 @@ class Backend(private val context: Context) {
             it.name to settings.optInt(it.percentKey, it.defaultPercent).coerceIn(0, 100)
         }
         val positiveSum = rawWeights.values.sum()
-        val weights = linkedMapOf<String, Int>()
-        if (positiveSum <= 0) {
-            available.forEachIndexed { index, p -> weights[p.name] = if (index == 0) 100 else 0 }
+        val weights = if (positiveSum == 0) {
+            mapOf(primary to 100)
         } else {
-            var used = 0
-            available.forEachIndexed { index, p ->
-                val value = if (index == available.lastIndex) {
-                    100 - used
-                } else {
-                    ((rawWeights[p.name] ?: 0) * 100 / positiveSum).coerceIn(0, 100 - used)
-                }
-                weights[p.name] = value
-                used += value
+            val scaled = rawWeights.mapValues { (_, weight) -> weight * 100 }
+            val rounded = scaled.mapValues { (_, weight) -> weight / positiveSum }.toMutableMap()
+            val remainder = 100 - rounded.values.sum()
+            scaled.entries.filter { it.value > 0 }.sortedWith(
+                compareByDescending<Map.Entry<String, Int>> { it.value % positiveSum }
+                    .thenByDescending { it.key == primary },
+            ).take(remainder).forEach { (name, _) ->
+                rounded[name] = rounded.getValue(name) + 1
             }
+            rounded
         }
 
         val peer = cfg.optString("peer", "").trim()
@@ -1664,7 +1674,7 @@ class Backend(private val context: Context) {
 
         val args = JSONArray().apply {
             put("--config"); put(effectiveLink)
-            put("--n"); put(settings.optInt("totsWorkers", 1).coerceIn(1, 256).toString())
+            put("--n"); put(requestedWorkers.toString())
             put("--workers_percent")
             put(JSONObject().apply { weights.forEach { (k, v) -> put(k, v) } }.toString())
             if (settings.optBoolean("totsRelayOnly", false)) put("--relay-only")
@@ -1678,6 +1688,7 @@ class Backend(private val context: Context) {
             // 10.77/16 derivation only as a compatibility fallback.
             put("virtualIp", virtualIp)
             put("mtu", mtu)
+            put("workersRequested", requestedWorkers)
             put("args", args)
         }
     }
@@ -1797,7 +1808,10 @@ class Backend(private val context: Context) {
         }
     }
 
-    private fun markVpnConnecting() {
+    @Volatile private var pendingVpnConfigId = 0L
+
+    private fun markVpnConnecting(configId: Long) {
+        pendingVpnConfigId = configId
         vpnConnected = false
         vpnState = "connecting"
         vpnMessage = "Подключение"
@@ -1813,6 +1827,7 @@ class Backend(private val context: Context) {
     }
 
     fun onVpnPermissionDenied() {
+        pendingVpnConfigId = 0L
         addLog("[VPN] permission denied")
         vpnConnected = false
         vpnState = "error"
@@ -1824,7 +1839,12 @@ class Backend(private val context: Context) {
     }
 
     private fun startVpnService() {
-        val i = Intent(context, LaLuneVpnService::class.java).apply { action = "START" }
+        val configId = pendingVpnConfigId
+        if (configId == 0L) return
+        val i = Intent(context, LaLuneVpnService::class.java).apply {
+            action = "START"
+            putExtra(LaLuneVpnService.EXTRA_CONFIG_ID, configId)
+        }
         addLog("[VPN] starting LaLuneVpnService")
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -1845,6 +1865,7 @@ class Backend(private val context: Context) {
     }
 
     private fun vpnDisconnect(): Pair<Int, String> {
+        pendingVpnConfigId = 0L
         val i = Intent(context, LaLuneVpnService::class.java).apply { action = "STOP" }
         try { context.startService(i) } catch (_: Exception) {}
         coreManager?.stopCore()
@@ -1975,6 +1996,47 @@ class Backend(private val context: Context) {
                 Triple(callId, hash, 0)
             }
         } catch (_: Exception) { Triple("", "", -1) }
+    }
+
+    @Synchronized
+    private fun vpnTraffic(): JSONObject {
+        val session = LaLuneVpnService.snapshotSessionId
+        val configId = LaLuneVpnService.snapshotConfigId
+        val connected = vpnConnected
+        val tots = LaLuneVpnService.usesNativeTun
+        val workers = if (connected) LaLuneVpnService.currentTotsWorkers() else null
+        val sample = LaLuneVpnService.trafficSample()
+        val stable = session.isNotEmpty() && session == LaLuneVpnService.snapshotSessionId
+        val available = stable && sample != null
+        val bytes = sample?.bytes?.takeIf { available }
+        val rates = trafficRates.sample(session, sample?.takeIf { available })
+        val byProvider = workers?.providers
+        return JSONObject().apply {
+            put("trafficAvailable", available)
+            put("trafficRatesAvailable", connected && rates != null)
+            put("tots", stable && tots)
+            put("sessionId", if (stable) session else "")
+            put("configId", if (stable) configId else 0L)
+            put("rxBytes", bytes?.rx ?: 0L)
+            put("txBytes", bytes?.tx ?: 0L)
+            put("rxRate", if (connected) rates?.rx ?: 0L else 0L)
+            put("txRate", if (connected) rates?.tx ?: 0L else 0L)
+            put("activeSessions", if (connected) workers?.active ?: LaLuneVpnService.snapshotActiveSessions else 0)
+            put("workersAvailable", workers != null)
+            put("tunnelRttMs", workers?.tunnelRttMs ?: 0)
+            put("workerProvidersAvailable", byProvider != null)
+            put("workers", workers?.active ?: 0)
+            put("workersRequested", if (stable && tots) LaLuneVpnService.totsWorkersRequested else 0)
+            put("workersTarget", workers?.target ?: 0)
+            put("workerTargets", workers?.providerTargets?.let { JSONObject(it) } ?: JSONObject())
+            put("workersVk", byProvider?.get("vk") ?: 0)
+            put("workersJazz", byProvider?.get("jazz") ?: 0)
+            put("workersYaDocs", byProvider?.get("ya_docs") ?: 0)
+            put("workersMailDocs", byProvider?.get("mail_docs") ?: 0)
+            put("workersCups", byProvider?.get("cups") ?: 0)
+            put("workersMax", byProvider?.get("max") ?: 0)
+            put("socks5Port", socks5Port)
+        }
     }
 
     private fun jsonOk(vararg pairs: Pair<String, Any?>): String {

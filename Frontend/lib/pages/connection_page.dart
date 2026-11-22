@@ -21,22 +21,8 @@ import '../widgets/config_selector.dart';
 import '../widgets/moon_button.dart';
 import '../widgets/qr_scanner_dialog.dart';
 import '../widgets/toast.dart';
+import '../widgets/tunnel_metrics.dart';
 import 'add_config_dialog.dart';
-
-String _formatTrafficBytes(int value) {
-  if (value < 1024) return '$value B';
-  const units = ['KB', 'MB', 'GB', 'TB'];
-  var amount = value / 1024.0;
-  var unit = 0;
-  while (amount >= 1024 && unit < units.length - 1) {
-    amount /= 1024;
-    unit++;
-  }
-  return '${amount.toStringAsFixed(amount >= 100 ? 0 : 1)} ${units[unit]}';
-}
-
-String _formatTrafficRate(int bytesPerSecond) =>
-    '${_formatTrafficBytes(bytesPerSecond)}/s';
 
 class ConnectionPage extends ConsumerStatefulWidget {
   final VoidCallback? onReload;
@@ -145,6 +131,7 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
     final jobs = <Future<void>>[];
 
     for (final config in plain) {
+      if (config.isTots) continue;
       jobs.add(() async {
         final ping = await probeProfile(config);
         if (ping != null) results[configPingKey(config.id)] = ping;
@@ -153,7 +140,7 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
 
     for (final sub in subsState.items) {
       for (final config in sub.configs) {
-        if (config.expired) continue;
+        if (config.expired || config.isTots) continue;
         jobs.add(() async {
           try {
             final parsed = await api.postJson('/configs/parse', {
@@ -185,7 +172,7 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
     Toast.show(
       context,
       total == 0
-          ? 'Нет профилей для проверки'
+          ? 'Задержка ToTS измеряется при подключении'
           : 'Задержка измерена: ${results.length} из $total',
       isError: total > 0 && results.isEmpty,
     );
@@ -418,9 +405,10 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
     }
     final tunChecking = vpn.state == 'checking' && vpn.message == 'Проверка TUN';
     final visuallyConnected = vpn.connected || tunChecking;
-    final showTraffic = vpn.connected &&
-        (activeConfig?.isTots == true || vpn.rxBytes > 0 || vpn.txBytes > 0 ||
-            vpn.rxRate > 0 || vpn.txRate > 0);
+    final isTots = vpn.tots || activeConfig?.isTots == true;
+    final showMetrics = (isTots && (vpn.connected || tunChecking)) ||
+        (vpn.connected && (vpn.rxBytes > 0 || vpn.txBytes > 0 ||
+            vpn.rxRate > 0 || vpn.txRate > 0 || !vpn.trafficAvailable));
 
     return Stack(
       children: [
@@ -496,88 +484,9 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
                     ],
                   ),
                 ),
-                if (showTraffic) ...[
+                if (showMetrics) ...[
                   const SizedBox(height: 14),
-                  Container(
-                    width: double.infinity,
-                    constraints: const BoxConstraints(maxWidth: 400),
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.045),
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: Colors.white.withOpacity(0.08)),
-                    ),
-                    child: Column(
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: _TrafficValue(
-                                icon: Icons.south,
-                                label: 'Входящий',
-                                value: _formatTrafficRate(vpn.rxRate),
-                                color: const Color(0xFF7CFF9A),
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: _TrafficValue(
-                                icon: Icons.north,
-                                label: 'Исходящий',
-                                value: _formatTrafficRate(vpn.txRate),
-                                color: const Color(0xFF91B8FF),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 9),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                '↓ ${_formatTrafficBytes(vpn.rxBytes)}',
-                                style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(0.58)),
-                              ),
-                            ),
-                            Expanded(
-                              child: Text(
-                                '↑ ${_formatTrafficBytes(vpn.txBytes)}',
-                                textAlign: TextAlign.end,
-                                style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(0.58)),
-                              ),
-                            ),
-                          ],
-                        ),
-                        if (activeConfig?.isTots == true) ...[
-                          const SizedBox(height: 7),
-                          Divider(height: 1, color: Colors.white.withOpacity(0.08)),
-                          const SizedBox(height: 7),
-                          Row(
-                            children: [
-                              Icon(Icons.hub_outlined, size: 13, color: Colors.white.withOpacity(0.55)),
-                              const SizedBox(width: 6),
-                              Text(
-                                'ToTS Workers: ${vpn.workers}/${vpn.workersTarget}',
-                                style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(0.62)),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 5),
-                          Wrap(
-                            spacing: 10,
-                            runSpacing: 3,
-                            children: [
-                              _ProviderWorkers(label: 'VK', count: vpn.workersVk),
-                              _ProviderWorkers(label: 'Jazz', count: vpn.workersJazz),
-                              _ProviderWorkers(label: 'Ya Docs', count: vpn.workersYaDocs),
-                              _ProviderWorkers(label: 'Mail', count: vpn.workersMailDocs),
-                              _ProviderWorkers(label: 'Cups', count: vpn.workersCups),
-                            ],
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
+                  TunnelMetrics(status: vpn, isTots: isTots),
                 ],
                 const SizedBox(height: 22),
                 ConfigSelector(
@@ -590,6 +499,8 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
                   measuringPings: _measuringPings,
                   pingsMeasured: _pingsMeasured,
                   pings: _profilePings,
+                  totsConfigId: isTots && vpn.connected ? vpn.configId : null,
+                  totsRttMs: vpn.tunnelRttMs > 0 ? vpn.tunnelRttMs : null,
                   onMeasurePings: _measureAllPings,
                   onToggleSub: (s) => ref
                       .read(subscriptionsProvider.notifier)
@@ -732,54 +643,4 @@ class _AddButtonState extends State<_AddButton> {
       ),
     );
   }
-}
-
-
-class _TrafficValue extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String value;
-  final Color color;
-
-  const _TrafficValue({
-    required this.icon,
-    required this.label,
-    required this.value,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Icon(icon, size: 15, color: color),
-        const SizedBox(width: 7),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(label, style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.52))),
-              const SizedBox(height: 2),
-              Text(value, maxLines: 1, overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: color)),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-
-class _ProviderWorkers extends StatelessWidget {
-  final String label;
-  final int count;
-
-  const _ProviderWorkers({required this.label, required this.count});
-
-  @override
-  Widget build(BuildContext context) => Text(
-        '$label $count',
-        style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.48)),
-      );
 }

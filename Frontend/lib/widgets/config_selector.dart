@@ -38,6 +38,8 @@ class ConfigSelector extends StatelessWidget {
   final bool pingsMeasured;
   final Map<String, int> pings;
   final VoidCallback? onMeasurePings;
+  final int? totsConfigId;
+  final int? totsRttMs;
 
   const ConfigSelector({
     super.key,
@@ -61,6 +63,8 @@ class ConfigSelector extends StatelessWidget {
     this.pingsMeasured = false,
     this.pings = const {},
     this.onMeasurePings,
+    this.totsConfigId,
+    this.totsRttMs,
   });
 
   Widget _note(String text, {bool spinner = false, Widget? action}) {
@@ -128,7 +132,7 @@ class ConfigSelector extends StatelessWidget {
                             )
                           : IconButton(
                               onPressed: onMeasurePings,
-                              tooltip: 'Измерить задержку всех профилей',
+                              tooltip: 'Измерить задержку профилей',
                               padding: EdgeInsets.zero,
                               iconSize: 19,
                               icon: Icon(Icons.speed,
@@ -160,7 +164,10 @@ class ConfigSelector extends StatelessWidget {
               ...configs.map((c) => _ConfigRow(
                     config: c,
                     selected: c.id == selectedId,
-                    ping: pings[configPingKey(c.id)],
+                    ping: c.isTots
+                        ? (c.id == totsConfigId ? totsRttMs : null)
+                        : pings[configPingKey(c.id)],
+                    totsActive: c.id == totsConfigId,
                     pingMeasured: pingsMeasured,
                     onSelect: () => onSelect(c),
                     onDelete: () => onDelete(c.id),
@@ -188,6 +195,8 @@ class ConfigSelector extends StatelessWidget {
                 sub: sub,
                 expanded: expandedSubs.contains(sub.id),
                 selectedBackendId: selectedId,
+                totsConfigId: totsConfigId,
+                totsRttMs: totsRttMs,
                 pings: pings,
                 pingMeasured: pingsMeasured,
                 onToggle: () => onToggleSub?.call(sub),
@@ -208,6 +217,8 @@ class _SubGroup extends StatelessWidget {
   final Subscription sub;
   final bool expanded;
   final int? selectedBackendId;
+  final int? totsConfigId;
+  final int? totsRttMs;
   final Map<String, int> pings;
   final bool pingMeasured;
   final VoidCallback onToggle;
@@ -219,6 +230,8 @@ class _SubGroup extends StatelessWidget {
     required this.sub,
     required this.expanded,
     required this.selectedBackendId,
+    required this.totsConfigId,
+    required this.totsRttMs,
     required this.pings,
     required this.pingMeasured,
     required this.onToggle,
@@ -371,7 +384,11 @@ class _SubGroup extends StatelessWidget {
               config: c,
               selected: sub.backendIds[c.key] != null &&
                   sub.backendIds[c.key] == selectedBackendId,
-              ping: pings[subConfigPingKey(sub.id, c)],
+              ping: c.isTots
+                  ? (totsConfigId != null && sub.backendIds[c.key] == totsConfigId
+                      ? totsRttMs : null)
+                  : pings[subConfigPingKey(sub.id, c)],
+              totsActive: totsConfigId != null && sub.backendIds[c.key] == totsConfigId,
               pingMeasured: pingMeasured,
               onTap: () => onSelectConfig(c),
             ),
@@ -385,6 +402,7 @@ class _SubConfigRow extends StatelessWidget {
   final bool selected;
   final int? ping;
   final bool pingMeasured;
+  final bool totsActive;
   final VoidCallback onTap;
 
   const _SubConfigRow({
@@ -392,6 +410,7 @@ class _SubConfigRow extends StatelessWidget {
     required this.selected,
     required this.ping,
     required this.pingMeasured,
+    required this.totsActive,
     required this.onTap,
   });
 
@@ -453,6 +472,8 @@ class _SubConfigRow extends StatelessWidget {
                   protocol: config.protocol,
                   ping: ping,
                   measured: pingMeasured,
+                  tots: config.isTots,
+                  totsActive: totsActive,
                 ),
               ],
             ),
@@ -468,6 +489,7 @@ class _ConfigRow extends StatefulWidget {
   final bool selected;
   final int? ping;
   final bool pingMeasured;
+  final bool totsActive;
   final VoidCallback onSelect;
   final VoidCallback onDelete;
 
@@ -476,6 +498,7 @@ class _ConfigRow extends StatefulWidget {
     required this.selected,
     required this.ping,
     required this.pingMeasured,
+    required this.totsActive,
     required this.onSelect,
     required this.onDelete,
   });
@@ -574,6 +597,8 @@ class _ConfigRowState extends State<_ConfigRow> {
                 protocol: widget.config.protocol,
                 ping: widget.ping,
                 measured: widget.pingMeasured,
+                tots: widget.config.isTots,
+                totsActive: widget.totsActive,
               ),
               const SizedBox(width: 7),
               _TrashButton(
@@ -593,11 +618,15 @@ class _ProtocolPingColumn extends StatelessWidget {
   final String protocol;
   final int? ping;
   final bool measured;
+  final bool tots;
+  final bool totsActive;
 
   const _ProtocolPingColumn({
     required this.protocol,
     required this.ping,
     required this.measured,
+    required this.tots,
+    required this.totsActive,
   });
 
   @override
@@ -619,7 +648,18 @@ class _ProtocolPingColumn extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 3),
-          _PingIndicator(ping: ping, measured: measured),
+          if (tots && ping == null)
+            Text(
+              totsActive ? 'Ожидание RTT' : 'При подключении',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 9, color: Colors.white.withValues(alpha: 0.55)),
+            )
+          else
+            Tooltip(
+              message: tots ? 'RTT через ToTS до VPS' : 'Доступность адреса профиля',
+              child: _PingIndicator(ping: ping, measured: measured),
+            ),
         ],
       ),
     );
