@@ -186,9 +186,16 @@ class LaLuneVpnService : VpnService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            "START" -> if (!isRunning) {
+            "START" -> {
+                // A reconnect can reuse this service after STOP removed its
+                // foreground notification, so onCreate alone is insufficient.
+                startForegroundCompat()
+                if (isRunning) return START_STICKY
                 val configId = intent.getLongExtra(EXTRA_CONFIG_ID, 0L)
-                if (configId == 0L) return START_NOT_STICKY
+                if (configId == 0L) {
+                    stopSelf(startId)
+                    return START_NOT_STICKY
+                }
                 notifyLog(this, "[VPN] START received; configId=$configId")
                 isRunning = true
                 publishState("connecting", false, "Подключение")
