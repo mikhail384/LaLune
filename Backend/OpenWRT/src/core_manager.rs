@@ -297,7 +297,7 @@ impl CoreReadiness {
     }
 
     pub fn ready_params(&self) -> Option<(String, String)> {
-        if self.active_ticks < 3 {
+        if self.active_ticks < 1 {
             return None;
         }
         Some(self.params.clone().unwrap_or_else(|| {
@@ -637,8 +637,6 @@ mod log_tests {
         current.observe("Активных: 1");
         current.observe("Активных: 1");
         current.observe("Активных: 0");
-        current.observe("Активных: 1");
-        current.observe("Активных: 1");
         assert!(current.ready_params().is_none());
         current.observe("Активных: 1");
         assert_eq!(
