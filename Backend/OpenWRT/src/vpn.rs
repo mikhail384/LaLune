@@ -400,9 +400,10 @@ fn tun_ipv4(name: &str) -> Option<String> {
         .nth(1)
         .map(|cidr| cidr.split('/').next().unwrap_or(cidr).to_string())
 }
+fn tune_kn1211_sysctl() { let _ = std::fs::write("/proc/sys/net/core/rmem_max", "524288"); let _ = std::fs::write("/proc/sys/net/core/wmem_max", "524288"); let _ = std::fs::write("/proc/sys/net/core/netdev_max_backlog", "1000"); let _ = std::fs::write("/proc/sys/net/ipv4/tcp_fastopen", "3"); let _ = std::fs::write("/proc/sys/net/ipv4/tcp_mtu_probing", "1"); }
 
 impl OpenWrtRouting {
-    fn install(name: &str, dns: &str, uid: u32, events: EventBus) -> Result<Self> {
+    fn install(name: &str, dns: &str, uid: u32, events: EventBus) -> Result<Self> { tune_kn1211_sysctl();
         if unsafe { libc::geteuid() } != 0 {
             bail!("OpenWRT VPN требует root/CAP_NET_ADMIN");
         }
