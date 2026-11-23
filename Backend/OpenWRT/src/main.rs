@@ -39,8 +39,21 @@ use tokio::net::TcpListener;
 
 use crate::state::AppState;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    let rt = if num_cpus::get() <= 1 {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(4)
+            .build()?
+    } else {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()?
+    };
+    rt.block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
     env_logger::Builder::from_env(
         env_logger::Env::default().default_filter_or("info"),
     )
