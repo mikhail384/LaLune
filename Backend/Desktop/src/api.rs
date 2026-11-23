@@ -141,7 +141,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 async fn ping(State(state): State<Arc<AppState>>) -> Json<Value> {
     Json(json!({
         "ok": true,
-        "version": "0.9.18",
+        "version": "0.9.19",
         "os": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
         "hostname": hostname::get()
