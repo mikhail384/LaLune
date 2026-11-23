@@ -750,14 +750,14 @@ async fn vpn_connect(State(state): State<Arc<AppState>>, Json(body): Json<Connec
                 tun_started = true;
             }
 
-            if !tun_started { tokio::time::sleep(Duration::from_millis(500)).await; }
+            if !tun_started { tokio::time::sleep(Duration::from_millis(100)).await; }
         }
 
         if !tun_started {
             let reason = if kind == Core::ToTs {
                 "ToTS did not report a connected TUN and healthy worker within 90s"
             } else {
-                "3 consecutive Активных>0 ticks not seen within 90s"
+                "Active connection (Активных>0) not seen within 90s"
             };
             state2.log(format!("[VPN] timeout: {reason}"));
             state2.events.emit(Event::status(false));
