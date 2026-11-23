@@ -8,7 +8,7 @@
 use anyhow::{bail, Context, Result};
 use parking_lot::Mutex;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 #[cfg(target_has_atomic = "64")]
