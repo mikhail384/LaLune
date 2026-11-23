@@ -2,6 +2,7 @@
 use anyhow::{bail, Context, Result};
 use std::fs;
 use std::net::Ipv4Addr;
+use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,6 +19,14 @@ use crate::events::{Event, EventBus};
 
 const TABLE: &str = "10620";
 const PRIORITIES: [u32; 3] = [10620, 10621, 10622];
+fn tune_udp_socket(socket: &std::net::UdpSocket) {
+   let fd = socket.as_raw_fd();
+let size: libc::c_int = 512 * 1024;
+unsafe {
+libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_RCVBUF, &size as *const _ as *const libc::c_void, std::mem::size_of::<libc::c_int>() as libc::socklen_t);
+libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_SNDBUF, &size as *const _ as *const libc::c_void, std::mem::size_of::<libc::c_int>() as libc::socklen_t);
+    }
+}
 
 fn ip(args: &[String]) -> Result<String> {
     let output = Command::new("ip")
@@ -262,32 +271,21 @@ impl Session {
         ]).context("Назначение IPv4-адреса Linux TUN")?;
         ip(&vec![
             "link".into(), "set".into(), "dev".into(), name.into(),
-            "mtu".into(), mtu.to_string(), "up".into(),
+            "mtu".into(), mtu.to_string(), "txqueuelen".into(), "500".into(), "up".into(),
         ]).context("Поднятие Linux TUN")?;
 
-        let link = ip(&vec![
-            "-details".into(), "link".into(), "show".into(), "dev".into(), name.into(),
-        ]).context("Проверка созданного Linux TUN")?;
-        if !link.contains("UP") {
-            bail!("Linux TUN {name} создан, но интерфейс не перешёл в состояние UP");
-        }
-        let addr = ip(&vec![
-            "-4".into(), "addr".into(), "show".into(), "dev".into(), name.into(),
-        ]).context("Проверка адреса Linux TUN")?;
-        if !addr.contains(&format!("inet {address}/32")) {
-            bail!("Linux TUN {name} создан без ожидаемого адреса {address}/32");
-        }
-
+       
         events.emit(Event::log(format!(
             "[TUN] Linux interface ready: {name} {address}/32 mtu={mtu}"
         )));
 
-        let socket = UdpSocket::from_std({
+        let socket = Arc::new(UdpSocket::from_std({
             let socket = std::net::UdpSocket::bind("127.0.0.1:0")?;
             socket.connect((Ipv4Addr::LOCALHOST, core_port))?;
             socket.set_nonblocking(true)?;
+            tune_udp_socket(&socket);
             socket
-        })?;
+        })?);
         let routes = Routes::install(name, dns, uid, full_tunnel, &bypass, events.clone())?;
         rx.store(0, Ordering::Relaxed);
         tx.store(0, Ordering::Relaxed);
@@ -296,26 +294,45 @@ impl Session {
             // Drop восстанавливает сеть и при штатном завершении, и при abort.
             let (mut reader, mut writer) = tokio::io::split(dev);
             let _routes = routes;
-            let mut outgoing = vec![0u8; 65535];
-            let mut incoming = vec![0u8; 65535];
-            let result: Result<()> = async {
+            let buf_size = (mtu as usize + 256).max(2048);
+            let tx_socket = Arc::clone(&socket);
+            let mut tx_task = tokio::spawn(async move {
+                let mut outgoing = vec![0u8; buf_size];
                 loop {
-                    tokio::select! {
-                        result = reader.read(&mut outgoing) => {
-                            let n = result?;
-                            if n == 0 { bail!("TUN закрыт"); }
-                            if socket.send(&outgoing[..n]).await? != n { bail!("Неполная отправка пакета ядру"); }
-                            tx.fetch_add(n as u64, Ordering::Relaxed);
-                        }
-                        result = socket.recv(&mut incoming) => {
-                            let n = result?;
-                            // Один write соответствует одному IP-пакету TUN.
-                            if writer.write(&incoming[..n]).await? != n { bail!("Неполная запись пакета в TUN"); }
-                            rx.fetch_add(n as u64, Ordering::Relaxed);
-                        }
+                    let n = reader.read(&mut outgoing).await?;
+                    if n == 0 { bail!("TUN closed"); }
+                    if tx_socket.send(&outgoing[..n]).await? != n {
+                        bail!("Incomplete packet send to core");
                     }
+                    tx.fetch_add(n as u64, Ordering::Relaxed);
                 }
-            }.await;
+                #[allow(unreachable_code)]
+                Ok::<(), anyhow::Error>(())
+            });
+            let rx_socket = Arc::clone(&socket);
+            let mut rx_task = tokio::spawn(async move {
+                let mut incoming = vec![0u8; buf_size];
+                loop {
+                    let n = rx_socket.recv(&mut incoming).await?;
+                    if writer.write(&incoming[..n]).await? != n {
+                        bail!("Incomplete packet write to TUN");
+                    }
+                    rx.fetch_add(n as u64, Ordering::Relaxed);
+                }
+                #[allow(unreachable_code)]
+                Ok::<(), anyhow::Error>(())
+            });
+            let result: Result<()> = tokio::select! {
+                res = &mut tx_task => {
+                    rx_task.abort();
+                    res.unwrap_or_else(|e| Err(anyhow::anyhow!("tx_task: {e}")))
+                }
+                res = &mut rx_task => {
+                    tx_task.abort();
+                    res.unwrap_or_else(|e| Err(anyhow::anyhow!("rx_task: {e}")))
+                }
+            };
+            drop(_routes);
             running.store(false, Ordering::Release);
             if let Err(error) = result {
                 events.emit(Event::error(format!("TUN-мост остановлен: {error}")));
