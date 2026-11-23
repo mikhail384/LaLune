@@ -1182,7 +1182,7 @@ dependencies = [
 
 [[package]]
 name = "lalune-openwrt-backend"
-version = "0.9.19"
+version = "0.9.20"
 dependencies = [
  "anyhow",
  "async-stream",

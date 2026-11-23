@@ -110,7 +110,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 
 async fn ping(State(state): State<Arc<AppState>>) -> Json<Value> {
     Json(json!({
-        "ok": true, "version": "0.9.19",
+        "ok": true, "version": "0.9.20",
         "os": "linux", "arch": std::env::consts::ARCH, "platform": "openwrt",
         "hostname": hostname::get().ok().and_then(|s| s.into_string().ok()).unwrap_or_default(),
         "uptime": state.uptime(),
@@ -118,7 +118,7 @@ async fn ping(State(state): State<Arc<AppState>>) -> Json<Value> {
 }
 
 async fn version() -> Json<Value> {
-    Json(json!({ "api": 1, "backend": "0.9.19", "core": "unknown", "ui": "0.9.19" }))
+    Json(json!({ "api": 1, "backend": "0.9.20", "core": "unknown", "ui": "0.9.20" }))
 }
 
 async fn shutdown(State(state): State<Arc<AppState>>) -> Json<Value> {
@@ -963,7 +963,7 @@ async fn update_check(State(state): State<Arc<AppState>>) -> impl IntoResponse {
             .unwrap_or_default(),
         Err(_) => String::new(),
     };
-    let local = "0.9.19";
+    let local = "0.9.20";
     let has_update = !remote_tag.is_empty() && remote_tag != local;
     let _ = &state;
     Json(json!({"hasUpdate": has_update, "remoteTag": remote_tag, "localVersion": local}))

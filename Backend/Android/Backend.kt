@@ -57,7 +57,7 @@ class Backend(private val context: Context) {
         // next to the original app (1062) without a bind conflict.
         const val LALUNE_TEST_PORT = 1064
         const val HOST = "127.0.0.1"
-        const val VERSION = "0.9.19"
+        const val VERSION = "0.9.20"
 
         /** Single source of truth for the loopback API port of a package. */
         fun portFor(packageName: String): Int = when {
