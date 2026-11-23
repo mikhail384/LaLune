@@ -356,7 +356,7 @@ jobs:
           done
           jq -e '.ok and .platform == "openwrt" and .arch == "aarch64"' "$test_home/ping.json"
           curl -fsS http://127.0.0.1:1062/core/protocols | jq -e \
-            'all(.[]; .bundled == true) and (map(.id) | sort == ["CSQTT", "CSQTT 2.1.9", "CSQTTR"])'
+            'all(.[]; .bundled == true) and (map(.id) | sort == ["CSQTT", "CSQTT 2.1.9", "CSQTTR", "ToTS"])'
       - uses: actions/upload-artifact@v4
         with:
           name: Output-OpenWRT
