@@ -1057,6 +1057,7 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ needs.prepare-version.outputs.build_ref }}
           name: LaLune ${{ steps.version.outputs.tag }}
           make_latest: true
           files: |
