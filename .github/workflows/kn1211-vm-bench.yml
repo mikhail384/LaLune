@@ -1,0 +1,67 @@
+name: Keenetic KN-1211 VM & Speed Tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - kn1211-speed-optimization
+
+jobs:
+  kn1211-tests-and-vm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Run Backend/OpenWRT tests
+        working-directory: Backend/OpenWRT
+        run: cargo test -- --nocapture
+
+      - name: Validate run-kn1211-vm.sh syntax
+        run: bash -n tools/kn1211-vm/run-kn1211-vm.sh
+
+      - name: Install QEMU MIPS and expect
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-mips expect
+
+      - name: Download OpenWrt 23.05.5 malta/le image
+        run: |
+          OPENWRT_HOST="downloads.openwrt.org"
+          curl -fL "https://${OPENWRT_HOST}/releases/23.05.5/targets/malta/le/openwrt-23.05.5-malta-le-vmlinux-initramfs.elf" -o openwrt-23.05.5-malta-le-vmlinux-initramfs.elf
+
+      - name: Boot KN-1211 QEMU VM and verify system info
+        run: |
+          expect << 'EOF'
+          set timeout 180
+          spawn qemu-system-mipsel -M malta -cpu 24Kc -smp 1 -m 64M -kernel openwrt-23.05.5-malta-le-vmlinux-initramfs.elf -nographic
+          expect {
+            "Please press Enter to activate this console." {
+              send "\r"
+            }
+            timeout {
+              puts "Timeout waiting for OpenWrt console prompt"
+              exit 1
+            }
+          }
+          expect {
+            "root@OpenWrt:/#" {}
+            "root@" {}
+            timeout {
+              puts "Timeout waiting for root shell"
+              exit 1
+            }
+          }
+          send "uname -a; grep -E 'system type|cpu model|MemTotal|MemAvailable' /proc/cpuinfo /proc/meminfo; poweroff\r"
+          expect {
+            eof {}
+            timeout {
+              puts "Timeout waiting for poweroff"
+              exit 1
+            }
+          }
+          catch wait result
+          set exit_code [lindex $result 3]
+          exit $exit_code
+          EOF
