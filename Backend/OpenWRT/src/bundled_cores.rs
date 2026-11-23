@@ -14,22 +14,24 @@ pub enum Core {
     Csqtt,
     Csqttr,
     Legacy,
+    ToTs,
 }
 
 impl Core {
-    pub const ALL: [Self; 3] = [Self::Csqtt, Self::Csqttr, Self::Legacy];
+    pub const ALL: [Self; 4] = [Self::Csqtt, Self::Csqttr, Self::Legacy, Self::ToTs];
 
     pub fn parse(id: &str) -> Option<Self> {
         match id.trim().to_ascii_uppercase().as_str() {
             "CSQTT" | "CSQTT 2.5.1" => Some(Self::Csqtt),
             "CSQTTR" | "CSQTTR 2.5.2" => Some(Self::Csqttr),
             "CSQTT 2.1.9" => Some(Self::Legacy),
+            "TOTS" => Some(Self::ToTs),
             _ => None,
         }
     }
 
     pub fn supported(id: &str) -> Option<Self> {
-        Self::parse(id).filter(|core| *core == Self::Csqtt || available())
+        Self::parse(id).filter(|core| *core == Self::Csqtt || available_core(*core))
     }
 
     pub fn id(self) -> &'static str {
@@ -37,6 +39,7 @@ impl Core {
             Self::Csqtt => "CSQTT",
             Self::Csqttr => "CSQTTR",
             Self::Legacy => "CSQTT 2.1.9",
+            Self::ToTs => "ToTS",
         }
     }
 
@@ -45,6 +48,7 @@ impl Core {
             Self::Csqtt => "csqtt-client",
             Self::Csqttr => "csqttr-client",
             Self::Legacy => "csqtt-219",
+            Self::ToTs => "tots-openwrt",
         }
     }
 
@@ -57,10 +61,17 @@ impl Core {
 pub const LEAN_DIR: &str = "/usr/lib/lalune-run";
 
 pub fn available() -> bool {
-    BUNDLE.is_some()
-        || Core::ALL
-            .iter()
-            .any(|core| Path::new(LEAN_DIR).join(core.filename()).is_file())
+    Core::ALL.iter().any(|core| available_core(*core))
+}
+
+pub fn available_core(core: Core) -> bool {
+    if Path::new(LEAN_DIR).join(core.filename()).is_file() {
+        return true;
+    }
+    let Some(bytes) = BUNDLE else { return false };
+    zip::ZipArchive::new(Cursor::new(bytes))
+        .and_then(|mut archive| archive.by_name(core.filename()).map(|_| ()))
+        .is_ok()
 }
 
 pub struct TemporaryCore(PathBuf, bool);

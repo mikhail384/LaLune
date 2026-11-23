@@ -4,7 +4,7 @@
 //
 // Fallback для dev-сборок без bundle: ~/.la-lune/csqtt-client-aarch64
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use parking_lot::Mutex;
 use regex::Regex;
 use std::io;
@@ -37,17 +37,20 @@ pub fn core_asset_name() -> &'static str {
 
 /// Release-сборки ARM64 и ramips содержат одинаковые три встроенных ядра.
 pub fn supported_protocols() -> Vec<serde_json::Value> {
-    use crate::bundled_cores::{available, Core};
-    let bundled = available();
-    Core::ALL.into_iter().filter(|core| bundled || *core == Core::Csqtt)
+    use crate::bundled_cores::{available_core, Core};
+    Core::ALL.into_iter().filter(|core| Core::supported(core.id()).is_some())
         .map(|core| serde_json::json!({
             "id": core.id(),
             "displayName": core.id(),
-            "repo": if core == Core::Csqttr { "Endlad2/csqttr-core" } else { "Endlad2/csqtt-core" },
+            "repo": match core {
+                Core::Csqttr => "Endlad2/csqttr-core",
+                Core::ToTs => "Endlad2/ToTS",
+                _ => "Endlad2/csqtt-core",
+            },
             "realtime": true,
-            "description": "VK Calls, TURN и WRAP",
-            "coreAsset": if bundled { core.filename() } else { core_asset_name() },
-            "bundled": bundled,
+            "description": if core == Core::ToTs { "VK, Jazz и ToTS transport" } else { "VK Calls, TURN и WRAP" },
+            "coreAsset": if available_core(core) { core.filename() } else { core_asset_name() },
+            "bundled": available_core(core),
         })).collect()
 }
 
@@ -171,6 +174,19 @@ pub struct CoreProcess {
     log_tasks: Vec<tokio::task::JoinHandle<()>>,
     readiness: Arc<Mutex<CoreReadiness>>,
     pub user: crate::linux_core::CoreUser,
+    tots_status_path: Option<std::path::PathBuf>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToTsRuntimeStatus {
+    pub connected: bool,
+    pub interface: String,
+    pub virtual_ip: String,
+    pub mtu: u16,
+    pub workers_healthy: usize,
+    pub tx_bytes: u64,
+    pub rx_bytes: u64,
 }
 
 #[derive(Default)]
@@ -337,11 +353,62 @@ impl CoreProcess {
             log_tasks.push(tokio::spawn(output.capture(stderr)));
         }
 
-        Ok(Self { child, log_tasks, readiness, user })
+        Ok(Self { child, log_tasks, readiness, user, tots_status_path: None })
+    }
+
+    pub async fn spawn_tots(
+        core_path: &Path,
+        raw_link: &str,
+        workers: usize,
+        logs: Arc<Mutex<CoreLogs>>,
+        events: EventBus,
+    ) -> Result<Self> {
+        use std::os::unix::fs::{chown, PermissionsExt};
+
+        let mut user = crate::linux_core::CoreUser::prepare(core_path)?;
+        user.grant_tun_device_access()?;
+        let config_path = user.workdir().join("tots-config.uri");
+        std::fs::write(&config_path, raw_link)?;
+        std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o600))?;
+        chown(&config_path, Some(user.uid), Some(user.uid))?;
+        let status_path = user.workdir().join("tots-status.json");
+        let args = vec![
+            "--config-file".into(), config_path.to_string_lossy().into_owned(),
+            "--status-file".into(), status_path.to_string_lossy().into_owned(),
+            "--tun-name".into(), crate::vpn::TUN_NAME.into(),
+            "--n".into(), workers.clamp(1, 127).to_string(),
+            "--no-tun-default-route".into(),
+        ];
+        let mut command = Command::new(user.executable());
+        user.configure_with_net_admin(&mut command, &args, true)?;
+        command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let child = command.spawn().context("Запуск ToTS OpenWRT runtime")?;
+
+        let secrets = core_secrets(&[], [raw_link])?;
+        let readiness = Arc::new(Mutex::new(CoreReadiness::default()));
+        let output = CoreOutput { logs: logs.clone(), events: events.clone(), readiness: readiness.clone(), secrets };
+        let line = format!("{CORE_PREFIX}ToTS spawned pid={:?}", child.id());
+        output.logs.lock().record(line.clone());
+        output.events.emit(Event::log(line));
+        let mut child = child;
+        let mut log_tasks = Vec::new();
+        if let Some(stdout) = child.stdout.take() {
+            log_tasks.push(tokio::spawn(output.clone().capture(stdout)));
+        }
+        if let Some(stderr) = child.stderr.take() {
+            log_tasks.push(tokio::spawn(output.capture(stderr)));
+        }
+        Ok(Self { child, log_tasks, readiness, user, tots_status_path: Some(status_path) })
     }
 
     pub fn readiness(&self) -> Arc<Mutex<CoreReadiness>> {
         self.readiness.clone()
+    }
+
+    pub fn tots_status(&self) -> Option<ToTsRuntimeStatus> {
+        let path = self.tots_status_path.as_ref()?;
+        let bytes = std::fs::read(path).ok()?;
+        serde_json::from_slice(&bytes).ok()
     }
 
     pub async fn kill(&mut self) -> Result<()> {
@@ -364,7 +431,7 @@ pub fn build_args(
     settings: &crate::settings::Settings,
     listen_port: u16,
 ) -> Vec<String> {
-    use crate::bundled_cores::{available, Core};
+    use crate::bundled_cores::{available_core, Core};
     let kind = Core::parse(&config.protocol).unwrap_or(Core::Csqtt);
     // Fallback: если в конфиге хешей нет — берём из settings.vk_hashes.
     let source_hashes = if config.hashes.trim().is_empty() {
@@ -446,7 +513,9 @@ pub fn build_args(
         args.push("--port".into());
         args.push(settings.turn_port.clone());
     }
-    if settings.allow_hash_redistribution && (kind == Core::Legacy || (!available() && kind == Core::Csqtt)) {
+    if settings.allow_hash_redistribution
+        && (kind == Core::Legacy || (!available_core(kind) && kind == Core::Csqtt))
+    {
         args.push("--allow-hash-redistribution".into());
     }
     args

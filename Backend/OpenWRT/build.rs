@@ -7,8 +7,8 @@ fn main() {
         "aarch64-unknown-linux-musl" | "mipsel-unknown-linux-musl"
     );
 
-    // Any target built with LALUNE_OPENWRT_CORES (build-multiarch.sh) embeds the
-    // three cores; the two legacy SDK targets must always provide it.
+    // Any target built with LALUNE_OPENWRT_CORES embeds its runtime archive;
+    // the two legacy SDK targets must always provide it.
     let has_bundle_env = std::env::var_os("LALUNE_OPENWRT_CORES").is_some();
     // Лёгкая сборка (роутеры с 16-32 МБ флеша): ядра не вшиваются, приложение заливает нужное
     // ядро в /usr/lib/lalune-run отдельным файлом.
@@ -17,7 +17,7 @@ fn main() {
         "None".into()
     } else if needs_bundle || has_bundle_env {
         let path = std::env::var_os("LALUNE_OPENWRT_CORES")
-            .expect("Для OpenWRT-сборки укажите LALUNE_OPENWRT_CORES с ZIP трёх ядер");
+            .expect("Для OpenWRT-сборки укажите LALUNE_OPENWRT_CORES с ZIP ядер");
         let path = std::fs::canonicalize(path).expect("ZIP трёх OpenWRT-ядер");
         println!("cargo:rerun-if-changed={}", path.display());
         format!("Some(include_bytes!({:?}))", path.to_str().expect("UTF-8 ZIP path"))

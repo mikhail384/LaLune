@@ -78,7 +78,8 @@ stop_backend() {
         log "останавливаю backend (PID=$pid)"
         kill "$pid" 2>/dev/null || true
         i=0
-        while [ $i -lt 6 ] && kill -0 "$pid" 2>/dev/null; do sleep 0.5; i=$((i+1)); done
+        # BusyBox sleep on OpenWrt may not accept fractional seconds.
+        while [ $i -lt 6 ] && kill -0 "$pid" 2>/dev/null; do sleep 1; i=$((i+1)); done
         kill -0 "$pid" 2>/dev/null && { warn "SIGKILL"; kill -9 "$pid" 2>/dev/null || true; }
     fi
     rm -f "$BACKEND_PID"

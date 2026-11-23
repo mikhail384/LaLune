@@ -329,10 +329,16 @@ class SubscriptionsNotifier extends StateNotifier<SubscriptionsState> {
         final currentVpn = _ref.read(vpnProvider);
         if (!currentVpn.connected ||
             (configId > 0 && currentVpn.configId != configId)) return;
+        final statsConfigId = (j['configId'] is num) ? (j['configId'] as num).toInt() : 0;
+        if (statsConfigId > 0 && configId > 0 && statsConfigId != configId) return;
         final rx = ((j['rxBytes'] as num?) ?? 0).toInt();
         final tx = ((j['txBytes'] as num?) ?? 0).toInt();
         if (rx < 0 || tx < 0) return;
         final sessionId = (j['sessionId'] is String) ? j['sessionId'] as String : '';
+        // An empty ID can mean that the backend is switching sessions while
+        // the sample is being read. Wait for a stable ID rather than count a
+        // mixed sample now and count the new session again on the next poll.
+        if (!resuming && _activeSessionId.isNotEmpty && sessionId.isEmpty) return;
         final sub = _byId(ownerId);
         if (sub == null) return;
         if (resuming) {

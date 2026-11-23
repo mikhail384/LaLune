@@ -78,6 +78,17 @@ void main() {
     expect(entries.single.text, 'Ошибка запуска туннеля: $detail');
   });
 
+  test('router captcha requests and rate limits are explained', () {
+    final entries = digestLogs([
+      '[CORE] v2 check status=ERROR_LIMIT',
+      '[CORE] [CAPTCHA] Ядро запросило решение капчи',
+    ]);
+    expect(entries[0].level, DigestLevel.error);
+    expect(entries[0].text, contains('VK ограничил попытки'));
+    expect(entries[1].level, DigestLevel.warn);
+    expect(entries[1].text, contains('на роутере пока не поддерживается'));
+  });
+
   test('digest carries the time of the latest event', () {
     final e = digestLogs(
       ['[VPN] connecting using CSQTT 2.1.9', '[VPN] timeout'],

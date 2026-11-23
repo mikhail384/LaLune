@@ -400,12 +400,14 @@ void main() {
     var rx = 1000;
     var tx = 600;
     var session = 'fixture-session-a';
+    var statsConfigId = 42;
     final client = MockClient((request) async {
       if (request.url.path == '/vpn/status') {
         return _resp('{"state":"connected","connected":true,"configId":42}');
       }
       if (request.url.path == '/vpn/stats') {
-        return _resp(jsonEncode({'rxBytes': rx, 'txBytes': tx, 'sessionId': session}));
+        return _resp(jsonEncode({'rxBytes': rx, 'txBytes': tx, 'sessionId': session,
+          'configId': statsConfigId}));
       }
       return _resp('{}');
     });
@@ -445,6 +447,26 @@ void main() {
     expect(tracked.trafficCheckpointRx, 1100);
     expect(tracked.trafficCheckpointTx, 650);
 
+    // Backend switches before the next status refresh: counters explicitly
+    // belonging to another profile must not be charged to this subscription.
+    statsConfigId = 99;
+    rx = 9000;
+    tx = 8000;
+    await c.read(subscriptionsProvider.notifier).flushTraffic();
+    expect(c.read(subscriptionsProvider).items.single.usedBytes, 700);
+    statsConfigId = 42;
+
+    // A transient blank ID during backend rollover must not advance the
+    // checkpoint or count the same counters twice on the next stable sample.
+    session = '';
+    rx = 1105;
+    tx = 655;
+    await c.read(subscriptionsProvider.notifier).flushTraffic();
+    expect(c.read(subscriptionsProvider).items.single.usedBytes, 700);
+    session = 'fixture-session-a';
+    await c.read(subscriptionsProvider.notifier).flushTraffic();
+    expect(c.read(subscriptionsProvider).items.single.usedBytes, 710);
+
     // A different session must never reuse the previous session's baseline.
     c.dispose();
     await Future<void>.delayed(const Duration(milliseconds: 50));
@@ -454,12 +476,69 @@ void main() {
     c = makeContainer();
     await waitForSubscriptions(c);
     await c.read(subscriptionsProvider.notifier).flushTraffic();
-    expect(c.read(subscriptionsProvider).items.single.usedBytes, 700);
+    expect(c.read(subscriptionsProvider).items.single.usedBytes, 710);
     rx += 5;
     tx += 7;
     await c.read(subscriptionsProvider.notifier).flushTraffic();
-    expect(c.read(subscriptionsProvider).items.single.usedBytes, 712);
+    expect(c.read(subscriptionsProvider).items.single.usedBytes, 722);
     c.dispose();
     client.close();
+  });
+
+  test('refresh keeps a checkpoint recorded while an old profile is being removed', () async {
+    final source = 'https://fixture.test/sub';
+    final first = parseLaLuneSub(_sample, source: source);
+    final saved = first.copyWith(
+      usedBytes: 100, receivedBytes: 60, sentBytes: 40,
+      backendIds: {first.configs[0].key: 42, first.configs[1].key: 43},
+      trafficSessionId: 'fixture-session', trafficConfigId: 42,
+      trafficCheckpointRx: 60, trafficCheckpointTx: 40,
+    );
+    SharedPreferences.setMockInitialValues({
+      'lalune_subscriptions_v1': jsonEncode([saved.toJson()]),
+    });
+    final deleteStarted = Completer<void>();
+    final deleteResponse = Completer<http.Response>();
+    final apiHttp = MockClient((request) async {
+      if (request.method == 'DELETE' && request.url.path == '/configs/43') {
+        deleteStarted.complete();
+        return deleteResponse.future;
+      }
+      if (request.url.path == '/vpn/status') {
+        return _resp('{"state":"connected","connected":true,"configId":42}');
+      }
+      if (request.url.path == '/vpn/stats') {
+        return _resp('{"rxBytes":80,"txBytes":50,"sessionId":"fixture-session"}');
+      }
+      if (request.url.path == '/configs') return _resp('[]');
+      return _resp('{}');
+    });
+    final subHttp = MockClient((_) async => _resp(jsonEncode({
+      'ИМЯ #1': {'config': first.configs[0].config, 'protocol': 'CSQTTR'},
+      'hoster': 'updated',
+    })));
+    final api = ApiClient(httpClient: apiHttp);
+    final provider = StateNotifierProvider<SubscriptionsNotifier, SubscriptionsState>(
+      (ref) => SubscriptionsNotifier(ref, httpClient: subHttp));
+    final c = ProviderContainer(overrides: [
+      apiClientProvider.overrideWithValue(api),
+      vpnProvider.overrideWith((ref) => _TestVpnNotifier(ref)),
+    ]);
+    addTearDown(() { c.dispose(); apiHttp.close(); subHttp.close(); });
+    final notifier = c.read(provider.notifier);
+    (c.read(vpnProvider.notifier) as _TestVpnNotifier).setStatus(
+      const VpnStatus(state: 'connected', connected: true, configId: 42));
+    await deleteStarted.future.timeout(const Duration(seconds: 2));
+    await notifier.flushTraffic();
+    deleteResponse.complete(_resp('{}'));
+    for (var i = 0; i < 50 && c.read(provider).refreshing; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(c.read(provider).refreshing, isFalse);
+    final updated = c.read(provider).items.single;
+    expect(updated.usedBytes, 130);
+    expect(updated.trafficSessionId, 'fixture-session');
+    expect(updated.trafficCheckpointRx, 80);
+    expect(updated.trafficCheckpointTx, 50);
   });
 }

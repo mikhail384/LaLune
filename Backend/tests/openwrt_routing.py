@@ -125,11 +125,13 @@ def inside(binary, case):
                     wait_for(lambda: api('/vpn/status')['connected'])
                     session_id = wait_for(lambda: api('/vpn/stats').get('sessionId'))
                     assert api('/vpn/stats')['sessionId'] == session_id
+                    assert api('/vpn/stats')['configId'] == config['id']
                     if case == 'clean':
                         other = api('/configs', {'name':'Other profile', 'protocol':'CSQTT',
                             'peer':'192.0.2.1:46000', 'password':'fixture', 'hashes':'fixture'})
                         api('/configs/selected', {'id': other['id']}, method='PUT')
                         assert api('/vpn/status')['configId'] == config['id'], 'Selection replaced active tunnel identity'
+                        assert api('/vpn/stats')['configId'] == config['id']
                         api('/configs/selected', {'id': config['id']}, method='PUT')
                     marked = cmd('ip', '-4', 'route', 'get', '198.51.100.1', 'mark', '0x1062').stdout
                     assert 'dev lalune0' in marked, marked

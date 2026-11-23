@@ -224,6 +224,55 @@ pub fn start_tun(runtime: Arc<VpnRuntime>, tun_ip: String, tun_dns: String, even
     Ok(())
 }
 
+/// Activate OpenWRT routing for a TUN interface created by an external runtime
+/// (ToTS). The ToTS process retains CAP_NET_ADMIN only for its isolated UID and
+/// owns the interface lifetime; this backend still owns policy routing and DNS.
+pub fn start_external_tun(
+    runtime: Arc<VpnRuntime>,
+    tun_ip: String,
+    tun_dns: String,
+    mtu: u16,
+    events: EventBus,
+) -> Result<()> {
+    let uid = runtime.core_uid.load(Ordering::Acquire);
+    if unsafe { libc::geteuid() } != 0 || uid == 0 {
+        bail!("Для ToTS/OpenWRT нужны root и отдельный UID транспорта");
+    }
+    if tun_ipv4(TUN_NAME).as_deref() != Some(tun_ip.as_str()) {
+        bail!("ToTS не создал интерфейс {TUN_NAME} с адресом {tun_ip}");
+    }
+    let routing = OpenWrtRouting::install(TUN_NAME, &tun_dns, uid, events.clone())
+        .context("Настройка OpenWRT iptables/policy routing")?;
+
+    runtime.rx_bytes.store(0, Ordering::Relaxed);
+    runtime.tx_bytes.store(0, Ordering::Relaxed);
+    *runtime.routing.lock() = Some(routing);
+    *runtime.started_at.lock() = Some(Instant::now());
+    *runtime.session_id.lock() = uuid::Uuid::new_v4().to_string();
+    *runtime.tun_conf.lock() = Some(TunConf { ip: tun_ip.clone(), dns: tun_dns.clone(), mtu });
+    runtime.running.store(true, Ordering::Release);
+    events.emit(Event::named("tun_ready", serde_json::json!({
+        "ip": tun_ip,
+        "dns": tun_dns,
+        "mtu": mtu,
+        "interface": TUN_NAME,
+        "routing": "iptables-fwmark",
+        "mark": VPN_MARK,
+        "table": ROUTE_TABLE,
+        "externalTun": true,
+    })));
+    events.emit(Event::log(format!(
+        "[TUN] ToTS interface {TUN_NAME} active; iptables mark={} -> table={} -> {}",
+        VPN_MARK, ROUTE_TABLE, TUN_NAME
+    )));
+    Ok(())
+}
+
+pub fn update_external_tun_stats(runtime: &VpnRuntime, rx_bytes: u64, tx_bytes: u64) {
+    runtime.rx_bytes.store(rx_bytes, Ordering::Relaxed);
+    runtime.tx_bytes.store(tx_bytes, Ordering::Relaxed);
+}
+
 struct OpenWrtRouting {
     name: String,
     uid: u32,

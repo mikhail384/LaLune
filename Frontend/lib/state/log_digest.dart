@@ -91,6 +91,12 @@ final List<_Rule> _rules = [
   _Rule(RegExp(r'Нефатальная ошибка разбора TUNCONF: превышен лимит потоков'),
       'limit', DigestLevel.error,
       'Сервер отклонил параметры потока (×{n}). Проверьте согласованное число Workers и версии клиента и сервера'),
+  _Rule(RegExp(r'ERROR_LIMIT|captcha session rate limit reached', caseSensitive: false),
+      'captcha-limit', DigestLevel.error,
+      'VK ограничил попытки решения капчи. Подождите и повторите подключение'),
+  _Rule(RegExp(r'\[CAPTCHA\] Ядро запросило решение капчи'),
+      'captcha-required', DigestLevel.warn,
+      'VK запросил капчу. Ручное решение на роутере пока не поддерживается'),
 
   _Rule(RegExp(r'\[BACKEND\] .*started'), 'backend', DigestLevel.ok,
       'Backend запущен'),

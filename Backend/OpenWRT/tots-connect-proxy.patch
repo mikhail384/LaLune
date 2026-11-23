@@ -1,0 +1,88 @@
+diff --git a/Providers/jazz-session/src/session.rs b/Providers/jazz-session/src/session.rs
+index 1111111..2222222 100644
+--- a/Providers/jazz-session/src/session.rs
++++ b/Providers/jazz-session/src/session.rs
+@@
+ use tokio::{
+     net::TcpStream,
++    io::{AsyncReadExt, AsyncWriteExt},
+     sync::{mpsc, oneshot, RwLock},
+     task::JoinHandle,
+     time::{self, Instant},
+ };
+ use tokio_tungstenite::{
+-    connect_async_with_config,
++    client_async_tls_with_config, connect_async_with_config,
+     tungstenite::{client::IntoClientRequest, protocol::WebSocketConfig, Message},
+     MaybeTlsStream, WebSocketStream,
+ };
+ use url::Url;
++
++fn https_proxy_endpoint() -> Option<(String, u16)> {
++    for key in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] {
++        let Ok(value) = std::env::var(key) else { continue };
++        let Ok(proxy) = Url::parse(value.trim()) else { continue };
++        if proxy.scheme() != "http" || !proxy.username().is_empty() || proxy.password().is_some() {
++            continue;
++        }
++        let (Some(host), Some(port)) = (proxy.host_str(), proxy.port_or_known_default()) else {
++            continue;
++        };
++        return Some((host.to_owned(), port));
++    }
++    None
++}
+@@
+-    let (socket, _) = time::timeout(
+-        timeout,
+-        connect_async_with_config(request, Some(config), false),
+-    )
+-    .await
+-    .map_err(|_| Error::Timeout("WebSocket handshake"))?
+-    .map_err(|_| Error::WebSocket)?;
++    let (socket, _) = time::timeout(timeout, async move {
++        if let Some((proxy_host, proxy_port)) = https_proxy_endpoint() {
++            let host = url.host_str().ok_or(Error::WebSocket)?;
++            let port = url.port_or_known_default().ok_or(Error::WebSocket)?;
++            let target = format!("{host}:{port}");
++            let mut stream = TcpStream::connect((proxy_host.as_str(), proxy_port))
++                .await
++                .map_err(|_| Error::WebSocket)?;
++            let connect_request = format!(
++                "CONNECT {target} HTTP/1.1\r\nHost: {target}\r\nProxy-Connection: Keep-Alive\r\n\r\n"
++            );
++            stream
++                .write_all(connect_request.as_bytes())
++                .await
++                .map_err(|_| Error::WebSocket)?;
++
++            let mut response = Vec::with_capacity(256);
++            loop {
++                let mut byte = [0u8; 1];
++                stream.read_exact(&mut byte).await.map_err(|_| Error::WebSocket)?;
++                response.push(byte[0]);
++                if response.ends_with(b"\r\n\r\n") {
++                    break;
++                }
++                if response.len() > 8192 {
++                    return Err(Error::WebSocket);
++                }
++            }
++            let status = response
++                .split(|byte| *byte == b'\n')
++                .next()
++                .and_then(|line| line.split(|byte| *byte == b' ').nth(1));
++            if status != Some(b"200") {
++                return Err(Error::WebSocket);
++            }
++            client_async_tls_with_config(request, stream, Some(config), None)
++                .await
++                .map_err(|_| Error::WebSocket)
++        } else {
++            connect_async_with_config(request, Some(config), false)
++                .await
++                .map_err(|_| Error::WebSocket)
++        }
++    })
++    .await
++    .map_err(|_| Error::Timeout("WebSocket handshake"))??;

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #
-# ARM64 OpenWRT build. Builds CSQTT, CSQTTR and pinned CSQTT 2.1.9 from
-# source, packs them into one ZIP and embeds that ZIP in the backend binary.
+# ARM64 OpenWRT build. Builds CSQTT, CSQTTR, pinned CSQTT 2.1.9 and ToTS
+# from pinned source revisions, then embeds the runtime bundle in the backend.
 
 set -euo pipefail
 export LC_ALL=C
@@ -18,7 +18,7 @@ trap 'rm -rf -- "$work"' EXIT
 log() { printf '[openwrt-arm64-build] %s\n' "$*"; }
 fail() { printf '[openwrt-arm64-build][ERROR] %s\n' "$*" >&2; exit 1; }
 
-for cmd in curl tar zstd sha256sum cargo rustup unzip zip readelf python3; do
+for cmd in curl tar zstd sha256sum cargo rustup unzip zip patch readelf python3; do
     command -v "$cmd" >/dev/null 2>&1 || fail "Не найдена команда: $cmd"
 done
 
@@ -112,9 +112,27 @@ build_core csqttr-core afab4c1f279c3e132699130b95184e628f7dda1c \
 build_core csqtt-core eda00fce6343430b40413da01791946dccb9c6ff \
     f1c7427b4bd67ecb181c2a01eeb3455bb8959bedbe91dd29ef08650a7c10f530 csqtt-219
 
+tots_commit=e9474c5d34e5a955c816cec5a63fb2803dba13b1
+tots_archive="$cache/tots-$tots_commit.zip"
+fetch "https://codeload.github.com/Endlad2/ToTS/zip/$tots_commit" \
+    "$tots_archive" 033ed805263df7e92b6323b32e5329dcd2d42fcfb44df3af4bf356c8dc8d02f5
+unzip -q "$tots_archive" -d "$work"
+(
+    cd "$work/ToTS-$tots_commit"
+    patch -p1 < "$backend_dir/tots-connect-proxy.patch"
+    export CARGO_TARGET_DIR="$cache/target-tots-aarch64/$tots_commit"
+    cargo build --locked --release --target "$rust_target" --package tots-openwrt
+    install -m 755 "$CARGO_TARGET_DIR/$rust_target/release/tots-openwrt" "$work/tots-openwrt"
+    verify_aarch64 "$work/tots-openwrt"
+    mkdir -p "$work/licenses/tots" "$work/licenses/jazz-session"
+    install -m 644 LICENSE NOTICE "$work/licenses/tots/"
+    install -m 644 Providers/jazz-session/LICENSE "$work/licenses/jazz-session/"
+)
+
 (
     cd "$work"
-    zip -9 -X openwrt-cores.zip csqtt-client csqttr-client csqtt-219
+    zip -9 -X openwrt-cores.zip csqtt-client csqttr-client csqtt-219 tots-openwrt
+    zip -9 -X openwrt-cores.zip licenses/tots/LICENSE licenses/tots/NOTICE licenses/jazz-session/LICENSE
     unzip -t openwrt-cores.zip
 )
 export LALUNE_OPENWRT_CORES="$work/openwrt-cores.zip"
@@ -122,10 +140,10 @@ export LALUNE_OPENWRT_CORES="$work/openwrt-cores.zip"
 # Backend uses the same OpenWRT SDK linker and embeds openwrt-cores.zip.
 export CARGO_TARGET_DIR="$cache/target-backend-aarch64"
 cd "$backend_dir"
-log "Собираю backend со встроенными CSQTT/CSQTTR/CSQTT 2.1.9"
+log "Собираю backend со встроенными CSQTT/CSQTTR/CSQTT 2.1.9/ToTS"
 cargo build --locked --release --target "$rust_target" --bin lalune-openwrt-backend
 binary="$CARGO_TARGET_DIR/$rust_target/release/lalune-openwrt-backend"
 verify_aarch64 "$binary"
 install -m 755 "$binary" output/lalune-openwrt-backend
 cp "$LALUNE_OPENWRT_CORES" output/lalune-openwrt-cores-aarch64.zip
-log "Готово: output/lalune-openwrt-backend + embedded 3-core bundle"
+log "Готово: output/lalune-openwrt-backend + embedded 4-runtime bundle"

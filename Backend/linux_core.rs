@@ -4,7 +4,7 @@ use anyhow::{bail, Context, Result};
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 
@@ -29,6 +29,7 @@ pub struct CoreUser {
     directory: PathBuf,
     /// Ядро запускается прямо из флеш-каталога (без копии в /tmp).
     exe_override: Option<PathBuf>,
+    tun_device_original: Option<(u32, u32, u32)>,
     _lease: File,
 }
 
@@ -104,6 +105,7 @@ impl CoreUser {
             uid,
             directory,
             exe_override,
+            tun_device_original: None,
             _lease: lease,
         };
         fs::set_permissions(&user.directory, fs::Permissions::from_mode(0o755))?;
@@ -133,7 +135,38 @@ impl CoreUser {
         self.directory.join("work")
     }
 
+    /// Make the TUN device available only to this core UID. OpenWrt's devtmpfs
+    /// may create /dev/net/tun as root-only even when the child has CAP_NET_ADMIN.
+    pub fn grant_tun_device_access(&mut self) -> Result<()> {
+        let path = Path::new("/dev/net/tun");
+        let metadata = fs::metadata(path).context("Не найдено устройство /dev/net/tun")?;
+        if !metadata.file_type().is_char_device() {
+            bail!("/dev/net/tun не является символьным устройством");
+        }
+        let original = (metadata.uid(), metadata.gid(), metadata.mode() & 0o7777);
+        std::os::unix::fs::chown(path, Some(self.uid), Some(self.uid))
+            .context("Не удалось выдать ToTS доступ к /dev/net/tun")?;
+        if let Err(error) = fs::set_permissions(path, fs::Permissions::from_mode(0o600)) {
+            let _ = std::os::unix::fs::chown(path, Some(original.0), Some(original.1));
+            let _ = fs::set_permissions(path, fs::Permissions::from_mode(original.2));
+            return Err(error).context("Не удалось ограничить права /dev/net/tun UID ядра");
+        }
+        self.tun_device_original = Some(original);
+        Ok(())
+    }
+
     pub fn configure(&self, command: &mut tokio::process::Command, args: &[String]) -> Result<()> {
+        self.configure_with_net_admin(command, args, false)
+    }
+
+    /// ToTS creates and configures its own TUN interface. Give only that child
+    /// CAP_NET_ADMIN after dropping root; CSQTT remains an unprivileged child.
+    pub fn configure_with_net_admin(
+        &self,
+        command: &mut tokio::process::Command,
+        args: &[String],
+        retain_net_admin: bool,
+    ) -> Result<()> {
         let mut args = args.to_vec();
         // Файлы, доступные root, могут лежать в закрытом домашнем каталоге.
         for i in 0..args.len().saturating_sub(1) {
@@ -153,11 +186,41 @@ impl CoreUser {
         // Все три операции выполняются до exec и до потери root-привилегий.
         unsafe {
             command.as_std_mut().pre_exec(move || {
+                if retain_net_admin
+                    && libc::prctl(libc::PR_SET_KEEPCAPS, 1, 0, 0, 0) != 0
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
                 if libc::setgroups(0, std::ptr::null()) != 0
                     || libc::setgid(uid) != 0
                     || libc::setuid(uid) != 0
                 {
                     return Err(std::io::Error::last_os_error());
+                }
+                if retain_net_admin {
+                    #[repr(C)]
+                    struct CapHeader { version: u32, pid: i32 }
+                    #[repr(C)]
+                    struct CapData { effective: u32, permitted: u32, inheritable: u32 }
+
+                    const CAP_NET_ADMIN: u32 = 12;
+                    const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
+                    let mut header = CapHeader { version: LINUX_CAPABILITY_VERSION_3, pid: 0 };
+                    let mut data = [
+                        CapData { effective: 1 << CAP_NET_ADMIN, permitted: 1 << CAP_NET_ADMIN, inheritable: 1 << CAP_NET_ADMIN },
+                        CapData { effective: 0, permitted: 0, inheritable: 0 },
+                    ];
+                    if libc::syscall(libc::SYS_capset, &mut header, data.as_mut_ptr()) != 0
+                        || libc::prctl(
+                            libc::PR_CAP_AMBIENT,
+                            libc::PR_CAP_AMBIENT_RAISE,
+                            CAP_NET_ADMIN,
+                            0,
+                            0,
+                        ) != 0
+                    {
+                        return Err(std::io::Error::last_os_error());
+                    }
                 }
                 Ok(())
             });
@@ -168,6 +231,15 @@ impl CoreUser {
 
 impl Drop for CoreUser {
     fn drop(&mut self) {
+        if let Some((uid, gid, mode)) = self.tun_device_original.take() {
+            let path = Path::new("/dev/net/tun");
+            if let Err(error) = std::os::unix::fs::chown(path, Some(uid), Some(gid)) {
+                log::warn!("Не удалось восстановить владельца /dev/net/tun: {error}");
+            }
+            if let Err(error) = fs::set_permissions(path, fs::Permissions::from_mode(mode)) {
+                log::warn!("Не удалось восстановить права /dev/net/tun: {error}");
+            }
+        }
         if let Err(error) = fs::remove_dir_all(&self.directory) {
             log::warn!("Не удалось удалить временный каталог ядра: {error}");
         }

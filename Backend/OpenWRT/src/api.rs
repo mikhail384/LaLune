@@ -438,7 +438,7 @@ async fn vpn_connect(State(state): State<Arc<AppState>>, Json(body): Json<Connec
         return err(400, "Укажите адрес и пароль в профиле");
     }
     let settings = state.settings.read().clone();
-    let mut token = if matches!(settings.auth_mode.as_str(), "autoApi" | "autoVk") {
+    let mut token = if kind != Core::ToTs && matches!(settings.auth_mode.as_str(), "autoApi" | "autoVk") {
         match vk::read_token(&state.app_dir) {
             Some(token) => Some(token),
             None => return err(400, "Импортируйте VK-токен для автоматического режима"),
@@ -456,7 +456,7 @@ async fn vpn_connect(State(state): State<Arc<AppState>>, Json(body): Json<Connec
         Ok(core) => core,
         Err(error) => return err(500, format!("Не удалось извлечь ядро: {error:#}")),
     };
-    if bundle_core.is_none() && !state.core_path.exists() {
+    if bundle_core.is_none() && kind != Core::ToTs && !state.core_path.exists() {
         state.log("[VPN] core not found, downloading...");
         let client = reqwest::Client::builder().timeout(Duration::from_secs(30)).build().unwrap();
         let version = match core_manager::fetch_latest(&client, &state.events).await {
@@ -468,7 +468,7 @@ async fn vpn_connect(State(state): State<Arc<AppState>>, Json(body): Json<Connec
     }
 
     let mut runtime_config = config.clone();
-    let auto_calls = if settings.auth_mode == "autoApi" {
+    let auto_calls = if kind != Core::ToTs && settings.auth_mode == "autoApi" {
         state.log("[VK] AutoAPI: запрашиваю хеши звонков");
         match vk::ActiveCalls::start(
             token.take().expect("AutoAPI token checked"), settings.workers, settings.auto_api_workers,
@@ -484,10 +484,31 @@ async fn vpn_connect(State(state): State<Arc<AppState>>, Json(body): Json<Connec
     } else {
         None
     };
-    let args = core_manager::build_args(&runtime_config, &settings, vpn::CORE_LISTEN_PORT);
     let core_path = bundle_core.as_ref().map(|core| core.path()).unwrap_or(&state.core_path);
-    let core = match CoreProcess::spawn(core_path, &args, state.core_logs.clone(), state.events.clone(),
-        kind.password_env().then_some(runtime_config.password.as_str()), token.as_deref()).await {
+    let core_result = if kind == Core::ToTs {
+        if !runtime_config.raw_link.starts_with("tots://") {
+            return err(400, "В профиле ToTS отсутствует исходная ссылка");
+        }
+        state.log("[ToTS] запускаю один worker; OpenWRT создаст TUN и включит policy routing после готовности транспорта");
+        CoreProcess::spawn_tots(
+            core_path,
+            &runtime_config.raw_link,
+            1,
+            state.core_logs.clone(),
+            state.events.clone(),
+        ).await
+    } else {
+        let args = core_manager::build_args(&runtime_config, &settings, vpn::CORE_LISTEN_PORT);
+        CoreProcess::spawn(
+            core_path,
+            &args,
+            state.core_logs.clone(),
+            state.events.clone(),
+            kind.password_env().then_some(runtime_config.password.as_str()),
+            token.as_deref(),
+        ).await
+    };
+    let core = match core_result {
         Ok(c) => c, Err(e) => return err(500, format!("spawn failed: {}", e)),
     };
     drop(bundle_core);
@@ -517,13 +538,33 @@ async fn vpn_connect(State(state): State<Arc<AppState>>, Json(body): Json<Connec
 
         while tokio::time::Instant::now() < deadline && !tun_started {
             if core_stopped(&state2) { break; }
-
-            let ready = readiness.lock().ready_params();
-            if let Some((ip, dns)) = ready {
+            let tots_status = if kind == Core::ToTs {
+                state2.core.lock().as_ref().and_then(CoreProcess::tots_status)
+            } else {
+                None
+            };
+            if let Some(status) = &tots_status {
+                vpn::update_external_tun_stats(&state2.vpn, status.rx_bytes, status.tx_bytes);
+            }
+            let ready = if let Some(status) = &tots_status {
+                (status.connected && status.workers_healthy > 0
+                    && status.interface == vpn::TUN_NAME)
+                    .then(|| (status.virtual_ip.clone(), vpn::DEFAULT_DNS.to_string(), status.mtu, true))
+            } else if kind == Core::ToTs {
+                None
+            } else {
+                readiness.lock().ready_params().map(|(ip, dns)| (ip, dns, vpn::TUN_MTU, false))
+            };
+            if let Some((ip, dns, mtu, external_tun)) = ready {
                 let _operation = state2.vpn.operation.lock().await;
                 state2.log(format!("[VPN] TUN params: ip={} dns={}", ip, dns));
 
-                if let Err(e) = vpn::start_tun(state2.vpn.clone(), ip, dns, state2.events.clone()) {
+                let result = if external_tun {
+                    vpn::start_external_tun(state2.vpn.clone(), ip, dns, mtu, state2.events.clone())
+                } else {
+                    vpn::start_tun(state2.vpn.clone(), ip, dns, state2.events.clone())
+                };
+                if let Err(e) = result {
                     state2.log(format!("[VPN] tun start failed: {e:#}"));
                     state2.events.emit(Event::error(format!("tun start failed: {e:#}")));
                     finish_vpn(&state2).await;
@@ -539,11 +580,21 @@ async fn vpn_connect(State(state): State<Arc<AppState>>, Json(body): Json<Connec
         }
 
         if !tun_started {
-            state2.log("[VPN] timeout: 3 consecutive Активных>0 ticks not seen within 90s");
+            let reason = if kind == Core::ToTs {
+                "ToTS did not report a connected TUN and healthy worker within 90s"
+            } else {
+                "3 consecutive Активных>0 ticks not seen within 90s"
+            };
+            state2.log(format!("[VPN] timeout: {reason}"));
             state2.events.emit(Event::status(false));
         }
         if tun_started {
             while !core_stopped(&state2) && state2.vpn.running.load(std::sync::atomic::Ordering::Acquire) {
+                if kind == Core::ToTs {
+                    if let Some(status) = state2.core.lock().as_ref().and_then(CoreProcess::tots_status) {
+                        vpn::update_external_tun_stats(&state2.vpn, status.rx_bytes, status.tx_bytes);
+                    }
+                }
                 tokio::time::sleep(Duration::from_millis(250)).await;
             }
         }
@@ -625,13 +676,17 @@ async fn vpn_reconnect(state: State<Arc<AppState>>) -> impl IntoResponse {
 
 async fn vpn_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let session_before = state.vpn.session_id.lock().clone();
+    let config_before = *state.vpn.active_config_id.lock();
     let s = state.vpn.stats();
     let session_after = state.vpn.session_id.lock().clone();
+    let config_after = *state.vpn.active_config_id.lock();
+    let stable = session_before == session_after && config_before == config_after;
     let socks5_port = *state.socks5_port.read();
     Json(json!({
         "rxBytes": s.rx_bytes,
         "txBytes": s.tx_bytes,
-        "sessionId": if session_before == session_after { session_before } else { String::new() },
+        "sessionId": if stable { session_before } else { String::new() },
+        "configId": if stable { config_before } else { 0 },
         "rxRate": s.rx_rate,
         "txRate": s.tx_rate,
         "activeSessions": s.active_sessions,

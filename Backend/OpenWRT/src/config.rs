@@ -152,7 +152,7 @@ pub fn parse_link(link: &str) -> Result<ConfigItem> {
     } else if lower.starts_with("olcrtc://") {
         parse_generic(link, "OLCRTC", "olcrtc://")
     } else if lower.starts_with("tots://") {
-        parse_generic(link, "TOTS", "tots://")
+        parse_tots(link)
     } else if lower.starts_with("openflux://") {
         parse_generic(link, "OPENFLUX", "openflux://")
     } else {
@@ -198,17 +198,20 @@ pub fn normalize_for_core(
         _ => None,
     };
     let opaque_csqtt = scheme == "csqtt://" && !after_scheme.to_ascii_lowercase().starts_with("connect?");
-    let effective = explicit.unwrap_or(if scheme == "csqttr://" {
-        Core::Csqttr
-    } else if opaque_csqtt && selected == Core::Legacy {
-        // Legacy 2.1.9 only understands plain links; an opaque (encrypted)
-        // csqtt:// link needs the 2.5.1 core.
-        Core::Csqtt
-    } else {
-        selected
+    let effective = explicit.unwrap_or(match scheme {
+        "csqttr://" => Core::Csqttr,
+        "tots://" => Core::ToTs,
+        _ if opaque_csqtt && selected == Core::Legacy => {
+            // Legacy 2.1.9 only understands plain links; an opaque (encrypted)
+            // csqtt:// link needs the 2.5.1 core.
+            Core::Csqtt
+        }
+        _ => selected,
     });
     let canonical = if scheme == "csqttr://" {
         format!("csqtt://{after_scheme}")
+    } else if scheme == "tots://" {
+        format!("tots://{after_scheme}")
     } else {
         uri.to_string()
     };
@@ -217,6 +220,9 @@ pub fn normalize_for_core(
 
 pub fn parse_for_core(link: &str, core: crate::bundled_cores::Core) -> Result<ConfigItem> {
     let link = link.trim();
+    if core == crate::bundled_cores::Core::ToTs {
+        return parse_tots(link);
+    }
     if !link.starts_with("csqtt://") {
         return Err(anyhow!("Для этого ядра нужна ссылка csqtt://"));
     }
@@ -227,6 +233,47 @@ pub fn parse_for_core(link: &str, core: crate::bundled_cores::Core) -> Result<Co
     };
     config.protocol = core.id().into();
     Ok(config)
+}
+
+/// ToTS profiles are server-issued URL-safe base64 JSON URIs. Keep the full URI
+/// for the native runtime while exposing only the fields used by the router UI.
+fn parse_tots(link: &str) -> Result<ConfigItem> {
+    use base64::{engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD}, Engine};
+
+    let trimmed = link.trim();
+    let encoded = trimmed
+        .get(..7)
+        .filter(|scheme| scheme.eq_ignore_ascii_case("tots://"))
+        .map(|_| &trimmed[7..])
+        .ok_or_else(|| anyhow!("Ссылка ToTS должна начинаться с tots://"))?;
+    let bytes = URL_SAFE_NO_PAD
+        .decode(encoded)
+        .or_else(|_| URL_SAFE.decode(encoded))
+        .map_err(|_| anyhow!("Некорректный код ToTS-профиля"))?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|_| anyhow!("Некорректный JSON ToTS-профиля"))?;
+    if value.get("version").and_then(|v| v.as_u64()) != Some(1) {
+        return Err(anyhow!("Неподдерживаемая версия ToTS-профиля"));
+    }
+    let peer = value.get("peer").and_then(|v| v.as_str()).unwrap_or("").trim();
+    let password = value.get("password").and_then(|v| v.as_str()).unwrap_or("");
+    let device_id = value.get("device_id").and_then(|v| v.as_str()).unwrap_or("");
+    let webrtc_port = value.get("webrtc_port").and_then(|v| v.as_u64()).unwrap_or(0);
+    let turn_port = value.get("turn_port").and_then(|v| v.as_u64()).unwrap_or(0);
+    if peer.is_empty() || password.len() < 8 || device_id.is_empty()
+        || !(1..=65535).contains(&webrtc_port) || !(1..=65535).contains(&turn_port)
+        || !value.get("provider_data").is_some_and(serde_json::Value::is_object)
+    {
+        return Err(anyhow!("В ToTS-профиле отсутствуют обязательные поля"));
+    }
+    Ok(ConfigItem {
+        protocol: "ToTS".into(),
+        peer: peer.into(),
+        password: password.into(),
+        name: peer.into(),
+        raw_link: format!("tots://{encoded}"),
+        ..Default::default()
+    })
 }
 
 /// CSQTT: csqtt-link → Lua → нативный fallback.
@@ -379,7 +426,7 @@ fn parse_generic(link: &str, protocol: &str, prefix: &str) -> Result<ConfigItem>
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_for_core, parse_for_core, ConfigItem, ConfigStore};
+    use super::{normalize_for_core, parse_for_core, parse_link, ConfigItem, ConfigStore};
     use crate::bundled_cores::Core;
 
     #[test]
@@ -410,6 +457,40 @@ mod tests {
         let config = parse_for_core(&link, core).expect("captioned CSQTTR link parses");
         assert_eq!(config.protocol, "CSQTTR");
         assert_eq!(config.peer, "127.0.0.1:46000");
+    }
+
+    #[test]
+    fn tots_uri_is_decoded_and_kept_for_the_runtime() {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+
+        let payload = serde_json::json!({
+            "version": 1,
+            "peer": "203.0.113.7",
+            "webrtc_port": 7800,
+            "turn_port": 7801,
+            "password": "test-secret-password",
+            "device_id": "dccd2408-7d93-5e52-b31e-fe8745073a2a",
+            "provider": "vk",
+            "provider_data": {"vk": {"vk_call_links": ["server-issued"]}},
+            "mtu": 1200
+        });
+        let uri = format!("tots://{}", URL_SAFE_NO_PAD.encode(payload.to_string()));
+        let (normalized, core) = normalize_for_core(&uri, Core::Csqtt);
+        assert_eq!(normalized, uri);
+        assert_eq!(core, Core::ToTs);
+
+        let parsed = parse_link(&uri).expect("ToTS URI parses");
+        assert_eq!(parsed.protocol, "ToTS");
+        assert_eq!(parsed.peer, "203.0.113.7");
+        assert_eq!(parsed.password, "test-secret-password");
+        assert_eq!(parsed.raw_link, uri);
+        assert!(Core::parse(&parsed.protocol).is_some());
+    }
+
+    #[test]
+    fn invalid_tots_uri_is_rejected_without_falling_back_to_generic_parameters() {
+        assert!(parse_link("tots://not-a-valid-profile").is_err());
+        assert!(parse_link("tots://peer=203.0.113.7;password=secret").is_err());
     }
 
     #[test]

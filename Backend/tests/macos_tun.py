@@ -72,12 +72,14 @@ with tempfile.TemporaryDirectory(prefix='lalune-macos-tun-') as temporary:
             api('/vpn/connect', {'configId': config['id']})
             wait_for(lambda: api('/vpn/status')['connected'])
             session_id = wait_for(lambda: api('/vpn/stats').get('sessionId'))
+            assert api('/vpn/stats')['configId'] == config['id']
             assert session_id != previous_session
             previous_session = session_id
             other = api('/configs', {'name': 'other fixture', 'protocol': protocol,
                 'peer': '192.0.2.1:46000', 'password': 'local-test', 'hashes': 'local-test'})
             api('/configs/selected', {'id': other['id']}, method='PUT')
             assert api('/vpn/status')['configId'] == config['id']
+            assert api('/vpn/stats')['configId'] == config['id']
             tun = wait_for(interface)
             subprocess.run(['route', '-n', 'add', '-host', target, '-interface', tun],
                            check=True, capture_output=True)

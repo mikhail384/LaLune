@@ -142,11 +142,13 @@ def inside(binary, case):
                 wait_for(lambda:api('/vpn/status')['connected'])
                 session_id=wait_for(lambda:api('/vpn/stats').get('sessionId'))
                 assert api('/vpn/stats')['sessionId']==session_id, 'Session ID changed while connected'
+                assert api('/vpn/stats')['configId']==conf['id']
                 if case=='reconnect':
                     other=api('/configs',{'name':'Other profile','protocol':protocol,
                          'peer':'192.0.2.1:46000','password':'local-test','hashes':'local-test'})
                     api('/configs/selected',{'id':other['id']},method='PUT')
                     assert api('/vpn/status')['configId']==conf['id'], 'Selected profile replaced the active tunnel identity'
+                    assert api('/vpn/stats')['configId']==conf['id']
                     api('/configs/selected',{'id':conf['id']},method='PUT')
                 assert 'local-test' not in json.dumps(api('/logs'), ensure_ascii=False), \
                     'Core arguments leaked the fixture password or hashes to logs'
