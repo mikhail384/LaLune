@@ -98,6 +98,7 @@ class Backend(private val context: Context) {
     private val eventSubscribers = CopyOnWriteArrayList<EventStream>()
     private val logs = CopyOnWriteArrayList<String>()
     private val activeCallIds = CopyOnWriteArrayList<String>()
+    private val trafficRates = TrafficRates()
     private var httpServer: ServerSocket? = null
 
     @Volatile private var lastStatsAt = 0L

@@ -121,7 +121,9 @@ unzip -q "$tots_archive" -d "$work"
     cd "$work/ToTS-$tots_commit"
     patch -p1 < "$backend_dir/tots-connect-proxy.patch"
     export CARGO_TARGET_DIR="$cache/target-tots-aarch64/$tots_commit"
-    cargo build --locked --release --target "$rust_target" --package tots-openwrt
+    # The pinned upstream ToTS archive has a Cargo.lock that predates our
+    # connector patch; let Cargo refresh that lockfile in the temporary source.
+    cargo build --release --target "$rust_target" --package tots-openwrt
     install -m 755 "$CARGO_TARGET_DIR/$rust_target/release/tots-openwrt" "$work/tots-openwrt"
     verify_aarch64 "$work/tots-openwrt"
     mkdir -p "$work/licenses/tots" "$work/licenses/jazz-session"

@@ -198,8 +198,8 @@ jobs:
           codesign --force --deep --sign - "$APP"
           mkdir -p Output
           ditto -c -k --keepParent "$APP" Output/LaLune-macOS.zip
-          lipo -verify_arch x86_64 arm64 "$APP/Contents/MacOS/lalune"
-          lipo -verify_arch x86_64 arm64 "$APP/Contents/Resources/lalune-backend"
+          lipo "$APP/Contents/MacOS/lalune" -verify_arch x86_64 arm64
+          lipo "$APP/Contents/Resources/lalune-backend" -verify_arch x86_64 arm64
           cp Output/LaLune-macOS.zip Output/LaLune-macOS-universal.zip
           hdiutil create -volname LaLune -srcfolder "$APP" -ov -format UDZO Output/LaLune-macOS.dmg
           cp dist-macos/lalune-backend Output/lalune-backend-macos
