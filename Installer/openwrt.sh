@@ -6,7 +6,7 @@
 
 set -e
 
-BACKEND_BASE="https://github.com/Endlad2/LaLune/releases/latest/download"
+BACKEND_BASE="https://github.com/mikhail384/LaLune/releases/latest/download"
 BACKEND_URL=""
 LUCI_APP_URL="$BACKEND_BASE/luci-app-lalune.tar.gz"
 LUCI_APP_ARCHIVE="/tmp/luci-app-lalune.tar.gz"

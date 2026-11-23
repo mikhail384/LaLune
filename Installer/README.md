@@ -84,7 +84,7 @@
 ## install-macos.sh — macOS
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Endlad2/LaLune/main/Installer/install-macos.sh | bash
+curl -fsSL https://raw.githubusercontent.com/mikhail384/LaLune/main/Installer/install-macos.sh | bash
 ```
 
 Сначала скачивает DMG и совместимые ядра, затем монтирует DMG через

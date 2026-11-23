@@ -19,7 +19,7 @@ pub const VK_SCOPE: &str = "1073737727";
 pub const VK_REDIRECT_URI: &str = "https://oauth.vk.ru/blank.html";
 
 pub const TOKEN_SH_URL: &str =
-    "https://raw.githubusercontent.com/Endlad2/LaLune/refs/heads/main/Token.sh";
+    "https://raw.githubusercontent.com/mikhail384/LaLune/refs/heads/main/Token.sh";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

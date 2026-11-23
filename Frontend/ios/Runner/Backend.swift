@@ -330,7 +330,7 @@ public final class Backend {
                 return (200, json(["hasUpdate": false, "remoteTag": "",
                                    "localVersion": VERSION]))
             case ("GET", "/update/url"):
-                return (200, json(["url": "https://github.com/Endlad2/LaLune/releases/latest"]))
+                return (200, json(["url": "https://github.com/mikhail384/LaLune/releases/latest"]))
 
             case ("GET", "/vk/token/state"):
                 return (200, readVkStateJson())

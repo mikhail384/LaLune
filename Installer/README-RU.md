@@ -82,7 +82,7 @@
 Однокомандная установка:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Endlad2/LaLune/main/Installer/install-macos.sh | bash
+curl -fsSL https://raw.githubusercontent.com/mikhail384/LaLune/main/Installer/install-macos.sh | bash
 ```
 
 1. Скачивает `LaLune-macOS.dmg` и совместимые бинарники CSQTT / CSQTTR / ToTS.
@@ -140,6 +140,6 @@ cargo build --release
 
 ## Ссылки на релизы
 
-- Клиент: https://github.com/Endlad2/LaLune/releases/latest
+- Клиент: https://github.com/mikhail384/LaLune/releases/latest
 - Ядро:   https://github.com/Endlad2/csqtt-core/releases/latest
 - Wintun: https://www.wintun.net/

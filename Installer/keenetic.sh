@@ -7,7 +7,7 @@
 
 set -e
 
-BACKEND_BASE="https://github.com/Endlad2/LaLune/releases/latest/download"
+BACKEND_BASE="https://github.com/mikhail384/LaLune/releases/latest/download"
 BACKEND_NAME="lalune-backend"
 BIN_DIR="/opt/bin"
 ETC_DIR="/opt/etc/lalune"

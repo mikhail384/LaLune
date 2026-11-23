@@ -952,7 +952,7 @@ async fn core_delete(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
 async fn update_check(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let client = reqwest::Client::builder().timeout(Duration::from_secs(15)).build().unwrap();
-    let url = "https://api.github.com/repos/Endlad2/LaLune/releases/latest";
+    let url = "https://api.github.com/repos/mikhail384/LaLune/releases/latest";
     let resp = client.get(url)
         .header("User-Agent", core_manager::USER_AGENT_BROWSER)
         .header("Accept", "application/vnd.github+json")
@@ -970,7 +970,7 @@ async fn update_check(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 }
 
 async fn update_url() -> impl IntoResponse {
-    Json(json!({"url": "https://github.com/Endlad2/LaLune/releases/latest"}))
+    Json(json!({"url": "https://github.com/mikhail384/LaLune/releases/latest"}))
 }
 
 async fn vk_state(State(state): State<Arc<AppState>>) -> impl IntoResponse {

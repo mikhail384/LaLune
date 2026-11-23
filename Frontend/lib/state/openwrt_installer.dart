@@ -29,7 +29,7 @@ class OpenWrtInstaller {
   /// Каталог релиза; конкретный файл (`lalune-openwrt-backend[-<abi>]`)
   /// скрипт выбирает на роутере по DISTRIB_ARCH.
   static const backendBaseUrl =
-      'https://github.com/Endlad2/LaLune/releases/latest/download';
+      'https://github.com/mikhail384/LaLune/releases/latest/download';
 
   /// Dropbear отвергает слишком длинную exec-команду ("String too long"), а скрипт установки
   /// больше этого лимита. Поэтому сначала кладём его на роутер файлом, потом запускаем коротко.
@@ -62,6 +62,51 @@ class OpenWrtInstaller {
     } catch (_) {
       return null;
     }
+  }
+
+  static Future<Uint8List?> _downloadReleaseAsset(
+    String name, {
+    void Function(String message)? onProgress,
+  }) async {
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 15);
+    try {
+      final request = await client.getUrl(Uri.parse('$backendBaseUrl/$name'));
+      final response =
+          await request.close().timeout(const Duration(seconds: 60));
+      if (response.statusCode != HttpStatus.ok) {
+        onProgress?.call(
+          'Не удалось получить $name из mikhail384/LaLune: HTTP ${response.statusCode}',
+        );
+        return null;
+      }
+      final builder = BytesBuilder(copy: false);
+      await for (final chunk in response.timeout(const Duration(seconds: 60))) {
+        builder.add(chunk);
+      }
+      final data = builder.takeBytes();
+      if (data.length <= 1000000) return null;
+      onProgress?.call('Файл $name загружен из релиза mikhail384/LaLune');
+      return data;
+    } catch (error) {
+      onProgress?.call('Ошибка загрузки $name из mikhail384/LaLune: $error');
+      return null;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  static Future<Uint8List?> _loadAssetOrRelease(
+    String assetPath,
+    String releaseName, {
+    void Function(String message)? onProgress,
+  }) async {
+    final bundled = await _loadAsset(assetPath);
+    if (bundled != null) return bundled;
+      onProgress?.call(
+        'Файл не встроен в приложение; загружаю из mikhail384/LaLune...',
+      );
+    return _downloadReleaseAsset(releaseName, onProgress: onProgress);
   }
 
   /// Загружает файл на роутер порциями (`cat >>`) с sync и сбросом кэша: роутеры с 64 МБ ОЗУ
@@ -122,25 +167,12 @@ class OpenWrtInstaller {
   ) async {
     final name =
         abi == 'aarch64' ? 'lalune-openwrt-backend' : 'lalune-openwrt-backend-$abi';
+    final downloaded = await _downloadReleaseAsset(name, onProgress: onProgress);
+    if (downloaded != null) return downloaded;
     try {
-      final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
-      try {
-        final request = await client.getUrl(Uri.parse('$backendBaseUrl/$name'));
-        final response = await request.close().timeout(const Duration(seconds: 60));
-        if (response.statusCode == 200) {
-          final builder = BytesBuilder(copy: false);
-          await for (final chunk in response.timeout(const Duration(seconds: 60))) {
-            builder.add(chunk);
-          }
-          final data = builder.takeBytes();
-          if (data.length > 1000000) return data;
-        }
-      } finally {
-        client.close(force: true);
-      }
-    } catch (_) {}
-    try {
-      onProgress?.call('GitHub недоступен с телефона, беру встроенную копию...');
+      onProgress?.call(
+        'Загрузка из релиза не удалась; проверяю встроенную копию...',
+      );
       final data = await rootBundle.load('assets/openwrt/$name');
       return data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
     } catch (_) {
@@ -348,17 +380,24 @@ class OpenWrtInstaller {
           // (~6,5 МБ) + одно ядро (~10,6 МБ) отдельным файлом. Вместе с вшитыми ядрами
           // (19,5 МБ) такой роутер не вмещает ни backend, ни распакованное ядро.
           onProgress?.call('Роутер с малой памятью: загружаю лёгкую сборку...');
-          final leanBackend =
-              await _loadAsset('assets/openwrt/lalune-openwrt-backend-$abi-lean');
-          final leanCore = await _loadAsset('assets/openwrt/csqttr-client-$abi');
+          final leanBackend = await _loadAssetOrRelease(
+            'assets/openwrt/lalune-openwrt-backend-$abi-lean',
+            'lalune-openwrt-backend-$abi-lean',
+            onProgress: onProgress,
+          );
+          final leanCore = await _loadAssetOrRelease(
+            'assets/openwrt/csqttr-client-$abi',
+            'csqttr-client-$abi',
+            onProgress: onProgress,
+          );
           if (leanBackend == null || leanCore == null) {
             logTrace('Lean assets missing for abi=$abi');
             final diag = await _collectRouterDiagnostics(client);
             final fullLog = await buildAndSaveLog(stdout: stdout, stderr: stderr, diag: diag);
             return OpenWrtInstallResult(
               ok: false,
-              message: 'Роутеру ($abi) не хватает памяти для полной сборки, а лёгкой '
-                  'сборки для него в приложении нет.',
+              message: 'Роутеру ($abi) не хватает памяти для полной сборки. Не удалось '
+                  'загрузить лёгкую сборку из релиза mikhail384/LaLune или приложения.',
               log: fullLog,
             );
           }

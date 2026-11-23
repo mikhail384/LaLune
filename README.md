@@ -1,6 +1,6 @@
 # LaLune
 
-<img src="https://count.owenewans.org/Endlad2/LaLune?theme=moebooru&notitle" alt="count" />
+<img src="https://count.owenewans.org/mikhail384/LaLune?theme=moebooru&notitle" alt="count" />
 
 Кроссплатформенный VPN-клиент для протокола **CSQTT**. Единый Flutter UI,
 платформенные бэкенды на Rust / Kotlin / Swift, поддержка десктопа,
@@ -30,11 +30,11 @@ VK Calls, TURN используется для обхода NAT, WRAP — для
 ### Windows
 
 ```powershell
-irm https://raw.githubusercontent.com/Endlad2/LaLune/main/Installer/install.ps1 | iex
+irm https://raw.githubusercontent.com/mikhail384/LaLune/main/Installer/install.ps1 | iex
 ```
 
 Или скачай `LaLune-Installer.exe` из
-[Releases](https://github.com/Endlad2/LaLune/releases) и запусти.
+[Releases](https://github.com/mikhail384/LaLune/releases) и запусти.
 
 Что делает: создаёт `%APPDATA%\.la-lune\`, качает клиент, backend,
 ядро CSQTT, wintun.dll, создаёт ярлыки на рабочем столе и в меню Пуск.
@@ -42,7 +42,7 @@ irm https://raw.githubusercontent.com/Endlad2/LaLune/main/Installer/install.ps1 
 ### Linux
 
 ```
-curl -fsSL https://raw.githubusercontent.com/Endlad2/LaLune/main/Installer/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/mikhail384/LaLune/main/Installer/install.sh | bash
 ```
 
 Что делает: создаёт `~/.la-lune/`, качает клиент, backend, ядро,
@@ -51,7 +51,7 @@ curl -fsSL https://raw.githubusercontent.com/Endlad2/LaLune/main/Installer/insta
 ### macOS
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Endlad2/LaLune/main/Installer/install-macos.sh | bash
+curl -fsSL https://raw.githubusercontent.com/mikhail384/LaLune/main/Installer/install-macos.sh | bash
 ```
 
 Что делает: сначала скачивает DMG и совместимые ядра, затем подключает DMG
@@ -61,7 +61,7 @@ curl -fsSL https://raw.githubusercontent.com/Endlad2/LaLune/main/Installer/insta
 ### OpenWRT (роутер: aarch64, x86_64, i386, mips/mipsel, arm)
 
 ```
-wget -O - https://raw.githubusercontent.com/Endlad2/LaLune/main/Installer/openwrt.sh | sh
+wget -O - https://raw.githubusercontent.com/mikhail384/LaLune/main/Installer/openwrt.sh | sh
 ```
 
 Что делает: выбирает backend под архитектуру роутера, устанавливает
@@ -87,12 +87,12 @@ curl -fsSL https://raw.githubusercontent.com/mikhail384/LaLune/feature/keenetic-
 
 ### Android
 
-Скачай `LaLune-Android.apk` из [Releases](https://github.com/Endlad2/LaLune/releases)
+Скачай `LaLune-Android.apk` из [Releases](https://github.com/mikhail384/LaLune/releases)
 и установи. Требуется Android 8.0+.
 
 ### iOS
 
-Скачай `.ipa` из [Releases](https://github.com/Endlad2/LaLune/releases) и
+Скачай `.ipa` из [Releases](https://github.com/mikhail384/LaLune/releases) и
 поставь через AltStore / Scarlet / Sideloadly.
 Требуется iOS 17.0+.
 

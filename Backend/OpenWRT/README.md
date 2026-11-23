@@ -84,7 +84,7 @@ ToTS запускает один worker, чтобы профиль с одной
 ## Установка
 
 ```sh
-wget -O - https://raw.githubusercontent.com/Endlad2/LaLune/main/Installer/openwrt.sh | sh
+wget -O - https://raw.githubusercontent.com/mikhail384/LaLune/main/Installer/openwrt.sh | sh
 ```
 
 Установщик сам выбирает ARM64 или ramips backend и сохраняет его как

@@ -33,21 +33,21 @@ ToTS) со ссылками на их репозитории.
 Все ассеты — **raw-ссылки из GitHub**:
 
 ```
-https://raw.githubusercontent.com/Endlad2/LaLune/refs/heads/main/Assets/background.png
-https://raw.githubusercontent.com/Endlad2/LaLune/refs/heads/main/Assets/lune.png
-https://raw.githubusercontent.com/Endlad2/LaLune/refs/heads/main/Assets/connect.png
-https://raw.githubusercontent.com/Endlad2/LaLune/refs/heads/main/Assets/settings.png
-https://raw.githubusercontent.com/Endlad2/LaLune/refs/heads/main/Assets/info.png
-https://raw.githubusercontent.com/Endlad2/LaLune/refs/heads/main/Assets/logs.png
-https://raw.githubusercontent.com/Endlad2/LaLune/refs/heads/main/Assets/max_qr.jpg
-https://raw.githubusercontent.com/Endlad2/LaLune/refs/heads/main/Assets/icon.png
+https://raw.githubusercontent.com/mikhail384/LaLune/refs/heads/main/Assets/background.png
+https://raw.githubusercontent.com/mikhail384/LaLune/refs/heads/main/Assets/lune.png
+https://raw.githubusercontent.com/mikhail384/LaLune/refs/heads/main/Assets/connect.png
+https://raw.githubusercontent.com/mikhail384/LaLune/refs/heads/main/Assets/settings.png
+https://raw.githubusercontent.com/mikhail384/LaLune/refs/heads/main/Assets/info.png
+https://raw.githubusercontent.com/mikhail384/LaLune/refs/heads/main/Assets/logs.png
+https://raw.githubusercontent.com/mikhail384/LaLune/refs/heads/main/Assets/max_qr.jpg
+https://raw.githubusercontent.com/mikhail384/LaLune/refs/heads/main/Assets/icon.png
 ```
 
 Ссылки живут в `lib/constants.dart` → `Links`. Если картинки
 не грузятся — попробуй заменить на jsDelivr:
 
 ```
-https://cdn.jsdelivr.net/gh/Endlad2/LaLune@main/Assets/background.png
+https://cdn.jsdelivr.net/gh/mikhail384/LaLune@main/Assets/background.png
 ```
 
 ## Локальная сборка

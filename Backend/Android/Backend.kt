@@ -560,7 +560,7 @@ class Backend(private val context: Context) {
                     "hasUpdate" to false, "remoteTag" to "", "localVersion" to VERSION
                 )
                 path == "/update/url" && method == "GET" -> 200 to jsonOk(
-                    "url" to "https://github.com/Endlad2/LaLune/releases/latest"
+                    "url" to "https://github.com/mikhail384/LaLune/releases/latest"
                 )
 
                 path == "/vk/token/state" && method == "GET" -> 200 to readVkState().toString()

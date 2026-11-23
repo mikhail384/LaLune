@@ -21,13 +21,13 @@
 ## Установка
 
 ```sh
-wget -O - https://raw.githubusercontent.com/Endlad2/LaLune/main/Installer/openwrt.sh | sh
+wget -O - https://raw.githubusercontent.com/mikhail384/LaLune/main/Installer/openwrt.sh | sh
 ```
 
 или:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Endlad2/LaLune/main/Installer/openwrt.sh | sh
+curl -fsSL https://raw.githubusercontent.com/mikhail384/LaLune/main/Installer/openwrt.sh | sh
 ```
 
 Флаги:

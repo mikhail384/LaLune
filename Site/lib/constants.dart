@@ -7,7 +7,7 @@ class Links {
 
   // ---------- GitHub raw (Assets/) ----------
   static const String _rawBase =
-      'https://raw.githubusercontent.com/Endlad2/LaLune/refs/heads/main/Assets';
+      'https://raw.githubusercontent.com/mikhail384/LaLune/refs/heads/main/Assets';
 
   static const String background = '$_rawBase/background.png';
   static const String lune       = '$_rawBase/lune.png';
@@ -19,8 +19,8 @@ class Links {
   static const String icon       = '$_rawBase/icon.png';
 
   // ---------- GitHub ----------
-  static const String repo       = 'https://github.com/Endlad2/LaLune';
-  static const String releases   = 'https://github.com/Endlad2/LaLune/releases/latest';
+  static const String repo       = 'https://github.com/mikhail384/LaLune';
+  static const String releases   = 'https://github.com/mikhail384/LaLune/releases/latest';
   static const String endladGh   = 'https://github.com/Endlad2';
   static const String amurcanovGh = 'https://github.com/amurcanov';
   static const String csqttCore  = 'https://github.com/Endlad2/csqtt-core';
@@ -46,7 +46,7 @@ class Links {
 
   // ---------- Счётчик ----------
   static const String counter =
-      'https://count.owenewans.org/Endlad2/LaLune?theme=moebooru&notitle';
+      'https://count.owenewans.org/mikhail384/LaLune?theme=moebooru&notitle';
 
   // ---------- Протоколы ----------
   static const List<ProtocolInfo> protocols = [

@@ -1816,7 +1816,7 @@ async fn update_check(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         .timeout(Duration::from_secs(15))
         .build()
         .unwrap();
-    let url = "https://api.github.com/repos/Endlad2/LaLune/releases/latest";
+    let url = "https://api.github.com/repos/mikhail384/LaLune/releases/latest";
     let resp = client
         .get(url)
         .header("User-Agent", core_manager::USER_AGENT_BROWSER)
@@ -1848,7 +1848,7 @@ async fn update_check(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 }
 
 async fn update_url() -> impl IntoResponse {
-    Json(json!({"url": "https://github.com/Endlad2/LaLune/releases/latest"}))
+    Json(json!({"url": "https://github.com/mikhail384/LaLune/releases/latest"}))
 }
 
 // ============================================================

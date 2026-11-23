@@ -15,7 +15,7 @@
 [CmdletBinding()]
 param(
     [string]$BrowsersPath = "$env:APPDATA\.la-lune\vk-token-fetcher\browsers",
-    [string]$ZipUrl       = "https://github.com/Endlad2/LaLune/releases/latest/download/LaLuneTokenFetcher_Windows.zip",
+    [string]$ZipUrl       = "https://github.com/mikhail384/LaLune/releases/latest/download/LaLuneTokenFetcher_Windows.zip",
     [string]$ExeName      = "LaLuneTokenFetcher.exe"
 )
 
