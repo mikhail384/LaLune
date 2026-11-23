@@ -32,6 +32,17 @@ pluginManagement {
                 includeGroupByRegex("androidx.*")
             }
         }
+        // CI exports a verified Maven Central-compatible endpoint before Gradle starts.
+        // It avoids hard-failing on a transiently blocked repo.maven.apache.org.
+        System.getenv("LALUNE_MAVEN_CENTRAL_URL")
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { mirrorUrl ->
+                maven {
+                    name = "LaLuneMavenCentralMirror"
+                    url = uri(mirrorUrl)
+                }
+            }
         mavenCentral()
         // gradlePluginPortal оставляем последним — только как fallback,
         // если чего-то нет в google/mavenCentral.

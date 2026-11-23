@@ -1,11 +1,11 @@
 name: lalune
 description: LaLune — native Flutter client for CSQTT VPN
-version: 0.9.12
+version: 0.9.18
 publish_to: 'none'
 
 environment:
-  sdk: ">=3.4.0 <4.0.0"
-  flutter: ">=3.22.0"
+  sdk: ">=3.7.0 <4.0.0"
+  flutter: ">=3.29.0"
 
 dependencies:
   flutter:
@@ -14,6 +14,7 @@ dependencies:
   # HTTP
   http: ^1.2.2
   crypto: ^3.0.3
+  mobile_scanner: ^7.5.0
 
   # SSH installer for OpenWRT
   dartssh2: ^4.1.0
@@ -23,7 +24,9 @@ dependencies:
 
   # Utils
   shared_preferences: ^2.3.2
-
+  path_provider: ^2.1.5
+  share_plus: ^10.1.4
+  
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -56,7 +59,7 @@ flutter_launcher_icons:
   image_path: "../Assets/icon.png"
 
   # Адаптивная иконка Android 8+
-  adaptive_icon_background: "#120D1C"
+  adaptive_icon_background: "#07160F"
   adaptive_icon_foreground: "../Assets/icon_foreground.png"
 
   # Убрать alpha у iOS (App Store не принимает прозрачность)
@@ -73,7 +76,11 @@ flutter:
   # Сюда build.py копирует корневой Assets/.
   assets:
     - assets/
+    - assets/icons/
     - assets/openwrt/
+
+  shaders:
+    - shaders/glass_modal.frag
 
   fonts:
     - family: Nunito

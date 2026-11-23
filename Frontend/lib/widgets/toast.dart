@@ -84,14 +84,14 @@ class _ToastWidgetState extends State<_ToastWidget>
   @override
   Widget build(BuildContext context) {
     final bg = widget.isError
-        ? const Color(0xFF3A2A0A).withOpacity(0.94)
-        : const Color(0xFF3A3000).withOpacity(0.94);
+        ? const Color(0xFF3A1012).withOpacity(0.92)
+        : const Color(0xFF0B2B1D).withOpacity(0.92);
     final border = widget.isError
-        ? const Color(0xFFFF8A8A).withOpacity(0.55)
-        : const Color(0xFFF7E84E).withOpacity(0.55);
+        ? const Color(0xFFE5484D).withOpacity(0.72)
+        : const Color(0xFF73E6A6).withOpacity(0.60);
     final textColor = widget.isError
         ? const Color(0xFFFFE0E0)
-        : const Color(0xFFFFF7D6);
+        : const Color(0xFFF7FBF8);
 
     return Positioned(
       left: 0,
@@ -130,7 +130,7 @@ class _ToastWidgetState extends State<_ToastWidget>
                         size: 18,
                         color: widget.isError
                             ? const Color(0xFFFF8A8A)
-                            : const Color(0xFFF7E84E),
+                            : const Color(0xFF73E6A6),
                       ),
                       const SizedBox(width: 10),
                       Flexible(

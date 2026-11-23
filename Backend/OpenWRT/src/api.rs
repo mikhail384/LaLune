@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //
-// HTTP API OpenWRT. Только CSQTT (без PaperFlux).
+// HTTP API OpenWRT. Поддерживаемые OpenWRT-протоколы.
 // Lua-рантайм вызывается из /smarttunnel/*.
 
 use axum::{
@@ -17,6 +17,7 @@ use futures::stream::Stream;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::convert::Infallible;
+use std::io::{Cursor, Read};
 use std::sync::Arc;
 use std::time::Duration;
 use tower_http::cors::{Any, CorsLayer};
@@ -109,7 +110,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 
 async fn ping(State(state): State<Arc<AppState>>) -> Json<Value> {
     Json(json!({
-        "ok": true, "version": "0.9.12",
+        "ok": true, "version": "0.9.18",
         "os": "linux", "arch": std::env::consts::ARCH, "platform": "openwrt",
         "hostname": hostname::get().ok().and_then(|s| s.into_string().ok()).unwrap_or_default(),
         "uptime": state.uptime(),
@@ -117,7 +118,7 @@ async fn ping(State(state): State<Arc<AppState>>) -> Json<Value> {
 }
 
 async fn version() -> Json<Value> {
-    Json(json!({ "api": 1, "backend": "0.9.12", "core": "unknown", "ui": "0.9.12" }))
+    Json(json!({ "api": 1, "backend": "0.9.18", "core": "unknown", "ui": "0.9.18" }))
 }
 
 async fn shutdown(State(state): State<Arc<AppState>>) -> Json<Value> {
@@ -314,7 +315,7 @@ async fn settings_for_proto(Path(proto): Path<String>) -> impl IntoResponse {
         "protocol": core.id(),
         "keys": [
             "peer", "vkHashes", "password", "workers", "autoApiWorkers",
-            "authMode", "obfs", "fingerprint", "clientIds",
+            "authMode", "externalHashesUrl", "obfs", "fingerprint", "clientIds",
             "captchaMode", "vkAuthMode", "turnTransport", "turnHost", "turnPort",
             "allowHashRedistribution",
             "shareVpn", "showCoreLogs", "enableSmartTunnel"
@@ -420,6 +421,94 @@ async fn device_info(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     }))
 }
 
+async fn fetch_external_hashes(public_url: &str) -> Result<String, String> {
+    let key = public_url.trim();
+    let lower = key.to_ascii_lowercase();
+    if !(lower.starts_with("https://disk.yandex.ru/") || lower.starts_with("https://disk.yandex.com/")) {
+        return Err("external hashes must use a public https://disk.yandex.ru/d/... link".into());
+    }
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(60))
+        .build()
+        .map_err(|e| format!("cannot create HTTP client: {e}"))?;
+
+    let api = client
+        .get("https://cloud-api.yandex.net/v1/disk/public/resources/download")
+        .query(&[("public_key", key)])
+        .send()
+        .await
+        .map_err(|e| format!("Yandex Disk API request failed: {e}"))?;
+    let status = api.status();
+    let body = api.text().await
+        .map_err(|e| format!("cannot read Yandex Disk API response: {e}"))?;
+    if !status.is_success() {
+        return Err(format!("Yandex Disk API HTTP {}", status.as_u16()));
+    }
+    let payload: Value = serde_json::from_str(&body)
+        .map_err(|e| format!("invalid Yandex Disk API response: {e}"))?;
+    let href = payload.get("href").and_then(Value::as_str).unwrap_or("").trim();
+    if !href.starts_with("https://") {
+        return Err("Yandex Disk did not return a secure download URL".into());
+    }
+
+    let response = client.get(href).send().await
+        .map_err(|e| format!("hash archive request failed: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("hash archive HTTP {}", response.status().as_u16()));
+    }
+    const MAX_ARCHIVE: u64 = 32 * 1024 * 1024;
+    if response.content_length().is_some_and(|n| n > MAX_ARCHIVE) {
+        return Err("hash archive is too large".into());
+    }
+    let bytes = response.bytes().await
+        .map_err(|e| format!("cannot download hash archive: {e}"))?;
+    if bytes.len() as u64 > MAX_ARCHIVE {
+        return Err("hash archive is too large".into());
+    }
+
+    let mut zip = zip::ZipArchive::new(Cursor::new(bytes))
+        .map_err(|e| format!("invalid ZIP archive: {e}"))?;
+    let mut text = None;
+    for i in 0..zip.len() {
+        let mut entry = zip.by_index(i)
+            .map_err(|e| format!("cannot read ZIP entry: {e}"))?;
+        if entry.is_dir() { continue; }
+        let name = entry.name().replace('\\', "/");
+        if !name.rsplit('/').next().unwrap_or("").eq_ignore_ascii_case("hashes.txt") {
+            continue;
+        }
+        if entry.size() > 1024 * 1024 {
+            return Err("hashes.txt is too large".into());
+        }
+        let mut value = String::new();
+        entry.read_to_string(&mut value)
+            .map_err(|e| format!("cannot read hashes.txt: {e}"))?;
+        if value.len() > 1024 * 1024 {
+            return Err("hashes.txt is too large".into());
+        }
+        text = Some(value);
+        break;
+    }
+    let text = text.ok_or_else(|| "hashes.txt not found in ZIP".to_string())?;
+    let mut hashes: Vec<String> = Vec::new();
+    for item in text
+        .split(|c: char| c == ',' || c == '+' || c.is_whitespace())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        if !hashes.iter().any(|existing| existing == item) {
+            hashes.push(item.to_string());
+        }
+        if hashes.len() >= 6 { break; }
+    }
+    if hashes.is_empty() {
+        return Err("hashes.txt does not contain hashes".into());
+    }
+    Ok(hashes.join(","))
+}
+
 #[derive(Deserialize)]
 struct ConnectBody { #[serde(rename = "configId")] config_id: Option<i64> }
 
@@ -468,6 +557,23 @@ async fn vpn_connect(State(state): State<Arc<AppState>>, Json(body): Json<Connec
     }
 
     let mut runtime_config = config.clone();
+    if kind != Core::ToTs && settings.auth_mode == "externalHashes" {
+        if settings.external_hashes_url.trim().is_empty() {
+            return err(400, "external hashes URL is empty");
+        }
+        state.log("[VPN] downloading external hashes from Yandex Disk");
+        match fetch_external_hashes(&settings.external_hashes_url).await {
+            Ok(hashes) => {
+                let count = hashes.split(',').filter(|value| !value.is_empty()).count();
+                runtime_config.hashes = hashes;
+                state.log(format!("[VPN] external hashes loaded ({count})"));
+            }
+            Err(message) => {
+                state.log(format!("[VPN] external hashes failed: {message}"));
+                return err(502, message);
+            }
+        }
+    }
     let auto_calls = if kind != Core::ToTs && settings.auth_mode == "autoApi" {
         state.log("[VK] AutoAPI: запрашиваю хеши звонков");
         match vk::ActiveCalls::start(
@@ -857,7 +963,7 @@ async fn update_check(State(state): State<Arc<AppState>>) -> impl IntoResponse {
             .unwrap_or_default(),
         Err(_) => String::new(),
     };
-    let local = "0.9.12";
+    let local = "0.9.18";
     let has_update = !remote_tag.is_empty() && remote_tag != local;
     let _ = &state;
     Json(json!({"hasUpdate": has_update, "remoteTag": remote_tag, "localVersion": local}))

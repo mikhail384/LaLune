@@ -39,7 +39,12 @@ class InputRow extends StatelessWidget {
               keyboardType: keyboardType,
               readOnly: readOnly,
               obscureText: obscureText,
-              style: const TextStyle(fontSize: 13.5),
+              textAlignVertical: TextAlignVertical.center,
+              style: const TextStyle(fontSize: 14),
+              decoration: const InputDecoration(
+                isDense: true,
+                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+              ),
               onChanged: onChanged,
             ),
           ),

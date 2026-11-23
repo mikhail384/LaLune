@@ -77,12 +77,14 @@ class ConfigsNotifier extends StateNotifier<ConfigsState> {
       // не показываем и не смешиваем с новым.
       _retryTimer?.cancel();
       _retryAttempt = 0;
+      _selectionRevision++;
       state = const ConfigsState();
       reload();
     });
   }
 
   bool _reloadAgain = false;
+  int _selectionRevision = 0;
   Timer? _retryTimer;
   int _retryAttempt = 0;
   static const List<int> _retryDelaysSec = [1, 2, 4, 8, 10];
@@ -135,6 +137,7 @@ class ConfigsNotifier extends StateNotifier<ConfigsState> {
   }
 
   Future<void> _reloadOnce() async {
+    final selectionRevisionAtStart = _selectionRevision;
     // Уже известные items/selectedId НЕ сбрасываем на время загрузки/ошибки.
     state = state.copyWith(loading: true, clearError: true);
     final api = _ref.read(apiClientProvider);
@@ -155,21 +158,31 @@ class ConfigsNotifier extends StateNotifier<ConfigsState> {
         // Older router backends may not expose selected config state.
       }
 
-      int? newSelected = state.selectedId;
-      if (newSelected == null || !items.any((c) => c.id == newSelected)) {
-        final persistedExists = persistedSelectedId != null &&
-            items.any((c) => c.id == persistedSelectedId);
-        newSelected = persistedExists
-            ? persistedSelectedId
-            : (items.isNotEmpty ? items.first.id : null);
-        if (newSelected != null && newSelected != persistedSelectedId) {
-          await _selectOnBackend(newSelected);
-        }
+      // The backend is the source of truth for the selected profile. The
+      // in-memory Riverpod value can be stale after another page changes the
+      // selection while this page remains mounted (PageView keeps pages alive).
+      // Prefer the persisted backend selection whenever it still exists.
+      final persistedExists = persistedSelectedId != null &&
+          items.any((c) => c.id == persistedSelectedId);
+      final currentExists = state.selectedId != null &&
+          items.any((c) => c.id == state.selectedId);
+      final selectionChangedDuringReload =
+          _selectionRevision != selectionRevisionAtStart;
+      final int? newSelected = selectionChangedDuringReload && currentExists
+          ? state.selectedId
+          : (persistedExists
+              ? persistedSelectedId
+              : (currentExists
+                  ? state.selectedId
+                  : (items.isNotEmpty ? items.first.id : null)));
+      if (newSelected != null && newSelected != persistedSelectedId) {
+        await _selectOnBackend(newSelected);
       }
 
       state = state.copyWith(
         items: items,
         selectedId: newSelected,
+        clearSelected: newSelected == null,
         loading: false,
         loaded: true,
         clearError: true,
@@ -187,6 +200,7 @@ class ConfigsNotifier extends StateNotifier<ConfigsState> {
   }
 
   Future<void> select(int id) async {
+    _selectionRevision++;
     state = state.copyWith(selectedId: id);
     await _selectOnBackend(id);
   }

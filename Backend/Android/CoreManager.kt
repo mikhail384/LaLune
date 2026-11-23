@@ -53,7 +53,7 @@ class CoreManager(private val context: Context) {
         const val PROTO_CSQTT_219 = "CSQTT 2.1.9"
         const val PROTO_CSQTT_251 = "CSQTT 2.5.1"
         const val PROTO_CSQTTR = "CSQTTR"
-        const val PROTO_PAPERFLUX = "PaperFlux"
+        const val PROTO_TOTS = "ToTS"
         const val CSQTT_219_RELEASE = "2026.09.17.17.36"
 
         const val LATEST_CSQTT_URL =
@@ -62,13 +62,11 @@ class CoreManager(private val context: Context) {
             "https://raw.githubusercontent.com/Endlad2/csqttr-core/refs/heads/main/LATEST"
         const val CSQTTR_URL_TEMPLATE =
             "https://github.com/Endlad2/csqttr-core/releases/download/%s/%s"
-        const val LATEST_PAPERFLUX_URL =
-            "https://raw.githubusercontent.com/Endlad2/PaperFlux-core/refs/heads/main/LATEST"
 
         const val CSQTT_URL_TEMPLATE =
             "https://github.com/Endlad2/csqtt-core/releases/download/%s/%s"
-        const val PAPERFLUX_URL_TEMPLATE =
-            "https://github.com/Endlad2/PaperFlux-core/releases/latest/download/%s"
+        const val TOTS_ANDROID_URL =
+            "https://github.com/Endlad2/ToTS/releases/latest/download/tots-android-multiabi.zip"
 
         const val PROXY_URL = "http://31.77.148.203:8855/?url="
         const val UA_BROWSER =
@@ -89,8 +87,8 @@ class CoreManager(private val context: Context) {
     private val logsFile = File(appDir, "logs.log")
     private val latestCsqtt = File(appDir, "LATEST.Csqtt")
     private val latestCsqtt219 = File(appDir, "LATEST.CSQTT-2.1.9")
-    private val latestPaper = File(appDir, "LATEST.PaperFlux")
     private val latestCsqttr = File(appDir, "LATEST.CSQTTR")
+    private val latestTots = File(appDir, "LATEST.ToTS")
 
     // The core process is process-wide: a restarted Backend creates a new
     // CoreManager, and it must still be able to stop the core started by the
@@ -126,7 +124,7 @@ class CoreManager(private val context: Context) {
                 abi.contains("x86_64") -> "libclient-android-x86_64.so"
                 else -> null
             }
-            PROTO_PAPERFLUX.uppercase() -> "libopenflux.so"
+            PROTO_TOTS.uppercase() -> "libtots.so"
             else -> null
         }
     }
@@ -145,15 +143,15 @@ class CoreManager(private val context: Context) {
                 }
             }
             PROTO_CSQTT.uppercase(), PROTO_CSQTT_219.uppercase(), PROTO_CSQTT_251.uppercase() -> getCoreName(PROTO_CSQTT)
-            PROTO_PAPERFLUX.uppercase() -> {
+            PROTO_TOTS.uppercase() -> {
                 val abi = android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: return null
-                when {
-                    abi.contains("arm64") -> "arm64-v8a/libopenflux.so"
-                    abi.contains("armeabi-v7a") -> "armeabi-v7a/libopenflux.so"
-                    abi.contains("x86_64") -> "x86_64/libopenflux.so"
-                    abi.contains("x86") -> "x86/libopenflux.so"
-                    else -> null
+                val abiDir = when {
+                    abi.contains("arm64") -> "arm64-v8a"
+                    abi.contains("armeabi-v7a") || abi.contains("arm") -> "armeabi-v7a"
+                    abi.contains("x86_64") -> "x86_64"
+                    else -> return null
                 }
+                "jniLibs/$abiDir/libtots.so"
             }
             else -> null
         }
@@ -174,16 +172,16 @@ class CoreManager(private val context: Context) {
     } catch (_: Exception) { "" }
 
     private fun latestFileFor(protocol: String): File = when {
-        protocol.equals(PROTO_PAPERFLUX, ignoreCase = true) -> latestPaper
         protocol.equals(PROTO_CSQTTR, ignoreCase = true) -> latestCsqttr
         protocol.equals(PROTO_CSQTT_219, ignoreCase = true) -> latestCsqtt219
+        protocol.equals(PROTO_TOTS, ignoreCase = true) -> latestTots
         else -> latestCsqtt
     }
 
     fun fetchLatestVersion(protocol: String = PROTO_CSQTT): String? {
         if (protocol.equals(PROTO_CSQTT_219, ignoreCase = true)) return CSQTT_219_RELEASE
+        if (protocol.equals(PROTO_TOTS, ignoreCase = true)) return "latest"
         val baseUrl = when {
-            protocol.equals(PROTO_PAPERFLUX, ignoreCase = true) -> LATEST_PAPERFLUX_URL
             protocol.equals(PROTO_CSQTTR, ignoreCase = true) -> LATEST_CSQTTR_URL
             else -> LATEST_CSQTT_URL
         }
@@ -216,9 +214,9 @@ class CoreManager(private val context: Context) {
 
     fun downloadCore(protocol: String = PROTO_CSQTT): Boolean {
         return when {
-            protocol.equals(PROTO_PAPERFLUX, ignoreCase = true) -> downloadPaperFlux()
             protocol.equals(PROTO_CSQTT_219, ignoreCase = true) -> downloadCsqtt219()
             protocol.equals(PROTO_CSQTTR, ignoreCase = true) -> downloadCsqttr()
+            protocol.equals(PROTO_TOTS, ignoreCase = true) -> downloadTots()
             else -> downloadCsqtt()
         }
     }
@@ -255,47 +253,33 @@ class CoreManager(private val context: Context) {
         }
     }
 
-    private fun downloadPaperFlux(): Boolean {
-        val abi = android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: return false
-        val abiDir = when {
-            abi.contains("arm64") -> "arm64-v8a"
-            abi.contains("armeabi-v7a") -> "armeabi-v7a"
-            abi.contains("x86_64") -> "x86_64"
-            abi.contains("x86") -> "x86"
-            else -> return false
-        }
-        val zipUrl = "https://github.com/Endlad2/PaperFlux-core/releases/latest/download/paperflux-android.zip"
-        Log.i(TAG, "[CORE] downloading PaperFlux $zipUrl")
-
+    private fun downloadTots(): Boolean {
+        val remoteEntry = getRemoteAssetName(PROTO_TOTS) ?: return false
+        Log.i(TAG, "[CORE] downloading ToTS $TOTS_ANDROID_URL")
         for (level in 1..3) {
             try {
-                val useUrl = when (level) {
-                    1 -> zipUrl
-                    else -> PROXY_URL + URLEncoder.encode(zipUrl, "UTF-8")
-                }
+                val useUrl = if (level == 1) TOTS_ANDROID_URL
+                    else PROXY_URL + URLEncoder.encode(TOTS_ANDROID_URL, "UTF-8")
                 val conn = URL(useUrl).openConnection() as HttpURLConnection
                 conn.connectTimeout = 30_000
                 conn.readTimeout = 120_000
                 conn.setRequestProperty("User-Agent", if (level == 3) UA_CURL else UA_BROWSER)
                 if (conn.responseCode == 200) {
-                    val tmpZip = File(coreDir, "paperflux-android.zip.tmp")
-                    conn.inputStream.use { input ->
-                        FileOutputStream(tmpZip).use { output -> input.copyTo(output) }
-                    }
+                    val tmpZip = File(coreDir, "tots-android-multiabi.zip.tmp")
+                    conn.inputStream.use { input -> FileOutputStream(tmpZip).use { input.copyTo(it) } }
                     if (tmpZip.length() < 1024) { tmpZip.delete(); continue }
-
-                    val dest = File(coreDir, "libopenflux.so")
-                    if (extractFileFromZip(tmpZip, "$abiDir/libopenflux.so", dest)) {
+                    val dest = File(coreDir, "libtots.so")
+                    if (extractFileFromZip(tmpZip, remoteEntry, dest)) {
                         dest.setExecutable(true, false)
-                        try { latestPaper.writeText("latest") } catch (_: Exception) {}
+                        try { latestTots.writeText("latest") } catch (_: Exception) {}
                         tmpZip.delete()
-                        Log.i(TAG, "[CORE] PaperFlux extracted OK (${dest.length()} bytes)")
+                        Log.i(TAG, "[CORE] ToTS extracted OK (${dest.length()} bytes)")
                         return true
                     }
                     tmpZip.delete()
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "[DOWNLOAD][LEVEL $level] ${e.message}")
+                Log.w(TAG, "[DOWNLOAD][ToTS][LEVEL $level] ${e.message}")
             }
         }
         return false
@@ -403,7 +387,17 @@ class CoreManager(private val context: Context) {
                 onLog("[CORE] process exited")
             }.apply { isDaemon = true }.start()
 
-            true
+            try { Thread.sleep(140) } catch (_: InterruptedException) {}
+            val immediateExitCode = try { proc.exitValue() } catch (_: IllegalThreadStateException) { null }
+            if (immediateExitCode != null) {
+                isRunning = false
+                onLog("[CORE] process exited immediately (code=$immediateExitCode)")
+                coreProcess = null
+                false
+            } else {
+                onLog("[CORE] process started")
+                true
+            }
         } catch (e: Exception) {
             Log.e(TAG, "[CORE] start failed: ${e.message}", e)
             onLog("[CORE] start failed: ${e.message}")
@@ -521,7 +515,9 @@ class CoreManager(private val context: Context) {
             "-n", "-listen", "--listen", "-obfs", "-fingerprint", "-client-ids",
             "-vk-auth-mode", "--vk-auth-mode", "-vk-hash-mode", "--vk-hash-mode",
             "-captcha-mode", "-turn-transport", "--transport", "--client-ip",
-            "--tcp-recovery", "--mode", "--socks5"
+            "--tcp-recovery", "--mode", "--socks5", "--webrtc-port",
+            "--turn-port", "--provider", "--n", "--workers_percent", "--mtu",
+            "--tun-fd", "--relay-only"
         )
         var redactNext = false
         return args.mapIndexed { i, arg ->

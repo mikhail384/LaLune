@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //
-// Логика установки (Windows, CSQTT + PaperFlux).
+// Логика установки (Windows, CSQTT + CSQTTR + ToTS).
 
 use std::fs;
 use std::io::{Cursor, Write};
@@ -14,12 +14,11 @@ pub static CSQTT_EXE:     &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/clie
 pub static CSQTT_219_EXE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/csqtt-219.exe"));
 pub static CSQTTR_EXE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/csqttr-windows-x86_64.exe"));
 pub static LATEST_CSQTTR: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/LATEST.CSQTTR"));
-pub static PAPERFLUX_EXE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/paperflux-windows-amd64.exe"));
 pub static LATEST_CSQTT:  &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/LATEST.Csqtt"));
 pub static LATEST_CSQTT_219: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/LATEST.CSQTT-2.1.9"));
-pub static LATEST_PF:     &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/LATEST.PaperFlux"));
 pub static ICON_FILE:     &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/icon.ico"));
 pub static WINTUN_DLL:    &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/wintun.dll"));
+pub static TOTS_CLIENT:   &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/tots-client.exe"));
 
 pub fn appdata_dir() -> Result<PathBuf> {
     let base = std::env::var("APPDATA").map(PathBuf::from)
@@ -167,14 +166,13 @@ where F: FnMut(&str),
     write_file(&appdata.join("csqttr-core.exe"), CSQTTR_EXE)?;
     write_file(&appdata.join("LATEST.CSQTTR"), LATEST_CSQTTR)?;
 
-    // PaperFlux core
-    log("Кладу PaperFlux core");
-    write_file(&appdata.join("paperflux-core.exe"), PAPERFLUX_EXE)?;
+    // ToTS client
+    log("Кладу ToTS client");
+    write_file(&appdata.join("tots-client.exe"), TOTS_CLIENT)?;
 
     // LATEST
-    log("Кладу LATEST.Csqtt + LATEST.CSQTT-2.1.9 + LATEST.CSQTTR + LATEST.PaperFlux");
+    log("Кладу LATEST.Csqtt + LATEST.CSQTT-2.1.9 + LATEST.CSQTTR");
     write_file(&appdata.join("LATEST.Csqtt"), LATEST_CSQTT)?;
-    write_file(&appdata.join("LATEST.PaperFlux"), LATEST_PF)?;
 
     // icon + wintun
     let icon_dest = appdata.join("icon.ico");

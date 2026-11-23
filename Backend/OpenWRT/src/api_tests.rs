@@ -75,7 +75,6 @@ async fn panel_can_import_profile_and_validate_auto_api_without_network() {
     assert_eq!(config["protocol"], "CSQTT");
     assert_eq!(config["name"], "Example");
     assert_eq!(config["peer"], "192.0.2.2:46000");
-    fixture.json("POST", "/configs", json!({"protocol":"PaperFlux","peer":"192.0.2.2:46000"}), StatusCode::BAD_REQUEST).await;
     fixture.json("PATCH", "/settings", json!({"authMode":"autoApi"}), StatusCode::OK).await;
     fixture.json("POST", "/vpn/connect", json!({"configId":id}), StatusCode::BAD_REQUEST).await;
     fixture.json("POST", "/vk/token/submit", json!({"token":" "}), StatusCode::BAD_REQUEST).await;

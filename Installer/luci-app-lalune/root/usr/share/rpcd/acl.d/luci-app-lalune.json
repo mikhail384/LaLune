@@ -1,0 +1,15 @@
+{
+  "luci-app-lalune": {
+    "description": "Manage LaLune VPN through its local OpenWrt API",
+    "read": {
+      "ubus": {
+        "lalune": [ "status", "stats", "configs", "selected", "protocols", "logs" ]
+      }
+    },
+    "write": {
+      "ubus": {
+        "lalune": [ "connect", "disconnect", "reconnect", "select", "create", "delete" ]
+      }
+    }
+  }
+}

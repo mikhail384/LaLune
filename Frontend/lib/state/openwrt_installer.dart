@@ -11,6 +11,7 @@ import 'package:flutter/services.dart' show rootBundle;
 
 import '../api/api_client.dart';
 import '../utils/keep_awake.dart';
+import '../utils/log_exporter.dart';
 
 class OpenWrtInstallResult {
   final bool ok;
@@ -28,7 +29,7 @@ class OpenWrtInstaller {
   /// Каталог релиза; конкретный файл (`lalune-openwrt-backend[-<abi>]`)
   /// скрипт выбирает на роутере по DISTRIB_ARCH.
   static const backendBaseUrl =
-      'https://github.com/mikhail384/LaLune/releases/latest/download';
+      'https://github.com/Endlad2/LaLune/releases/latest/download';
 
   /// Dropbear отвергает слишком длинную exec-команду ("String too long"), а скрипт установки
   /// больше этого лимита. Поэтому сначала кладём его на роутер файлом, потом запускаем коротко.
@@ -185,21 +186,79 @@ class OpenWrtInstaller {
       SSHCipherType.aes128cbc,
     ],
   );
+  static Future<String> _collectRouterDiagnostics(SSHClient client) async {
+    final buf = StringBuffer();
+    buf.writeln('=== ROUTER DIAGNOSTICS ===');
+    final cmds = <(String, String)>[
+      ('uname & release', 'uname -a; cat /etc/openwrt_release 2>/dev/null'),
+      ('memory & disk', 'free -m 2>/dev/null || free 2>/dev/null; df -h 2>/dev/null'),
+      ('lalune files', r'ls -la "$HOME/la-lune" "$HOME/.la-lune" /usr/lib/lalune-run /etc/init.d/lalune 2>&1'),
+      ('processes', 'ps w 2>/dev/null || ps 2>/dev/null'),
+      ('listening sockets', 'netstat -tulnp 2>/dev/null || ss -tulnp 2>/dev/null || true'),
+      ('tun & network', 'ls -la /dev/net/tun 2>&1; ip -4 addr show 2>&1; ip -4 route show 2>&1; ip -4 rule show 2>&1'),
+      ('firewall & dns', 'iptables --version 2>&1 || true; nft --version 2>&1 || true; nft list tables 2>&1 | head -n 12; nft list table ip lalune_nat 2>&1 | head -n 20; nft list table ip lalune_mangle 2>&1 | head -n 30; cat /etc/resolv.conf 2>&1 || true'),
+      ('pkg log', 'tail -n 120 /tmp/lalune-pkg.log 2>/dev/null || true'),
+      ('manager log', r'tail -n 200 "$HOME/.la-lune/LaLuneManager.log" 2>/dev/null || true'),
+      ('logread', "logread 2>/dev/null | grep -iE 'lalune|csqtt|oom|kill|tun|dropbear|procd' | tail -n 80 || true"),
+      ('dmesg', "dmesg 2>/dev/null | grep -iE 'killed process|out of memory|oom|tun|segfault' | tail -n 30 || true"),
+    ];
+    for (final (label, cmd) in cmds) {
+      buf.writeln('--- [$label] ---');
+      try {
+        final out = await client.run(cmd).timeout(const Duration(seconds: 8));
+        final text = utf8.decode(out, allowMalformed: true).trim();
+        buf.writeln(text.isEmpty ? '(empty)' : text);
+      } catch (e) {
+        buf.writeln('(command failed: $e)');
+      }
+    }
+    return buf.toString();
+  }
 
+  
   static Future<OpenWrtInstallResult> install({
     required String host,
+    int port = 22,
     required String username,
     required String password,
     void Function(String message)? onProgress,
   }) async {
     SSHClient? client;
     var stage = 'подключение к SSH';
+    final trace = StringBuffer();
+    void logTrace(String msg) {
+      trace.writeln('[${DateTime.now().toIso8601String()}] $msg');
+    }
+    logTrace('=== LaLune OpenWRT Install ===');
+    logTrace('Host: $host, User: $username, Client OS: ${Platform.operatingSystem} (${Platform.operatingSystemVersion})');
+    logTrace('Backend URL: $backendBaseUrl');
+
+    Future<String> buildAndSaveLog({
+      String stdout = '',
+      String stderr = '',
+      String diag = '',
+    }) async {
+      final full = StringBuffer();
+      full.writeln(trace.toString().trimRight());
+      if (stdout.trim().isNotEmpty) {
+        full.writeln('\n=== SCRIPT STDOUT ===\n${stdout.trimRight()}');
+      }
+      if (stderr.trim().isNotEmpty) {
+        full.writeln('\n=== SCRIPT STDERR ===\n${stderr.trimRight()}');
+      }
+      if (diag.trim().isNotEmpty) {
+        full.writeln('\n$diag');
+      }
+      final resultStr = full.toString();
+      await OpenWrtDiagnosticStore.save(resultStr);
+      return resultStr;
+    }
     await setKeepScreenOn(true);
     try {
-      onProgress?.call('Подключение к SSH $host:22...');
+      onProgress?.call('Подключение к SSH $host:$port...');
       final socket = await SSHSocket.connect(
         host,
-        22,
+        port,
         timeout: const Duration(seconds: 5),
       );
       client = SSHClient(
@@ -211,6 +270,29 @@ class OpenWrtInstaller {
         authTimeout: const Duration(seconds: 12),
       );
       await client.authenticated;
+      logTrace('SSH connected & authenticated');
+
+      // Bundle the architecture-independent LuCI panel with the app so the
+      // router does not need direct GitHub access to install the web UI.
+      final luciPanel = await _loadAsset('assets/openwrt/luci-app-lalune.tar.gz');
+      if (luciPanel != null) {
+        stage = 'загрузка LuCI панели';
+        onProgress?.call('Передаю LuCI-панель на роутер...');
+        await client.run('rm -f /tmp/luci-app-lalune.tar.gz /tmp/luci-app-lalune.tar.gz.part');
+        void setPanelStage(String value) { stage = value; }
+        final panelError = await _pushFile(
+          client, luciPanel, '/tmp/luci-app-lalune.tar.gz',
+          'LuCI-панель', onProgress, setPanelStage,
+        );
+        if (panelError != null) {
+          final diag = await _collectRouterDiagnostics(client);
+          final fullLog = await buildAndSaveLog(diag: '$panelError\n$diag');
+          return OpenWrtInstallResult(ok: false, message: panelError, log: fullLog);
+        }
+        logTrace('LuCI panel archive uploaded (${luciPanel.length} bytes)');
+      } else {
+        logTrace('LuCI panel asset missing in this app build; router will try the release download');
+      }
 
       // Освобождаем ОЗУ до запуска скрипта: запущенный старый backend с ядром (до 30 воркеров)
       // съедает почти всю память, и OOM-killer убивает уже сам скрипт установки.
@@ -222,6 +304,7 @@ class OpenWrtInstaller {
             'killall csqtt-client csqttr-client >/dev/null 2>&1; sleep 2; '
             'echo 3 > /proc/sys/vm/drop_caches 2>/dev/null; true');
       } catch (_) {}
+      logTrace('Old backend stopped & caches dropped');
 
       stage = 'выполнение скрипта установки';
       onProgress?.call('Установка backend и зависимостей...');
@@ -231,6 +314,7 @@ class OpenWrtInstaller {
       var stderr = utf8.decode(result.stderr, allowMalformed: true);
       var combined =
           [stdout.trim(), stderr.trim()].where((s) => s.isNotEmpty).join('\n');
+      logTrace('Install script finished: exitCode=${result.exitCode}, stdoutLen=${stdout.length}, stderrLen=${stderr.length}');
 
       // Роутер не смог скачать backend (GitHub недоступен) или у него мало памяти: тогда
       // загружаем файлы с телефона (из приложения) по SSH.
@@ -239,11 +323,15 @@ class OpenWrtInstaller {
             .firstMatch(stderr)
             ?.group(1);
         final lean = stderr.contains('lean=1');
+        logTrace('Upload fallback requested: abi=$abi, lean=$lean');
         if (abi == null) {
+          logTrace('ABI detection failed');
+          final diag = await _collectRouterDiagnostics(client);
+          final fullLog = await buildAndSaveLog(stdout: stdout, stderr: stderr, diag: diag);
           return OpenWrtInstallResult(
             ok: false,
             message: 'Роутер не скачал backend, архитектура не определена',
-            log: combined,
+            log: fullLog, // ombined,
           );
         }
         stage = 'подготовка роутера к загрузке';
@@ -264,11 +352,14 @@ class OpenWrtInstaller {
               await _loadAsset('assets/openwrt/lalune-openwrt-backend-$abi-lean');
           final leanCore = await _loadAsset('assets/openwrt/csqttr-client-$abi');
           if (leanBackend == null || leanCore == null) {
+            logTrace('Lean assets missing for abi=$abi');
+            final diag = await _collectRouterDiagnostics(client);
+            final fullLog = await buildAndSaveLog(stdout: stdout, stderr: stderr, diag: diag);
             return OpenWrtInstallResult(
               ok: false,
               message: 'Роутеру ($abi) не хватает памяти для полной сборки, а лёгкой '
                   'сборки для него в приложении нет.',
-              log: combined,
+              log: fullLog,
             );
           }
           // Освобождаем флеш: старый полный backend занимает ~20 МБ из 23.
@@ -278,31 +369,43 @@ class OpenWrtInstaller {
           final coreError = await _pushFile(client, leanCore,
               '/usr/lib/lalune-run/csqttr-client', 'ядро', onProgress, setStage);
           if (coreError != null) {
+logTrace('Lean core upload failed: $coreError');
+            final diag = await _collectRouterDiagnostics(client);
+final fullLog = await buildAndSaveLog(stdout: stdout, stderr: stderr, diag: diag);
             return OpenWrtInstallResult(
-                ok: false, message: coreError, log: combined);
+                ok: false, message: coreError, log: fullLog);
           }
           final backendError = await _pushFile(
               client, leanBackend, target, 'backend', onProgress, setStage);
           if (backendError != null) {
+logTrace('Lean backend upload failed: $backendError');
+final diag = await _collectRouterDiagnostics(client);
+final fullLog = await buildAndSaveLog(stdout: stdout, stderr: stderr, diag: diag);
             return OpenWrtInstallResult(
-                ok: false, message: backendError, log: combined);
+                ok: false, message: backendError, log: fullLog);
           }
         } else {
           onProgress?.call('Роутер не достучался до GitHub. Загружаю backend с телефона...');
           final bytes = await _obtainBackend(abi, onProgress);
           if (bytes == null) {
+logTrace('Full backend asset missing for abi=$abi');
+final diag = await _collectRouterDiagnostics(client);
+final fullLog = await buildAndSaveLog(stdout: stdout, stderr: stderr, diag: diag);
             return OpenWrtInstallResult(
               ok: false,
               message:
                   'Роутер не может скачать backend, а телефон не смог получить файл для $abi. '
                   'Подключите телефон к сети, где доступен GitHub (VPN/другая сеть), и повторите.',
-              log: combined,
+              log: fullLog,
             );
           }
           final error = await _pushFile(
               client, bytes, target, 'backend', onProgress, setStage);
           if (error != null) {
-            return OpenWrtInstallResult(ok: false, message: error, log: combined);
+logTrace('Full backend upload failed: $error');
+final diag = await _collectRouterDiagnostics(client);
+final fullLog = await buildAndSaveLog(stdout: stdout, stderr: stderr, diag: diag);
+            return OpenWrtInstallResult(ok: false, message: error, log: fullLog);
           }
         }        stage = 'запуск backend после загрузки';
         onProgress?.call('Установка backend и зависимостей...');
@@ -312,6 +415,7 @@ class OpenWrtInstaller {
         combined = [combined, stdout.trim(), stderr.trim()]
             .where((s) => s.isNotEmpty)
             .join('\n');
+        logTrace('Re-run script finished: exitCode=${result.exitCode}, stdoutLen=${stdout.length}, stderrLen=${stderr.length}');
       }
 
       if (result.exitCode != 0 || !stdout.contains('LALUNE_INSTALL_OK')) {
@@ -327,10 +431,12 @@ class OpenWrtInstaller {
               .trim();
           if (k.isNotEmpty) extra += '\n$k';
         } catch (_) {}
+        final diag = await _collectRouterDiagnostics(client);
+        final fullLog = await buildAndSaveLog(stdout: stdout, stderr: stderr, diag: '$extra\n$diag');
         return OpenWrtInstallResult(
           ok: false,
           message: 'Установка по SSH завершилась с ошибкой',
-          log: [combined, extra].where((s) => s.isNotEmpty).join('\n'),
+          log:fullLog, //  [combined, extra].where((s) => s.isNotEmpty).join('\n'),
         );
       }
 
@@ -343,25 +449,42 @@ class OpenWrtInstaller {
         if (ping != null &&
             ping['ok'] == true &&
             (ping['platform'] ?? '').toString().toLowerCase() == 'openwrt') {
+        logTrace('Ping #$attempt OK: $ping');
+        final diag = await _collectRouterDiagnostics(client);
+        final fullLog = await buildAndSaveLog(stdout: stdout, stderr: stderr, diag: diag);
           return OpenWrtInstallResult(
             ok: true,
             message: 'Установлено. Теперь выполните соединение с роутером.',
-            log: combined,
+            log: fullLog,
           );
         }
         await Future<void>.delayed(const Duration(milliseconds: 500));
       }
-
+      logTrace('API did not respond on $host:1062 after ping attempts');
+      final diag = await _collectRouterDiagnostics(client);
+      final fullLog = await buildAndSaveLog(stdout: stdout, stderr: stderr, diag: diag);
+      
       return OpenWrtInstallResult(
         ok: false,
         message:
             'Файлы установлены, но API на $host:1062 не ответил. Проверьте лог backend.',
-        log: combined,
+        log: fullLog,
       );
-    } catch (e) {
+    } catch (e, st) {
+      logTrace('Exception at stage "$stage": $e\n$st');
+      var diag = '';
+      if (client != null) {
+        try {
+          diag = await _collectRouterDiagnostics(client);
+        } catch (diagErr) {
+          diag = 'diagnostics failed: $diagErr';
+        }
+      }
+      final fullLog = await buildAndSaveLog(diag: diag);
       return OpenWrtInstallResult(
         ok: false,
         message: 'Не удалось установить OpenWRT backend на шаге «$stage»: $e',
+        log: fullLog,
       );
     } finally {
       await setKeepScreenOn(false);
@@ -376,13 +499,30 @@ class OpenWrtInstaller {
   static const _installScript = r'''
 set -eu
 
+IS_KEENETIC=0
+if [ -d /opt/etc ] || [ -x /opt/bin/opkg ] || [ -d /etc/ndm ]; then
+  IS_KEENETIC=1
+fi
+
 BACKEND_BASE="__BACKEND_BASE__"
 BACKEND_URL=""
-INSTALL_DIR="$HOME/la-lune"
-DATA_DIR="$HOME/.la-lune"
-BACKEND_PATH="$INSTALL_DIR/lalune-openwrt-backend"
-PID_FILE="$DATA_DIR/backend.pid"
-LOG_FILE="$DATA_DIR/LaLuneManager.log"
+LUCI_APP_URL="$BACKEND_BASE/luci-app-lalune.tar.gz"
+LUCI_APP_ARCHIVE="/tmp/luci-app-lalune.tar.gz"
+
+if [ "$IS_KEENETIC" = "1" ]; then
+  export PATH="/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+  INSTALL_DIR="/opt/bin"
+  DATA_DIR="/opt/etc/lalune"
+  BACKEND_PATH="$INSTALL_DIR/lalune-backend"
+  PID_FILE="/opt/var/run/lalune.pid"
+  LOG_FILE="/opt/var/log/lalune.log"
+else
+  INSTALL_DIR="$HOME/la-lune"
+  DATA_DIR="$HOME/.la-lune"
+  BACKEND_PATH="$INSTALL_DIR/lalune-openwrt-backend"
+  PID_FILE="$DATA_DIR/backend.pid"
+  LOG_FILE="$DATA_DIR/LaLuneManager.log"
+fi
 
 log() { printf '[lalune-install] %s\n' "$*"; }
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -441,7 +581,15 @@ PKG_UPDATED=0
 # Ставит пакеты и сохраняет вывод менеджера в $PKG_LOG, чтобы при ошибке было видно причину
 # (нет интернета/DNS, пакета нет в фиде, конфликт ip-tiny и т.д.).
 install_packages() {
-  if have apk; then
+  if [ "$IS_KEENETIC" = "1" ]; then
+    if have /opt/bin/opkg; then
+      if [ "$PKG_UPDATED" = 0 ]; then /opt/bin/opkg update >"$PKG_LOG" 2>&1 || true; PKG_UPDATED=1; fi
+      /opt/bin/opkg install "$@" >>"$PKG_LOG" 2>&1
+    elif have opkg; then
+      if [ "$PKG_UPDATED" = 0 ]; then opkg update >"$PKG_LOG" 2>&1 || true; PKG_UPDATED=1; fi
+      opkg install "$@" >>"$PKG_LOG" 2>&1
+    fi
+  elif have apk; then
     if [ "$PKG_UPDATED" = 0 ]; then apk update >"$PKG_LOG" 2>&1 || true; PKG_UPDATED=1; fi
     apk add "$@" >>"$PKG_LOG" 2>&1
   elif have opkg; then
@@ -496,7 +644,7 @@ ensure_downloader || {
   exit 22
 }
 
-# Для iptables/fwmark policy routing нужен полный iproute2 на обеих архитектурах.
+# Для policy routing нужен полный iproute2 на обеих архитектурах.
 have_route_ip() {
   have ip && { ip -N -4 rule show >/dev/null 2>&1 || ip -4 rule show >/dev/null 2>&1; }
 }
@@ -526,26 +674,52 @@ if ! have_route_ip; then
   exit 24
 fi
 
-if ! have iptables && ! have iptables-nft; then
-  log 'iptables missing; trying to install iptables-nft'
-  install_packages iptables-nft || install_packages iptables || true
-fi
-if ! have iptables && ! have iptables-nft; then
-  if have nft; then
-    # OpenWrt 25.x на маленьких роутерах: только nftables. Бэкенд умеет работать без iptables.
-    log 'iptables not available; will use native nftables for marking/NAT'
-  else
-    echo 'Neither iptables-nft nor nft is available: VPN marking/NAT is impossible' >&2
+if [ "$IS_KEENETIC" = "1" ]; then
+  log 'KeeneticOS (Entware) environment detected'
+  install_packages ip-full iptables curl ca-certificates ca-bundle || true
+  log 'Keenetic Web UI will be available at http://<router-ip>:1062/panel'
+else
+  # firewall4 uses native nftables. Install the nft CLI and kernel NAT modules;
+  # iptables-nft alone does not guarantee that xt_MASQUERADE is available.
+  install_packages firewall4 nftables kmod-nf-nat kmod-nft-nat rpcd luci-light luci-base uhttpd uhttpd-mod-ubus uhttpd-mod-ucode uclient-fetch jsonfilter || {
+    echo 'Could not install nftables/NAT/LuCI dependencies; check package feeds and kernel-matched kmods' >&2
     pkg_error_tail
     exit 27
-  fi
-fi
+  }
+  /etc/init.d/firewall enable >/dev/null 2>&1 || true
+  /etc/init.d/firewall reload >/dev/null 2>&1 || /etc/init.d/firewall restart >/dev/null 2>&1 || true
+  have nft || { echo 'nftables package installed but nft command is missing' >&2; exit 27; }
+  nft list tables >/dev/null 2>&1 || { echo 'nft cannot access netfilter; check kmod-nft-core/kmod-nft-nat' >&2; exit 27; }
 
-# NAT для клиентов LAN: без xt_MASQUERADE iptables пишет "Extension MASQUERADE
-# revision 0 not supported". Модули ядра ставим по возможности, не фатально.
-for pkg in kmod-ipt-nat kmod-nft-nat kmod-nft-compat iptables-mod-nat-extra iptables-mod-extra kmod-ipt-extra; do
-  install_packages "$pkg" >/dev/null 2>&1 || true
-done
+  # Probe the running kernel's masquerade support before any VPN route is enabled.
+  nft delete table ip lalune_probe >/dev/null 2>&1 || true
+  if ! nft -f - <<'NFT'
+table ip lalune_probe {
+  chain postrouting {
+    type nat hook postrouting priority srcnat; policy accept;
+    oifname "lo" masquerade
+  }
+}
+NFT
+  then
+    nft delete table ip lalune_probe >/dev/null 2>&1 || true
+    echo 'Kernel nft masquerade is unavailable; install kmod-nf-nat and kmod-nft-nat matching the running kernel' >&2
+    exit 27
+  fi
+  nft delete table ip lalune_probe >/dev/null 2>&1 || true
+
+  # Install LuCI files as another authenticated frontend to the existing API.
+  if [ ! -s "$LUCI_APP_ARCHIVE" ]; then
+    download "$LUCI_APP_URL" "$LUCI_APP_ARCHIVE"
+  fi
+  tar -tzf "$LUCI_APP_ARCHIVE" >/dev/null 2>&1 || { echo 'luci-app-lalune archive is invalid' >&2; exit 27; }
+  tar -xzf "$LUCI_APP_ARCHIVE" -C /
+  chmod 755 /usr/libexec/rpcd/lalune
+  /etc/init.d/rpcd restart >/dev/null 2>&1 || true
+  /etc/init.d/uhttpd enable >/dev/null 2>&1 || true
+  /etc/init.d/uhttpd restart >/dev/null 2>&1 || true
+  log 'LuCI panel installed: Services -> LaLune VPN'
+fi
 
 if [ ! -c /dev/net/tun ]; then
   log '/dev/net/tun missing; trying to install/load kmod-tun'
@@ -625,8 +799,46 @@ if have killall; then
   sleep 1
 fi
 
-# Автозапуск после перезагрузки роутера: служба procd (respawn при падении).
-if [ -f /etc/rc.common ] && [ -d /etc/init.d ]; then
+if [ "$IS_KEENETIC" = "1" ]; then
+  log 'installing Entware init service /opt/etc/init.d/S99lalune'
+  mkdir -p /opt/etc/init.d /opt/var/run /opt/var/log /opt/var/lalune
+  cat > /opt/etc/init.d/S99lalune <<LALUNE_KEENETIC_INIT
+#!/bin/sh
+ENABLED=yes
+NAME=lalune-backend
+BIN_PATH="$BACKEND_PATH"
+PID_FILE="$PID_FILE"
+LOG_FILE="$LOG_FILE"
+RUN_DIR="/opt/var/lalune"
+export PATH="/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin:\$PATH"
+export HOME="/opt/root"
+
+start() {
+  [ "\$ENABLED" = "yes" ] || exit 0
+  if [ -f "\$PID_FILE" ] && kill -0 \$(cat "\$PID_FILE") 2>/dev/null; then return 0; fi
+  mkdir -p /opt/var/run /opt/var/log /opt/var/lalune /dev/net
+  [ -c /dev/net/tun ] || mknod /dev/net/tun c 10 200 2>/dev/null || true
+  cd "\$RUN_DIR"
+  nohup "\$BIN_PATH" >> "\$LOG_FILE" 2>&1 &
+  echo \$! > "\$PID_FILE"
+}
+stop() {
+  if [ -f "\$PID_FILE" ]; then
+    PID=\$(cat "\$PID_FILE" 2>/dev/null)
+    [ -n "\$PID" ] && kill "\$PID" 2>/dev/null || true
+    rm -f "\$PID_FILE"
+  fi
+}
+case "\$1" in
+  start) start ;;
+  stop) stop ;;
+  restart) stop; sleep 1; start ;;
+  *) "\$BIN_PATH" "\$@" ;;
+esac
+LALUNE_KEENETIC_INIT
+  chmod +x /opt/etc/init.d/S99lalune
+  USE_KEENETIC_START=1
+elif [ -f /etc/rc.common ] && [ -d /etc/init.d ]; then
   log 'installing autostart service /etc/init.d/lalune'
   cat > /etc/init.d/lalune <<LALUNE_INITD
 #!/bin/sh /etc/rc.common
@@ -653,7 +865,12 @@ fi
 
 log 'starting backend in background'
 cd "$INSTALL_DIR"
-if [ "${USE_PROCD_START:-0}" = 1 ]; then
+if [ "${USE_KEENETIC_START:-0}" = 1 ]; then
+  /opt/etc/init.d/S99lalune restart >/dev/null 2>&1 || /opt/etc/init.d/S99lalune start >/dev/null 2>&1 || true
+  sleep 2
+  pid="$(cat "$PID_FILE" 2>/dev/null || pidof lalune-backend 2>/dev/null | awk '{print $1}')"
+  [ -n "$pid" ] || pid=0
+elif [ "${USE_PROCD_START:-0}" = 1 ]; then
   /etc/init.d/lalune restart >/dev/null 2>&1 || /etc/init.d/lalune start >/dev/null 2>&1 || true
   sleep 2
   pid="$(pidof lalune-openwrt-backend 2>/dev/null | awk '{print $1}')"
@@ -671,6 +888,7 @@ if ! kill -0 "$pid" 2>/dev/null; then
   exit 23
 fi
 
+rm -f "$LUCI_APP_ARCHIVE"
 printf 'LALUNE_INSTALL_OK pid=%s\n' "$pid"
 ''';
 }

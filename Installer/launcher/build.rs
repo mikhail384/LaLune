@@ -22,14 +22,12 @@ const URL_CSQTTR_EXE: &str =
     "https://github.com/Endlad2/csqttr-core/releases/latest/download/client-windows-x86_64.exe";
 const URL_LATEST_CSQTTR: &str =
     "https://raw.githubusercontent.com/Endlad2/csqttr-core/refs/heads/main/LATEST";
-const URL_PAPERFLUX_EXE: &str =
-    "https://github.com/Endlad2/PaperFlux-core/releases/latest/download/paperflux-windows-amd64.exe";
 const URL_LATEST_CSQTT: &str =
     "https://raw.githubusercontent.com/Endlad2/csqtt-core/refs/heads/main/LATEST";
-const URL_LATEST_PF: &str =
-    "https://raw.githubusercontent.com/Endlad2/PaperFlux-core/refs/heads/main/LATEST";
 const URL_ICON: &str =
     "https://raw.githubusercontent.com/mikhail384/LaLune/refs/heads/main/icon.ico";
+const URL_TOTS_ZIP: &str =
+    "https://github.com/Endlad2/ToTS/releases/latest/download/tots-client-x86_64-pc-windows-msvc.zip";
 
 const WINTUN_SOURCES: &[&str] = &[
     "https://raw.githubusercontent.com/Endlad2/Endlad2.github.io/refs/heads/main/wintun.zip",
@@ -116,6 +114,21 @@ fn extract_wintun_dll(zip_bytes: Vec<u8>, out: &Path) -> Result<()> {
     Ok(())
 }
 
+fn extract_tots_client(zip_path: &Path, out: &Path) -> Result<()> {
+    let reader = fs::File::open(zip_path)?;
+    let mut archive = zip::ZipArchive::new(reader)?;
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i)?;
+        let name = entry.name().replace('\\', "/");
+        if name.ends_with("tots-client.exe") {
+            let mut dest = fs::File::create(out.join("tots-client.exe"))?;
+            std::io::copy(&mut entry, &mut dest)?;
+            return Ok(());
+        }
+    }
+    bail!("tots-client.exe не найден в ToTS archive")
+}
+
 fn main() -> Result<()> {
     let out = out_dir();
     fs::create_dir_all(&out).ok();
@@ -153,10 +166,11 @@ fn main() -> Result<()> {
     fs::write(out.join("LATEST.CSQTT-2.1.9"), CSQTT_219_VERSION)?;
     download(&client, URL_CSQTTR_EXE, &out.join("csqttr-windows-x86_64.exe"))?;
     download(&client, URL_LATEST_CSQTTR, &out.join("LATEST.CSQTTR"))?;
-    download(&client, URL_PAPERFLUX_EXE, &out.join("paperflux-windows-amd64.exe"))?;
     download(&client, URL_LATEST_CSQTT, &out.join("LATEST.Csqtt"))?;
-    download(&client, URL_LATEST_PF, &out.join("LATEST.PaperFlux"))?;
     download(&client, URL_ICON, &out.join("icon.ico"))?;
+    let tots_zip = out.join("tots-client-x86_64-pc-windows-msvc.zip");
+    download(&client, URL_TOTS_ZIP, &tots_zip)?;
+    extract_tots_client(&tots_zip, &out)?;
 
     let zip_bytes = load_wintun_zip(&client)?;
     extract_wintun_dll(zip_bytes, &out)?;

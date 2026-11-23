@@ -2,7 +2,7 @@
 name = "deploy-manager"
 version = "0.1.0"
 edition = "2021"
-description = "Cross-platform deployer for LaLune protocol cores (CSQTT/FreeTurn/OlcRTC/OpenFlux/ToTS) over SSH"
+description = "Cross-platform deployer for LaLune protocol cores (CSQTT/FreeTurn/OlcRTC/ToTS) over SSH"
 license = "PolyForm-Noncommercial-1.0.0"
 
 [[bin]]

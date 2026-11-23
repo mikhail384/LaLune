@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //
-// Конфиги: SQLite-хранилище + парсинг csqtt:// и paperflux:// ссылок.
+// Конфиги: SQLite-хранилище + парсинг поддерживаемых ссылок.
 //
 // Приоритет парсеров для csqtt://:
 //   1. csqtt-link (Rust, AES-256-GCM) — основной
@@ -34,30 +34,6 @@ pub struct ConfigItem {
     #[serde(default)]
     pub name: String,
     #[serde(default)]
-    pub profile_id: String,
-    #[serde(default)]
-    pub profile_token: String,
-    #[serde(default)]
-    pub client_ip: String,
-    #[serde(default)]
-    pub transport: String,
-    #[serde(default)]
-    pub url: String,
-    #[serde(default)]
-    pub urls: String,
-    #[serde(default)]
-    pub volga_url: String,
-    #[serde(default)]
-    pub relay_url: String,
-    #[serde(default)]
-    pub relay_token: String,
-    #[serde(default)]
-    pub max_token: String,
-    #[serde(default)]
-    pub max_uid: String,
-    #[serde(default)]
-    pub server: String,
-    #[serde(default)]
     pub raw_link: String,
 }
 
@@ -83,18 +59,6 @@ impl ConfigStore {
                 hashes TEXT NOT NULL DEFAULT '',
                 name TEXT DEFAULT '',
                 raw_link TEXT DEFAULT '',
-                profile_id TEXT DEFAULT '',
-                profile_token TEXT DEFAULT '',
-                client_ip TEXT DEFAULT '',
-                transport TEXT DEFAULT '',
-                url TEXT DEFAULT '',
-                urls TEXT DEFAULT '',
-                volga_url TEXT DEFAULT '',
-                relay_url TEXT DEFAULT '',
-                relay_token TEXT DEFAULT '',
-                max_token TEXT DEFAULT '',
-                max_uid TEXT DEFAULT '',
-                server TEXT DEFAULT '',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
@@ -106,27 +70,8 @@ impl ConfigStore {
             .query_map([], |r| r.get::<_, String>(1))?
             .filter_map(|r| r.ok())
             .collect();
-
-        let want = [
-            ("raw_link", "TEXT DEFAULT ''"),
-            ("profile_id", "TEXT DEFAULT ''"),
-            ("profile_token", "TEXT DEFAULT ''"),
-            ("client_ip", "TEXT DEFAULT ''"),
-            ("transport", "TEXT DEFAULT ''"),
-            ("url", "TEXT DEFAULT ''"),
-            ("urls", "TEXT DEFAULT ''"),
-            ("volga_url", "TEXT DEFAULT ''"),
-            ("relay_url", "TEXT DEFAULT ''"),
-            ("relay_token", "TEXT DEFAULT ''"),
-            ("max_token", "TEXT DEFAULT ''"),
-            ("max_uid", "TEXT DEFAULT ''"),
-            ("server", "TEXT DEFAULT ''"),
-        ];
-        for (col, def) in want {
-            if !existing.iter().any(|c| c == col) {
-                log::info!("[CONFIG] migrating: ADD COLUMN {}", col);
-                conn.execute(&format!("ALTER TABLE configs ADD COLUMN {col} {def}"), [])?;
-            }
+        if !existing.iter().any(|c| c == "raw_link") {
+            conn.execute("ALTER TABLE configs ADD COLUMN raw_link TEXT DEFAULT ''", [])?;
         }
 
         log::info!("[CONFIG] SQLite ready");
@@ -142,25 +87,11 @@ impl ConfigStore {
             hashes: r.get::<_, String>(4).unwrap_or_default(),
             name: r.get::<_, String>(5).unwrap_or_default(),
             raw_link: r.get::<_, String>(6).unwrap_or_default(),
-            profile_id: r.get::<_, String>(7).unwrap_or_default(),
-            profile_token: r.get::<_, String>(8).unwrap_or_default(),
-            client_ip: r.get::<_, String>(9).unwrap_or_default(),
-            transport: r.get::<_, String>(10).unwrap_or_default(),
-            url: r.get::<_, String>(11).unwrap_or_default(),
-            urls: r.get::<_, String>(12).unwrap_or_default(),
-            volga_url: r.get::<_, String>(13).unwrap_or_default(),
-            relay_url: r.get::<_, String>(14).unwrap_or_default(),
-            relay_token: r.get::<_, String>(15).unwrap_or_default(),
-            max_token: r.get::<_, String>(16).unwrap_or_default(),
-            max_uid: r.get::<_, String>(17).unwrap_or_default(),
-            server: r.get::<_, String>(18).unwrap_or_default(),
         })
     }
 
     const SELECT_COLS: &'static str =
-        "id, protocol, peer, password, hashes, name, raw_link, \
-         profile_id, profile_token, client_ip, transport, url, urls, volga_url, \
-         relay_url, relay_token, max_token, max_uid, server";
+        "id, protocol, peer, password, hashes, name, raw_link";
 
     pub fn list(&self) -> Result<Vec<ConfigItem>> {
         let conn = self.conn.lock();
@@ -192,17 +123,9 @@ impl ConfigStore {
         );
         let conn = self.conn.lock();
         conn.execute(
-            "INSERT INTO configs (
-                protocol, peer, password, hashes, name, raw_link,
-                profile_id, profile_token, client_ip, transport, url, urls, volga_url,
-                relay_url, relay_token, max_token, max_uid, server
-             ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            params![
-                c.protocol, c.peer, c.password, c.hashes, c.name, c.raw_link,
-                c.profile_id, c.profile_token, c.client_ip, c.transport,
-                c.url, c.urls, c.volga_url,
-                c.relay_url, c.relay_token, c.max_token, c.max_uid, c.server,
-            ],
+            "INSERT INTO configs (protocol, peer, password, hashes, name, raw_link)
+             VALUES (?,?,?,?,?,?)",
+            params![c.protocol, c.peer, c.password, c.hashes, c.name, c.raw_link],
         )?;
         let id = conn.last_insert_rowid();
         log::info!("[CONFIG] inserted id={}", id);
@@ -215,18 +138,9 @@ impl ConfigStore {
         let n = conn.execute(
             "UPDATE configs SET
                 protocol=?, peer=?, password=?, hashes=?, name=?, raw_link=?,
-                profile_id=?, profile_token=?, client_ip=?, transport=?,
-                url=?, urls=?, volga_url=?,
-                relay_url=?, relay_token=?, max_token=?, max_uid=?, server=?,
                 updated_at=CURRENT_TIMESTAMP
              WHERE id=?",
-            params![
-                c.protocol, c.peer, c.password, c.hashes, c.name, c.raw_link,
-                c.profile_id, c.profile_token, c.client_ip, c.transport,
-                c.url, c.urls, c.volga_url,
-                c.relay_url, c.relay_token, c.max_token, c.max_uid, c.server,
-                id,
-            ],
+            params![c.protocol, c.peer, c.password, c.hashes, c.name, c.raw_link, id],
         )?;
         if n == 0 { return Err(anyhow!("config {} not found", id)); }
         log::info!("[CONFIG] updated id={}", id);
@@ -288,14 +202,10 @@ pub fn parse_link_for_protocol(link: &str, protocol: &str) -> Result<ConfigItem>
             config.protocol = "CSQTTR".into();
         }
         Ok(config)
-    } else if lower.starts_with("paperflux://") {
-        parse_paperflux(link)
     } else if lower.starts_with("olcrtc://") {
         parse_generic(link, "OLCRTC", "olcrtc://")
     } else if lower.starts_with("tots://") {
-        parse_generic(link, "ToTS", "tots://")
-    } else if lower.starts_with("openflux://") {
-        parse_paperflux(&link.replacen("openflux://", "paperflux://", 1))
+        parse_tots(link)
     } else {
         log::warn!("[PARSE] unsupported scheme: {:?}", &link.chars().take(20).collect::<String>());
         Err(anyhow!("unsupported scheme"))
@@ -450,67 +360,14 @@ fn parse_csqtt_native(link: &str) -> Result<ConfigItem> {
     ))
 }
 
-fn parse_paperflux(link: &str) -> Result<ConfigItem> {
-    log::info!("[PARSE][PAPERFLUX] {}", short_link(link));
-    let rest = link.trim_start_matches("paperflux://");
-    let query = rest
-        .strip_prefix("config?")
-        .or_else(|| rest.strip_prefix("config&"))
-        .ok_or_else(|| anyhow!("paperflux:// missing 'config?' prefix"))?;
-
-    let mut id = String::new();
-    let mut name = String::new();
-    let mut server = String::new();
-    let mut ip = String::new();
-    let mut transport = String::new();
-    let mut doc = String::new();
-    let mut token = String::new();
-    let mut volga = String::new();
-    let mut urls = String::new();
-
-    for kv in query.split('&') {
-        let mut parts = kv.splitn(2, '=');
-        let k = parts.next().unwrap_or("");
-        let v = parts.next().unwrap_or("");
-        let v = url_decode(v);
-        match k {
-            "id" => id = v,
-            "name" => name = v,
-            "server" => server = v,
-            "ip" => ip = v,
-            "transport" => transport = v,
-            "doc" | "url" => doc = v,
-            "urls" => urls = v,
-            "token" => token = v,
-            "volga" | "volga_url" | "volga-url" => volga = v,
-            _ => {}
-        }
-    }
-
-    if transport.is_empty() {
-        return Err(anyhow!("paperflux:// missing 'transport'"));
-    }
-
-    let display_name = if name.is_empty() {
-        format!("PaperFlux ({})", transport)
-    } else {
-        name.clone()
-    };
-
+fn parse_tots(link: &str) -> Result<ConfigItem> {
+    let parsed = crate::protocol::parse_tots_uri(link)?;
     let mut cfg = ConfigItem::default();
-    cfg.protocol = "PaperFlux".into();
-    cfg.profile_id = id;
-    cfg.profile_token = token;
-    cfg.client_ip = ip;
-    cfg.transport = transport;
-    cfg.url = doc;
-    cfg.urls = urls;
-    cfg.volga_url = volga;
-    cfg.server = server.clone();
-    cfg.name = display_name;
-    cfg.peer = server;
-    cfg.raw_link = link.to_string();
-    log::info!("[PARSE][PAPERFLUX] OK: server={} transport={}", cfg.server, cfg.transport);
+    cfg.protocol = "ToTS".into();
+    cfg.peer = parsed.peer.clone();
+    cfg.password = parsed.password;
+    cfg.name = format!("ToTS · {}", parsed.peer);
+    cfg.raw_link = link.trim().to_string();
     Ok(cfg)
 }
 
@@ -547,40 +404,6 @@ fn parse_generic(link: &str, protocol: &str, prefix: &str) -> Result<ConfigItem>
     cfg.raw_link = link.to_string();
     Ok(cfg)
 }
-
-fn url_decode(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            let h = hex_val(bytes[i + 1]);
-            let l = hex_val(bytes[i + 2]);
-            if let (Some(h), Some(l)) = (h, l) {
-                out.push((h << 4) | l);
-                i += 3;
-                continue;
-            }
-        }
-        if bytes[i] == b'+' {
-            out.push(b' ');
-        } else {
-            out.push(bytes[i]);
-        }
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).to_string()
-}
-
-fn hex_val(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'a'..=b'f' => Some(b - b'a' + 10),
-        b'A'..=b'F' => Some(b - b'A' + 10),
-        _ => None,
-    }
-}
-
 
 #[cfg(test)]
 mod csqtt_219_plain_link_tests {

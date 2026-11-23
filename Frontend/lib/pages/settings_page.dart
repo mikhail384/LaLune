@@ -9,8 +9,12 @@
 //   - При загрузке: если у выбранного конфига хеши непустые — берём их,
 //     иначе берём settings.vkHashes.
 
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import '../widgets/glass_dialog.dart';
+import '../widgets/glass_select.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/config_item.dart';
@@ -29,22 +33,6 @@ import '../widgets/openwrt_install_modal.dart';
 import '../widgets/router_modal.dart';
 import '../widgets/toast.dart';
 
-const _pfTransports = <String>[
-  'yandex',
-  'vyandex',
-  'boards',
-  'mtslink',
-  'cupsonline',
-  'mailru',
-  'oneme',
-  'relayv2',
-  'direct',
-];
-
-const _pfDocTransports = <String>{
-  'yandex', 'vyandex', 'boards', 'mtslink', 'cupsonline', 'mailru', 'oneme',
-};
-
 class SettingsPage extends ConsumerStatefulWidget {
   const SettingsPage({super.key});
 
@@ -57,25 +45,32 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   ConfigItem? _selectedConfig;
   bool _loading = true;
   bool _busy = false;
+  bool _hashesDirty = false;
 
   final _peerCtl = TextEditingController();
   final _vkHashesCtl = TextEditingController();
+  final _externalHashesUrlCtl = TextEditingController();
   final _passwordCtl = TextEditingController();
   final _workersCtl = TextEditingController();
   final _autoApiWorkersCtl = TextEditingController();
   final _clientIdsCtl = TextEditingController();
   final _deviceIdCtl = TextEditingController();
 
-  // PaperFlux
-  final _pfUrlCtl = TextEditingController();
-  final _pfUrlsCtl = TextEditingController();
-  final _pfVolgaCtl = TextEditingController();
-  final _pfClientIpCtl = TextEditingController();
-  final _pfRelayUrlCtl = TextEditingController();
-  final _pfRelayTokenCtl = TextEditingController();
-  final _pfRelaySessionCtl = TextEditingController();
-  final _pfMaxTokenCtl = TextEditingController();
-  final _pfMaxUidCtl = TextEditingController();
+  // ToTS
+  final _totsWorkersCtl = TextEditingController();
+  final _totsMtuCtl = TextEditingController();
+  final _totsVkPercentCtl = TextEditingController();
+  final _totsJazzPercentCtl = TextEditingController();
+  final _totsYaDocsPercentCtl = TextEditingController();
+  final _totsMailDocsPercentCtl = TextEditingController();
+  final _totsCupsPercentCtl = TextEditingController();
+  final _totsVkLinksCtl = TextEditingController();
+  final _totsJazzRoomCtl = TextEditingController();
+  final _totsJazzDataCtl = TextEditingController();
+  final _totsYaDocsDataCtl = TextEditingController();
+  final _totsMailDocsDataCtl = TextEditingController();
+  final _totsCupsDataCtl = TextEditingController();
+
   final _ipRoutingIpsCtl = TextEditingController();
   final _windowsSplitDomainsCtl = TextEditingController();
   final _windowsSplitProgramsCtl = TextEditingController();
@@ -92,17 +87,13 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       defaultTargetPlatform == TargetPlatform.linux ||
       defaultTargetPlatform == TargetPlatform.macOS;
 
-  String _pfTransport = 'yandex';
-  String _pfMode = 'proxy';
-  String _pfTcpRecovery = 'auto';
-
   String _authMode = 'manual';
   bool _enableSmartTunnel = false;
   bool _showCoreLogs = false;
   bool _shareVpn = false;
   bool _desktopSocks5Mode = false;
 
-  bool get _isPaperFlux => _selectedConfig?.isPaperFlux == true;
+  bool get _isTots => _selectedConfig?.isTots == true;
   bool get _isCsqtt219 => _selectedConfig?.isCsqtt219 == true;
 
   @override
@@ -115,20 +106,25 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   void dispose() {
     _peerCtl.dispose();
     _vkHashesCtl.dispose();
+    _externalHashesUrlCtl.dispose();
     _passwordCtl.dispose();
     _workersCtl.dispose();
     _autoApiWorkersCtl.dispose();
     _clientIdsCtl.dispose();
     _deviceIdCtl.dispose();
-    _pfUrlCtl.dispose();
-    _pfUrlsCtl.dispose();
-    _pfVolgaCtl.dispose();
-    _pfClientIpCtl.dispose();
-    _pfRelayUrlCtl.dispose();
-    _pfRelayTokenCtl.dispose();
-    _pfRelaySessionCtl.dispose();
-    _pfMaxTokenCtl.dispose();
-    _pfMaxUidCtl.dispose();
+    _totsWorkersCtl.dispose();
+    _totsMtuCtl.dispose();
+    _totsVkPercentCtl.dispose();
+    _totsJazzPercentCtl.dispose();
+    _totsYaDocsPercentCtl.dispose();
+    _totsMailDocsPercentCtl.dispose();
+    _totsCupsPercentCtl.dispose();
+    _totsVkLinksCtl.dispose();
+    _totsJazzRoomCtl.dispose();
+    _totsJazzDataCtl.dispose();
+    _totsYaDocsDataCtl.dispose();
+    _totsMailDocsDataCtl.dispose();
+    _totsCupsDataCtl.dispose();
     _ipRoutingIpsCtl.dispose();
     _windowsSplitDomainsCtl.dispose();
     _windowsSplitProgramsCtl.dispose();
@@ -147,8 +143,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
     _s = s;
     _selectedConfig = cfg;
+    _hashesDirty = false;
 
-    if (cfg != null && !cfg.isPaperFlux) {
+    if (cfg != null) {
       _peerCtl.text = cfg.peer;
       _passwordCtl.text = cfg.password;
       // Хеши в настройках — самостоятельное значение. Не перезаписываем
@@ -165,6 +162,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     _clientIdsCtl.text = s.clientIds;
     _deviceIdCtl.text = s.deviceId;
     _authMode = s.authMode.isEmpty ? 'manual' : s.authMode;
+    _externalHashesUrlCtl.text = s.externalHashesUrl;
     _enableSmartTunnel = s.enableSmartTunnel;
     _showCoreLogs = s.showCoreLogs;
     _shareVpn = s.shareVpn;
@@ -178,22 +176,61 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     _androidAppRoutingMode = s.androidAppRoutingMode;
     _androidVpnApps = s.androidVpnApps.toSet();
 
-    _pfTransport = s.pfTransport.isEmpty ? 'yandex' : s.pfTransport;
-    _pfMode = s.pfMode.isEmpty ? 'proxy' : s.pfMode;
-    _pfTcpRecovery = s.pfTcpRecovery.isEmpty ? 'auto' : s.pfTcpRecovery;
-    _pfUrlCtl.text = (cfg?.url.isNotEmpty == true) ? cfg!.url : s.pfUrl;
-    _pfUrlsCtl.text = (cfg?.urls.isNotEmpty == true) ? cfg!.urls : s.pfUrls;
-    _pfVolgaCtl.text =
-        (cfg?.volgaUrl.isNotEmpty == true) ? cfg!.volgaUrl : s.pfVolgaUrl;
-    _pfClientIpCtl.text =
-        (cfg?.clientIp.isNotEmpty == true) ? cfg!.clientIp : s.pfClientIp;
-    _pfRelayUrlCtl.text = s.pfRelayUrl;
-    _pfRelayTokenCtl.text = s.pfRelayToken;
-    _pfRelaySessionCtl.text = s.pfRelaySession;
-    _pfMaxTokenCtl.text = s.pfMaxToken;
-    _pfMaxUidCtl.text = s.pfMaxUid;
+    _totsWorkersCtl.text = s.totsWorkers.toString();
+    _totsMtuCtl.text = s.totsMtu.toString();
+    _totsVkPercentCtl.text = s.totsVkPercent.toString();
+    _totsJazzPercentCtl.text = s.totsJazzPercent.toString();
+    _totsYaDocsPercentCtl.text = s.totsYaDocsPercent.toString();
+    _totsMailDocsPercentCtl.text = s.totsMailDocsPercent.toString();
+    _totsCupsPercentCtl.text = s.totsCupsPercent.toString();
+    _totsVkLinksCtl.text = s.totsVkCallLinks;
+    _totsJazzRoomCtl.text = s.totsJazzRoomName;
+    _totsJazzDataCtl.text = s.totsJazzData;
+    _totsYaDocsDataCtl.text = s.totsYaDocsData;
+    _totsMailDocsDataCtl.text = s.totsMailDocsData;
+    _totsCupsDataCtl.text = s.totsCupsData;
+    if (_isTots) {
+      // A provider cannot be visually enabled when there is no data to put into
+      // ToTS provider_data. This also makes the switch state match launch behavior.
+      _s = _s.copyWith(
+        totsVkEnabled: s.totsVkEnabled && _totsHasData('vk'),
+        totsJazzEnabled: s.totsJazzEnabled && _totsHasData('jazz'),
+        totsYaDocsEnabled: s.totsYaDocsEnabled && _totsHasData('ya-docs'),
+        totsMailDocsEnabled: s.totsMailDocsEnabled && _totsHasData('mail-docs'),
+        totsCupsEnabled: s.totsCupsEnabled && _totsHasData('cups'),
+      );
+    }
+
 
     setState(() => _loading = false);
+  }
+
+  void _syncSelectedConfigAfterFrame() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final cfg = ref.read(configsProvider).selected;
+      if (_selectedConfig?.id == cfg?.id) return;
+      final settings = ref.read(settingsProvider).data;
+      setState(() {
+        _selectedConfig = cfg;
+        // These fields describe the selected profile, not the profile that
+        // happened to be selected when SettingsPage was first constructed.
+        _peerCtl.text = cfg?.peer ?? settings.peer;
+        _passwordCtl.text = cfg?.password ?? settings.password;
+        // Preserve an unsaved manual hash edit; otherwise resolve the current
+        // profile's hashes with the global settings fallback.
+        if (!_hashesDirty) {
+          _vkHashesCtl.text = settings.vkHashes.isNotEmpty
+              ? settings.vkHashes
+              : (cfg?.hashes ?? '');
+        }
+      });
+    });
+  }
+
+  void _markHashesDirty() {
+    _hashesDirty = true;
+    _markDirty();
   }
 
   void _markDirty() {
@@ -241,6 +278,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       clientIds: _clientIdsCtl.text.trim(),
       deviceId: _deviceIdCtl.text.trim(),
       authMode: _authMode,
+      externalHashesUrl: _externalHashesUrlCtl.text.trim(),
       enableSmartTunnel: _enableSmartTunnel,
       showCoreLogs: _showCoreLogs,
       shareVpn: _shareVpn,
@@ -253,18 +291,14 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       windowsSplitPrograms: _windowsSplitProgramsCtl.text.trim(),
       androidAppRoutingMode: _androidAppRoutingMode,
       androidVpnApps: _androidVpnApps.toList()..sort(),
-      pfTransport: _pfTransport,
-      pfUrl: _pfUrlCtl.text.trim(),
-      pfUrls: _pfUrlsCtl.text.trim(),
-      pfVolgaUrl: _pfVolgaCtl.text.trim(),
-      pfMode: _pfMode,
-      pfTcpRecovery: _pfTcpRecovery,
-      pfClientIp: _pfClientIpCtl.text.trim(),
-      pfRelayUrl: _pfRelayUrlCtl.text.trim(),
-      pfRelayToken: _pfRelayTokenCtl.text.trim(),
-      pfRelaySession: _pfRelaySessionCtl.text.trim(),
-      pfMaxToken: _pfMaxTokenCtl.text.trim(),
-      pfMaxUid: _pfMaxUidCtl.text.trim(),
+      totsWorkers: (int.tryParse(_totsWorkersCtl.text.trim()) ?? 1).clamp(1, 256).toInt(),
+      totsMtu: (int.tryParse(_totsMtuCtl.text.trim()) ?? 1200).clamp(576, 1400).toInt(),
+      totsVkCallLinks: _totsVkLinksCtl.text.trim(),
+      totsJazzRoomName: _totsJazzRoomCtl.text.trim(),
+      totsJazzData: _totsJazzDataCtl.text.trim(),
+      totsYaDocsData: _totsYaDocsDataCtl.text.trim(),
+      totsMailDocsData: _totsMailDocsDataCtl.text.trim(),
+      totsCupsData: _totsCupsDataCtl.text.trim(),
     );
 
     setState(() => _busy = true);
@@ -278,6 +312,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     setState(() {
       _busy = false;
       _s = s;
+      if (ok) _hashesDirty = false;
     });
     final saveError = ref.read(settingsProvider).error;
     Toast.show(
@@ -371,6 +406,14 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
+    // SettingsPage is kept alive inside the desktop/mobile PageView. Listen to
+    // profile changes so switching configs on the Connection page immediately
+    // updates protocol-specific settings without restarting the app.
+    ref.listen<ConfigsState>(configsProvider, (previous, next) {
+      if (previous?.selectedId != next.selectedId) {
+        _syncSelectedConfigAfterFrame();
+      }
+    });
     if (_loading) return const Center(child: CircularProgressIndicator());
 
     final vk = ref.watch(vkProvider);
@@ -380,7 +423,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       (_) => _sectionTitle('Основные настройки'),
       (_) => GlassCard(child: _buildMainBlock()),
       (_) => const SizedBox(height: 18),
-      if (!_isPaperFlux) ...[
+      if (!_isTots) ...[
         (_) => _sectionTitle('Авторизация'),
         (_) => _buildAuthBlock(vk),
         (_) => const SizedBox(height: 18),
@@ -388,10 +431,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       (_) => _sectionTitle('Маршрутизация VPN'),
       (_) => GlassCard(child: _buildRoutingBlock()),
       (_) => const SizedBox(height: 18),
-      (_) => _sectionTitle(
-          _isPaperFlux ? 'Настройки PaperFlux' : 'Продвинутые настройки'),
-      (_) => _isPaperFlux
-          ? GlassCard(child: _buildPaperFluxBlock())
+      (_) => _sectionTitle(_isTots ? 'Настройки ToTS' : 'Продвинутые настройки'),
+      (_) => _isTots
+          ? GlassCard(child: _buildTotsBlock(vk))
           : GlassCard(child: _buildCsqttAdvancedBlock()),
       (_) => const SizedBox(height: 18),
       (_) => _sectionTitle('Экспериментальное'),
@@ -456,7 +498,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             ),
           ),
 
-        if (!_isPaperFlux) ...[
+        if (!_isTots) ...[
           InputRow(label: 'Peer', controller: _peerCtl, readOnly: true),
           InputRow(
             label: 'Password',
@@ -466,15 +508,18 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           ),
         ],
 
-        Padding(
+        if (!_isTots) Padding(
           padding: const EdgeInsets.symmetric(vertical: 5),
           child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               SizedBox(
                 width: 130,
-                child: Text('Workers',
+                child:Padding(
+                              padding: const EdgeInsets.only(top: 12),
+                              child:  Text('Workers',
                     style:
-                        TextStyle(color: Colors.white.withOpacity(0.7))),
+                        TextStyle(color: Colors.white.withOpacity(0.7)))),
               ),
               Expanded(
                 child: Builder(builder: (context) {
@@ -488,7 +533,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       helperText: 'Рекомендуется $kDefaultWorkers · допустимо от '
                           '$kMinWorkers до $kMaxWorkers. После сохранения '
                           'переподключитесь; фактическое число согласуется с сервером.',
-                      helperMaxLines: 3,
+                      helperMaxLines: 8,
                       helperStyle: const TextStyle(fontSize: 10.5),
                       suffixIcon: value == kDefaultWorkers
                           ? null
@@ -543,42 +588,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       await _loadInstalledApps();
       if (_installedApps.isEmpty || !mounted) return;
     }
-    final selected = Set<String>.from(_androidVpnApps);
     final result = await showDialog<Set<String>>(
       context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: const Text('Приложения для маршрутизации'),
-          content: SizedBox(
-            width: 460,
-            height: 480,
-            child: ListView.builder(
-              itemCount: _installedApps.length,
-              itemBuilder: (context, index) {
-                final app = _installedApps[index];
-                final packageName = app['packageName'].toString();
-                final label = (app['label'] ?? packageName).toString();
-                return CheckboxListTile(
-                  value: selected.contains(packageName),
-                  title: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
-                  subtitle: Text(packageName, maxLines: 1, overflow: TextOverflow.ellipsis),
-                  dense: true,
-                  onChanged: (checked) => setDialogState(() {
-                    if (checked == true) {
-                      selected.add(packageName);
-                    } else {
-                      selected.remove(packageName);
-                    }
-                  }),
-                );
-              },
-            ),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Отмена')),
-            ElevatedButton(onPressed: () => Navigator.pop(dialogContext, selected), child: const Text('Применить')),
-          ],
-        ),
+      barrierColor: Colors.black.withOpacity(0.45),
+      builder: (_) => _AndroidAppsPickerDialog(
+        installedApps: _installedApps,
+        initialSelected: _androidVpnApps,
       ),
     );
     if (result != null && mounted) {
@@ -644,7 +659,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         Text('IP-адреса', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600,
             color: Colors.white.withOpacity(0.9))),
         const SizedBox(height: 5),
-        Text('Настройка общая для CSQTT и PaperFlux. Можно указывать IPv4, IPv6 и CIDR — по одному на строку.',
+        Text('Настройка общая для поддерживаемых протоколов. Можно указывать IPv4, IPv6 и CIDR — по одному на строку.',
             style: TextStyle(fontSize: 11.5, height: 1.45, color: Colors.white.withOpacity(0.55))),
         const SizedBox(height: 10),
         _rowDropdown(
@@ -712,6 +727,287 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     );
   }
 
+
+  Map<String, dynamic> _decodedTotsProviderData() {
+    final raw = _selectedConfig?.rawLink.trim() ?? '';
+    if (!raw.toLowerCase().startsWith('tots://')) return const {};
+    try {
+      var payload = raw.substring(raw.indexOf('://') + 3).trim();
+      payload = payload.replaceAll('-', '+').replaceAll('_', '/');
+      while (payload.length % 4 != 0) { payload += '='; }
+      final decoded = jsonDecode(utf8.decode(base64Decode(payload)));
+      if (decoded is Map && decoded['provider_data'] is Map) {
+        final data = Map<String, dynamic>.from(decoded['provider_data'] as Map);
+        const providerKeys = {'vk', 'jazz', 'ya-docs', 'mail-docs', 'cups'};
+        if (data.keys.any(providerKeys.contains)) return data;
+        final primary = (decoded['provider'] ?? 'vk').toString();
+        return <String, dynamic>{primary: data};
+      }
+    } catch (_) {}
+    return const {};
+  }
+
+  bool _totsHasData(String provider) {
+    if (_decodedTotsProviderData().containsKey(provider)) return true;
+    switch (provider) {
+      case 'vk': return _s.totsVkAuthMode == 'autoApi' || _totsVkLinksCtl.text.trim().isNotEmpty;
+      case 'jazz': return _totsJazzDataCtl.text.trim().isNotEmpty;
+      case 'ya-docs': return _totsYaDocsDataCtl.text.trim().isNotEmpty;
+      case 'mail-docs': return _totsMailDocsDataCtl.text.trim().isNotEmpty;
+      case 'cups': return _totsCupsDataCtl.text.trim().isNotEmpty;
+    }
+    return false;
+  }
+
+  void _missingTotsProviderData(String provider) {
+    Toast.show(context, 'Для $provider не указаны provider data', isError: true);
+  }
+
+  void _setTotsProviderEnabled(String provider, bool value) {
+    if (value && !_totsHasData(provider)) {
+      _missingTotsProviderData(provider);
+      return;
+    }
+    setState(() {
+      switch (provider) {
+        case 'vk': _s = _s.copyWith(totsVkEnabled: value); break;
+        case 'jazz': _s = _s.copyWith(totsJazzEnabled: value); break;
+        case 'ya-docs': _s = _s.copyWith(totsYaDocsEnabled: value); break;
+        case 'mail-docs': _s = _s.copyWith(totsMailDocsEnabled: value); break;
+        case 'cups': _s = _s.copyWith(totsCupsEnabled: value); break;
+      }
+    });
+    _markDirty();
+  }
+
+  Widget _totsPercentRow(
+    String provider,
+    int value,
+    bool enabled,
+    TextEditingController controller,
+    ValueChanged<int> onChanged,
+  ) {
+    final available = _totsHasData(provider);
+    final active = available && enabled;
+    void apply(int next) {
+      final v = next.clamp(0, 100).toInt();
+      controller.text = v.toString();
+      onChanged(v);
+      _markDirty();
+    }
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: active ? null : () => _missingTotsProviderData(provider),
+              child: AbsorbPointer(
+                absorbing: !active,
+                child: Slider(
+                  min: 0,
+                  max: 100,
+                  divisions: 100,
+                  value: value.clamp(0, 100).toDouble(),
+                  onChanged: (v) => apply(v.round()),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 84,
+            child: TextField(
+              controller: controller,
+              readOnly: !active,
+              onTap: active ? null : () => _missingTotsProviderData(provider),
+              keyboardType: TextInputType.number,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 14),
+              decoration: const InputDecoration(
+                isDense: true,
+                suffixText: '%',
+                contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+              ),
+              onChanged: (raw) {
+                final parsed = int.tryParse(raw);
+                if (parsed != null) onChanged(parsed.clamp(0, 100).toInt());
+                _markDirty();
+              },
+              onEditingComplete: () {
+                apply((int.tryParse(controller.text) ?? value).clamp(0, 100).toInt());
+                FocusScope.of(context).unfocus();
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _totsProviderFrame({
+    required String provider,
+    required String title,
+    required bool enabled,
+    required int percent,
+    required TextEditingController percentController,
+    required ValueChanged<int> onPercent,
+    Widget? info,
+    required List<Widget> children,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.fromLTRB(12, 9, 12, 12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withOpacity(0.14)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
+              if (info != null) ...[const SizedBox(width: 5), info],
+              const Spacer(),
+              Switch(
+                value: enabled,
+                onChanged: (v) => _setTotsProviderEnabled(provider, v),
+                activeColor: const Color(0xFFE5484D),
+              ),
+            ],
+          ),
+          _totsPercentRow(provider, percent, enabled, percentController, onPercent),
+          const SizedBox(height: 6),
+          ...children,
+        ],
+      ),
+    );
+  }
+
+  Widget _totsJsonField(String label, TextEditingController controller, String hint) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: TextField(
+        controller: controller,
+        minLines: 2,
+        maxLines: 5,
+        style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+        decoration: InputDecoration(labelText: label, hintText: hint, border: const OutlineInputBorder()),
+        onChanged: (_) { setState(() {}); _markDirty(); },
+      ),
+    );
+  }
+
+  Widget _buildTotsBlock(VkTokenState vk) {
+    final jazzInfo = IconButton(
+      tooltip: 'Jazz',
+      visualDensity: VisualDensity.compact,
+      constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
+      onPressed: () => Toast.show(
+        context,
+        'Jazz требует отдельную заранее созданную сервером комнату на каждый ToTS Worker, даже как fallback. Для N Worker создай новый tots:// конфиг через API с provider_data.jazz.worker_count=N. Нельзя просто менять worker_count в готовом конфиге.',
+        duration: const Duration(seconds: 5),
+      ),
+      icon: const Icon(Icons.error_outline, size: 19, color: Color(0xFF63E68B)),
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        InputRow(label: 'Workers', controller: _totsWorkersCtl, onChanged: (_) => _markDirty()),
+        InputRow(label: 'MTU', controller: _totsMtuCtl, onChanged: (_) => _markDirty()),
+        _toggleRow('Relay only', _s.totsRelayOnly, (v) {
+          setState(() => _s = _s.copyWith(totsRelayOnly: v)); _markDirty();
+        }),
+        const SizedBox(height: 10),
+        Text('Проценты автоматически нормализуются до 100 при запуске. Провайдер без provider data нельзя включить или изменить.',
+            style: TextStyle(fontSize: 11.5, height: 1.4, color: Colors.white.withOpacity(0.55))),
+        const SizedBox(height: 10),
+        _totsProviderFrame(
+          provider: 'vk', title: 'VK', enabled: _s.totsVkEnabled,
+          percent: _s.totsVkPercent, percentController: _totsVkPercentCtl,
+          onPercent: (v) => setState(() => _s = _s.copyWith(totsVkPercent: v)),
+          children: [
+            _rowDropdown('VK режим', _s.totsVkAuthMode == 'autoApi' ? 'АвтоAPI' : 'Ручные', const ['Ручные', 'АвтоAPI'], (v) {
+              if (v == 'АвтоAPI' && !vk.hasToken) {
+                Toast.show(context, 'Для АвтоAPI требуется авторизация ВК', isError: true);
+                return;
+              }
+              setState(() => _s = _s.copyWith(totsVkAuthMode: v == 'АвтоAPI' ? 'autoApi' : 'manual'));
+              _markDirty();
+            }),
+            if (_s.totsVkAuthMode != 'autoApi') ...[
+              const SizedBox(height: 8),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text('Хеши (через запятую или +)',
+                    style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(0.65))),
+              ),
+              TextField(
+                controller: _totsVkLinksCtl,
+                minLines: 2,
+                maxLines: 4,
+                style: const TextStyle(fontSize: 13),
+                decoration: const InputDecoration(hintText: 'hash1,hash2,hash3'),
+                onChanged: (_) { setState(() {}); _markDirty(); },
+              ),
+            ],
+            const SizedBox(height: 8),
+            if (!vk.hasToken)
+              _buildLoginButton(vk)
+            else
+              _buildTokenActiveBadge(),
+            if (_s.totsVkAuthMode == 'autoApi') ...[
+              const SizedBox(height: 8),
+              InputRow(
+                label: 'Воркеров на хеш',
+                controller: _autoApiWorkersCtl,
+                onChanged: (_) => _markDirty(),
+              ),
+            ],
+          ],
+        ),
+        _totsProviderFrame(
+          provider: 'jazz', title: 'Jazz', info: jazzInfo, enabled: _s.totsJazzEnabled,
+          percent: _s.totsJazzPercent, percentController: _totsJazzPercentCtl,
+          onPercent: (v) => setState(() => _s = _s.copyWith(totsJazzPercent: v)),
+          children: [
+            _toggleRow('Random name', _s.totsJazzRandomName, (v) {
+              setState(() => _s = _s.copyWith(totsJazzRandomName: v)); _markDirty();
+            }),
+            InputRow(label: 'Название комнаты', controller: _totsJazzRoomCtl,
+              readOnly: _s.totsJazzRandomName, onChanged: (_) => _markDirty()),
+            _totsJsonField('Jazz provider data', _totsJazzDataCtl,
+                '{"join_link":"https://salutejazz.ru/...","connector_url":"wss://..."}'),
+          ],
+        ),
+        _totsProviderFrame(
+          provider: 'ya-docs', title: 'Ya Docs', enabled: _s.totsYaDocsEnabled,
+          percent: _s.totsYaDocsPercent, percentController: _totsYaDocsPercentCtl,
+          onPercent: (v) => setState(() => _s = _s.copyWith(totsYaDocsPercent: v)),
+          children: [_totsJsonField('Ya Docs provider data', _totsYaDocsDataCtl,
+              '{"url":"https://...","cookies":{"name":"value"}}')],
+        ),
+        _totsProviderFrame(
+          provider: 'mail-docs', title: 'Mail Docs', enabled: _s.totsMailDocsEnabled,
+          percent: _s.totsMailDocsPercent, percentController: _totsMailDocsPercentCtl,
+          onPercent: (v) => setState(() => _s = _s.copyWith(totsMailDocsPercent: v)),
+          children: [_totsJsonField('Mail Docs provider data', _totsMailDocsDataCtl,
+              '{"url":"https://...","cookies":{"name":"value"}}')],
+        ),
+        _totsProviderFrame(
+          provider: 'cups', title: 'Cups', enabled: _s.totsCupsEnabled,
+          percent: _s.totsCupsPercent, percentController: _totsCupsPercentCtl,
+          onPercent: (v) => setState(() => _s = _s.copyWith(totsCupsPercent: v)),
+          children: [_totsJsonField('Cups provider data', _totsCupsDataCtl,
+              '{"room_id":"..."}')],
+        ),
+      ],
+    );
+  }
+
   Widget _buildCsqttAdvancedBlock() {
     return Column(
       children: [
@@ -760,106 +1056,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     );
   }
 
-  Widget _buildPaperFluxBlock() {
-    final docTransport = _pfDocTransports.contains(_pfTransport);
-    final relayTransport = _pfTransport == 'relayv2';
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 5),
-          child: Row(
-            children: [
-              SizedBox(
-                width: 150,
-                child: Text('Транспорт',
-                    style: TextStyle(color: Colors.white.withOpacity(0.7))),
-              ),
-              Expanded(
-                child: DropdownButtonFormField<String>(
-                  value: _pfTransports.contains(_pfTransport)
-                      ? _pfTransport
-                      : _pfTransports.first,
-                  dropdownColor: const Color(0xFF0F1540),
-                  items: _pfTransports
-                      .map((v) => DropdownMenuItem(value: v, child: Text(v)))
-                      .toList(),
-                  onChanged: (v) {
-                    if (v == null) return;
-                    setState(() => _pfTransport = v);
-                    _markDirty();
-                  },
-                ),
-              ),
-            ],
-          ),
-        ),
-
-        InputRow(
-            label: 'Client IP',
-            controller: _pfClientIpCtl,
-            onChanged: (_) => _markDirty()),
-        _rowDropdown('Mode', _pfMode, const ['proxy', 'raw'], (v) {
-          setState(() => _pfMode = v);
-          _markDirty();
-        }),
-        _rowDropdown('TCP Recovery', _pfTcpRecovery,
-            const ['auto', 'classic', 'rack'], (v) {
-          setState(() => _pfTcpRecovery = v);
-          _markDirty();
-        }),
-
-        if (docTransport) ...[
-          const SizedBox(height: 8),
-          const _SubHeader('Документы'),
-          InputRow(
-              label: 'URL',
-              controller: _pfUrlCtl,
-              onChanged: (_) => _markDirty()),
-          InputRow(
-              label: 'URLs',
-              controller: _pfUrlsCtl,
-              onChanged: (_) => _markDirty()),
-          InputRow(
-              label: 'Volga URL',
-              controller: _pfVolgaCtl,
-              onChanged: (_) => _markDirty()),
-        ],
-
-        if (relayTransport) ...[
-          const SizedBox(height: 8),
-          const _SubHeader('Relay V2'),
-          InputRow(
-              label: 'Relay URL',
-              controller: _pfRelayUrlCtl,
-              onChanged: (_) => _markDirty()),
-          InputRow(
-              label: 'Relay Token',
-              controller: _pfRelayTokenCtl,
-              onChanged: (_) => _markDirty()),
-          InputRow(
-              label: 'Relay Session',
-              controller: _pfRelaySessionCtl,
-              onChanged: (_) => _markDirty()),
-        ],
-
-        if (_pfTransport == 'oneme' || _pfTransport == 'mailru' || _pfTransport == 'boards') ...[
-          const SizedBox(height: 8),
-          const _SubHeader('MAX / OneMe'),
-          InputRow(
-              label: 'MAX Token',
-              controller: _pfMaxTokenCtl,
-              onChanged: (_) => _markDirty()),
-          InputRow(
-              label: 'MAX Uid',
-              controller: _pfMaxUidCtl,
-              onChanged: (_) => _markDirty()),
-        ],
-      ],
-    );
-  }
-
   Widget _buildAuthBlock(VkTokenState vk) {
     final hasToken = vk.hasToken;
     return Column(
@@ -884,18 +1080,23 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               _authOption('autoVk', 'Авто ВК',
                   'Ядро само авторизуется через VK',
                   enabled: hasToken, vk: vk),
-              const SizedBox(height: 12),
-              if (!hasToken)
-                _buildLoginButton(vk)
-              else
-                _buildTokenActiveBadge(),
-              if (vk.fetching) ...[
+              _authOption('externalHashes', 'Внешние хеши',
+                  'Скачивать hashes.txt из публичного ZIP на Яндекс Диске при каждом запуске VPN',
+                  enabled: true, vk: vk),
+              if (_authMode == 'autoApi' || _authMode == 'autoVk') ...[
+                const SizedBox(height: 12),
+                if (!hasToken)
+                  _buildLoginButton(vk)
+                else
+                  _buildTokenActiveBadge(),
+              ],
+              if (vk.fetching && (_authMode == 'autoApi' || _authMode == 'autoVk')) ...[
                 const SizedBox(height: 10),
                 LinearProgressIndicator(
                   value: vk.progress / 100.0,
                   backgroundColor: Colors.white.withOpacity(0.1),
                   valueColor:
-                      const AlwaysStoppedAnimation(Color(0xFFF7E84E)),
+                      const AlwaysStoppedAnimation(Color(0xFFE5484D)),
                   minHeight: 4,
                 ),
                 const SizedBox(height: 6),
@@ -919,6 +1120,30 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   style: const TextStyle(fontSize: 13),
                   decoration:
                       const InputDecoration(hintText: 'hash1,hash2,hash3'),
+                  onChanged: (_) => _markHashesDirty(),
+                ),
+              ],
+              if (_authMode == 'externalHashes') ...[
+                const SizedBox(height: 14),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Text('Публичный ZIP на Яндекс Диске',
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.white.withOpacity(0.65))),
+                ),
+                TextField(
+                  controller: _externalHashesUrlCtl,
+                  keyboardType: TextInputType.url,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  style: const TextStyle(fontSize: 13),
+                  decoration: const InputDecoration(
+                    hintText: 'https://disk.yandex.ru/d/AbCdEf123456',
+                    helperText: 'В ZIP должен находиться hashes.txt. Архив скачивается заново перед каждым подключением.',
+                    helperMaxLines: 3,
+                    helperStyle: TextStyle(fontSize: 10.5),
+                  ),
                   onChanged: (_) => _markDirty(),
                 ),
               ],
@@ -973,7 +1198,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (_isDesktop && !_isPaperFlux) ...[
+        if (_isDesktop) ...[
           _toggleRow('Режим SOCKS5 вместо TUN', _desktopSocks5Mode, (v) {
             setState(() => _desktopSocks5Mode = v);
             _markDirty();
@@ -998,7 +1223,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           padding: const EdgeInsets.only(left: 4, right: 4, bottom: 6),
           child: Text(
             _isDesktop
-                ? (!_isPaperFlux && _desktopSocks5Mode
+                ? (_desktopSocks5Mode
                     ? 'В режиме SOCKS5: выключено — слушает только 127.0.0.1; включено — 0.0.0.0 для устройств в LAN. Порт виден в /vpn/status как socks5Port.'
                     : 'На ПК «Раздавать VPN» используется вместе с режимом SOCKS5 для CSQTT/CSQTTR.')
                 : 'Открывает SOCKS5-прокси на случайном свободном порту (не 1080). Порт виден в /vpn/status как socks5Port.',
@@ -1032,9 +1257,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           child: ElevatedButton.icon(
             onPressed: _onOpenWrtTap,
             icon: const Icon(Icons.router, size: 16),
-            label: const Text('Подключить OpenWRT'),
+            label: const Text('Подключить роутер (OpenWRT / Keenetic)'),
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF4A6CF7),
+              backgroundColor: const Color(0xFF2FBF71),
               foregroundColor: Colors.white,
               padding: const EdgeInsets.symmetric(vertical: 12),
               shape: RoundedRectangleBorder(
@@ -1095,12 +1320,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(
                   color: active
-                      ? const Color(0xFF4A6CF7).withOpacity(0.14)
+                      ? const Color(0xFF2FBF71).withOpacity(0.14)
                       : Colors.white.withOpacity(0.03),
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(
                     color: active
-                        ? const Color(0xFF4A6CF7).withOpacity(0.5)
+                        ? const Color(0xFF2FBF71).withOpacity(0.5)
                         : Colors.white.withOpacity(0.08),
                   ),
                 ),
@@ -1160,12 +1385,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             decoration: BoxDecoration(
               color: selected
-                  ? const Color(0xFF4A6CF7).withOpacity(0.18)
+                  ? const Color(0xFF2FBF71).withOpacity(0.18)
                   : Colors.white.withOpacity(0.02),
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
                 color: selected
-                    ? const Color(0xFF4A6CF7).withOpacity(0.55)
+                    ? const Color(0xFF2FBF71).withOpacity(0.55)
                     : Colors.white.withOpacity(0.08),
               ),
             ),
@@ -1177,7 +1402,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       : Icons.radio_button_off,
                   size: 18,
                   color: selected
-                      ? const Color(0xFF4A6CF7)
+                      ? const Color(0xFF2FBF71)
                       : Colors.white.withOpacity(0.4),
                 ),
                 const SizedBox(width: 12),
@@ -1333,16 +1558,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           const SizedBox(width: 8),
           Expanded(
             flex: 3,
-            child: DropdownButtonFormField<String>(
-              isExpanded: true,
+            child: GlassSelectField(
               value: items.contains(value) ? value : items.first,
-              dropdownColor: const Color(0xFF0F1540),
-              items: items
-                  .map((v) => DropdownMenuItem(value: v, child: Text(v, overflow: TextOverflow.ellipsis, maxLines: 1)))
-                  .toList(),
-              onChanged: (v) {
-                if (v != null) onChanged(v);
-              },
+              items: items,
+              title: label,
+              onChanged: onChanged,
             ),
           ),
         ],
@@ -1362,7 +1582,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           Switch(
             value: value,
             onChanged: onChanged,
-            activeColor: const Color(0xFFF7E84E),
+            activeColor: const Color(0xFFE5484D),
           ),
         ],
       ),
@@ -1383,6 +1603,148 @@ class _SubHeader extends StatelessWidget {
               letterSpacing: 0.7,
               fontWeight: FontWeight.w700,
               color: Colors.white.withOpacity(0.4))),
+    );
+  }
+}
+
+class _AndroidAppsPickerDialog extends StatefulWidget {
+  final List<Map<String, dynamic>> installedApps;
+  final Set<String> initialSelected;
+
+  const _AndroidAppsPickerDialog({
+    required this.installedApps,
+    required this.initialSelected,
+  });
+
+  @override
+  State<_AndroidAppsPickerDialog> createState() => _AndroidAppsPickerDialogState();
+}
+
+class _AndroidAppsPickerDialogState extends State<_AndroidAppsPickerDialog> {
+  final _searchCtl = TextEditingController();
+  late final Set<String> _selected = Set<String>.from(widget.initialSelected);
+  String _query = '';
+  bool _onlySelected = false;
+
+  @override
+  void dispose() {
+    _searchCtl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final q = _query.trim().toLowerCase();
+    final filteredApps = widget.installedApps.where((app) {
+      final packageName = app['packageName'].toString();
+      if (_onlySelected && !_selected.contains(packageName)) {
+        return false;
+      }
+      if (q.isEmpty) return true;
+      final label = (app['label'] ?? packageName).toString().toLowerCase();
+      return label.contains(q) || packageName.toLowerCase().contains(q);
+    }).toList();
+
+    return GlassAlertDialog(
+      title: const Text('Приложения для маршрутизации'),
+      content: SizedBox(
+        width: 460,
+        height: 480,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: _searchCtl,
+              onChanged: (value) => setState(() => _query = value),
+              style: const TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                hintText: 'Поиск по названию или package name',
+                hintStyle: TextStyle(color: Colors.white.withOpacity(0.45)),
+                prefixIcon: const Icon(Icons.search, color: Colors.white54),
+                suffixIcon: _query.isEmpty
+                    ? null
+                    : IconButton(
+                        icon: const Icon(Icons.clear, color: Colors.white54),
+                        onPressed: () {
+                          _searchCtl.clear();
+                          setState(() => _query = '');
+                        },
+                      ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Text(
+                  'Выбрано: ${_selected.length}',
+                  style: TextStyle(color: Colors.white.withOpacity(0.65), fontSize: 12),
+                ),
+                const Spacer(),
+                FilterChip(
+                  label: const Text('Выбранные'),
+                  selected: _onlySelected,
+                  onSelected: (value) => setState(() => _onlySelected = value),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: filteredApps.isEmpty
+                  ? Center(
+                      child: Text(
+                        'Приложения не найдены',
+                        style: TextStyle(color: Colors.white.withOpacity(0.55)),
+                      ),
+                    )
+                  : ListView.builder(
+                      itemCount: filteredApps.length,
+                      itemBuilder: (_, index) {
+                        final app = filteredApps[index];
+                        final packageName = app['packageName'].toString();
+                        final label = (app['label'] ?? packageName).toString();
+                        final isSystem = app['isSystem'] == true;
+                        final checked = _selected.contains(packageName);
+                        return CheckboxListTile(
+                          value: checked,
+                          dense: true,
+                          controlAffinity: ListTileControlAffinity.leading,
+                          activeColor: const Color(0xFFE5484D),
+                          title: Text(
+                            label,
+                            style: const TextStyle(color: Colors.white, fontSize: 13),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: Text(
+                            isSystem ? '$packageName • системное' : packageName,
+                            style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 11),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          onChanged: (value) {
+                            setState(() {
+                              if (value == true) {
+                                _selected.add(packageName);
+                              } else {
+                                _selected.remove(packageName);
+                              }
+                            });
+                          },
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Отмена'),
+        ),
+        ElevatedButton(
+          onPressed: () => Navigator.pop(context, _selected),
+          child: const Text('Применить'),
+        ),
+      ],
     );
   }
 }

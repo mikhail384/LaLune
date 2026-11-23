@@ -1,28 +1,39 @@
-# OpenWRT в LaLune Frontend
+# OpenWrt в LaLune Frontend
 
-Кнопка **«Подключить OpenWRT»** предлагает установку по SSH или подключение к
-уже работающему backend.
+Кнопка **«Подключить OpenWrt»** устанавливает backend и LuCI-панель по SSH
+либо подключает Frontend к уже работающему backend.
 
 ## Установка по SSH
 
-1. Frontend находит роутер по SSH или принимает IP вручную.
-2. Определяет архитектуру по `DISTRIB_ARCH` (aarch64, x86_64, i386, mips,
-   mipsel, arm); неподдерживаемая — понятная ошибка со списком.
-3. При необходимости устанавливает `ip-full`, `kmod-tun`,
-   `iptables-nft`/`iptables`, `coreutils-nohup`, downloader и CA certificates.
-4. Скачивает только соответствующий `lalune-openwrt-backend[-<abi>]`.
-5. Отдельный core больше не скачивается: все backend содержат
-   **CSQTT**, **CSQTTR** и **CSQTT 2.1.9** внутри бинарника.
+1. Frontend подключается к роутеру по SSH и определяет `DISTRIB_ARCH`.
+2. Устанавливает `ip-full`, `kmod-tun`, `firewall4`, `nftables`,
+   `kmod-nf-nat`, `kmod-nft-nat`, `rpcd`, `luci-light`, `luci-base`,
+   `uhttpd`/`uhttpd-mod-ubus`/`uhttpd-mod-ucode`, `uclient-fetch` и `jsonfilter`.
+3. До запуска VPN проверяет, что ядро реально принимает правило nftables
+   `masquerade`. Если `kmod-nft-nat` не соответствует текущему ядру, установка
+   завершается с понятной ошибкой вместо создания частично работающего TUN.
+4. Устанавливает архитектурный `lalune-openwrt-backend[-<abi>]`.
+5. Устанавливает `luci-app-lalune`: меню LuCI, ACL, rpcd API bridge и страницу
+   управления. Архив панели передаётся из приложения, поэтому роутеру не нужно
+   отдельно скачивать UI с GitHub.
 6. Перезапускает backend и проверяет `http://<router>:1062/ping`.
 
-После установки панель доступна по `http://<router>:1062/panel`.
+После установки LuCI-панель находится в **Службы → LaLune VPN**. Она использует
+локальный API `127.0.0.1:1062` через rpcd/ubus и даёт управление профилями,
+Connect/Disconnect/Reconnect, статус, трафик и последние логи.
 
-## Подключение
+Standalone API и его маршруты не меняются: Android/Windows/macOS-клиент по-прежнему
+может подключаться к `http://<router>:1062` и управлять тем же backend.
 
-Frontend проверяет `/ping` и `/core/protocols`, передаёт токен через
-`/vk/token/submit` best-effort и переключает `ApiClient` на API роутера.
-Release-сборки OpenWRT должны возвращать поддержку всех трёх встроенных
-протоколов; отдельный файл `csqtt-client-aarch64` больше не требуется.
+## Маршрутизация и NAT
 
-Основная логика SSH находится в `lib/state/openwrt_installer.dart`, переключение
-API — в `lib/state/router_notifier.dart` и `lib/api/api_client.dart`.
+OpenWrt backend сначала использует native nftables NAT. Это устраняет зависимость
+от `iptables-nft`-совместимости `xt_MASQUERADE`, которая вызывала ошибку
+`Extension MASQUERADE revision 0 not supported` и последующий `RULE_APPEND` для
+`LALUNE_NAT`. Legacy iptables оставлен только как fallback для старых систем.
+
+## Подключение из приложения
+
+Frontend проверяет `/ping` и `/core/protocols`, затем переключает `ApiClient` на
+API роутера. LuCI и мобильный/desktop-клиент используют один backend и общее
+хранилище профилей.

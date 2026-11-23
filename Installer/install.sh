@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #
-# LaLune installer для Linux (CSQTT + CSQTTR + PaperFlux).
+# LaLune installer для Linux (CSQTT + CSQTTR + ToTS).
 #
 # Использование:
 #   ./install.sh           — скачивает всё из интернета
@@ -11,15 +11,15 @@ set -euo pipefail
 
 REPO_LALUNE="mikhail384/LaLune"
 REPO_CSQTT="Endlad2/csqtt-core"
-REPO_PAPERFLUX="Endlad2/PaperFlux-core"
 REPO_CSQTTR="Endlad2/csqttr-core"
+REPO_TOTS="Endlad2/ToTS"
 
 URL_LALUNE_ZIP="https://github.com/${REPO_LALUNE}/releases/latest/download/LaLune-Linux.zip"
 URL_BACKEND_ZIP="https://github.com/${REPO_LALUNE}/releases/latest/download/Backend-Linux.zip"
 URL_LATEST_CSQTT="https://raw.githubusercontent.com/${REPO_CSQTT}/refs/heads/main/LATEST"
-URL_LATEST_PF="https://raw.githubusercontent.com/${REPO_PAPERFLUX}/refs/heads/main/LATEST"
 URL_CSQTTR_LATEST="https://raw.githubusercontent.com/${REPO_CSQTTR}/refs/heads/main/LATEST"
 URL_ICON="https://raw.githubusercontent.com/${REPO_LALUNE}/refs/heads/main/icon.ico"
+URL_TOTS_LINUX="https://github.com/${REPO_TOTS}/releases/latest/download/tots-client-x86_64-unknown-linux-gnu.tar.gz"
 
 HOME_DIR="${HOME}"
 APPDATA_DIR="${HOME_DIR}/.la-lune"
@@ -58,16 +58,6 @@ detect_csqtt_asset() {
         aarch64|arm64) echo "client-linux-arm64" ;;
         armv7l|armv7) echo "client-linux-armv7" ;;
         *) fail "Неподдерживаемая архитектура: $arch"; exit 1 ;;
-    esac
-}
-
-detect_pf_asset() {
-    local arch; arch="$(uname -m)"
-    case "$arch" in
-        x86_64|amd64) echo "paperflux-linux-amd64" ;;
-        aarch64|arm64) echo "paperflux-linux-arm64" ;;
-        armv7l|armv7) echo "paperflux-linux-armv7" ;;
-        *) fail "PaperFlux: неподдерживаемая архитектура: $arch"; exit 1 ;;
     esac
 }
 
@@ -122,15 +112,13 @@ main() {
     echo
     printf "${c_green}========================================${c_reset}\n"
     printf "${c_green}     LaLune Installer (Linux)          ${c_reset}\n"
-    printf "${c_green}     CSQTT + CSQTTR + PaperFlux       ${c_reset}\n"
+    printf "${c_green}     CSQTT + CSQTTR + ToTS       ${c_reset}\n"
     printf "${c_green}========================================${c_reset}\n"
     echo
 
-    local csqtt_asset pf_asset
+    local csqtt_asset
     csqtt_asset="$(detect_csqtt_asset)"
-    pf_asset="$(detect_pf_asset)"
     gray "CSQTT:    $csqtt_asset"
-    gray "PaperFlux: $pf_asset"
 
     mkdir -p "$TEMP_DIR"
 
@@ -141,21 +129,26 @@ main() {
     local csqtt219_asset="${csqtt_asset}"
     local csqtt219_exe="${TEMP_DIR}/csqtt-219"
     local latest_csqtt219="${TEMP_DIR}/LATEST.CSQTT-2.1.9"
-    local pf_exe="${TEMP_DIR}/${pf_asset}"
     local csqttr_asset="${csqtt_asset}"
     local csqttr_exe="${TEMP_DIR}/${csqttr_asset}"
     local latest_csqttr="${TEMP_DIR}/LATEST.CSQTTR"
     local latest_csqtt="${TEMP_DIR}/LATEST.Csqtt"
-    local latest_pf="${TEMP_DIR}/LATEST.PaperFlux"
     local icon_file="${TEMP_DIR}/icon.ico"
+    local tots_archive="${TEMP_DIR}/tots-client-x86_64-unknown-linux-gnu.tar.gz"
+    local tots_supported=0
+    case "$(uname -m)" in x86_64|amd64) tots_supported=1 ;; esac
 
     if [ "$CI_MODE" = "1" ]; then
         [ -f "$latest_csqtt219" ] || printf '%s' '2026.09.17.17.36' > "$latest_csqtt219"
         local missing=()
-        for f in "$lalune_zip" "$backend_zip" "$csqtt_exe" "$csqtt219_exe" "$csqttr_exe" "$pf_exe" \
-                 "$latest_csqtt" "$latest_csqtt219" "$latest_csqttr" "$latest_pf" "$icon_file"; do
+        for f in "$lalune_zip" "$backend_zip" "$csqtt_exe" "$csqtt219_exe" "$csqttr_exe" \
+                 "$latest_csqtt" "$latest_csqtt219" "$latest_csqttr" "$icon_file"; do
             [ -f "$f" ] || missing+=("$f")
         done
+        if [ "$tots_supported" = "1" ] && [ ! -f "$tots_archive" ]; then
+            step "ToTS archive отсутствует в CI staging — скачиваю latest release"
+            download "$URL_TOTS_LINUX" "$tots_archive"
+        fi
         if [ "${#missing[@]}" -gt 0 ]; then
             fail "Не хватает файлов:"; for m in "${missing[@]}"; do echo "  $m" >&2; done; exit 1
         fi
@@ -165,12 +158,15 @@ main() {
         printf '%s' '2026.09.17.17.36' > "$latest_csqtt219"
         download "https://github.com/${REPO_CSQTTR}/releases/latest/download/${csqttr_asset}" "$csqttr_exe"
         download "$URL_CSQTTR_LATEST" "$latest_csqttr"
-        download "https://github.com/${REPO_PAPERFLUX}/releases/latest/download/${pf_asset}" "$pf_exe"
         download "$URL_LALUNE_ZIP"  "$lalune_zip"
         download "$URL_BACKEND_ZIP" "$backend_zip"
         download "$URL_LATEST_CSQTT" "$latest_csqtt"
-        download "$URL_LATEST_PF"    "$latest_pf"
         download "$URL_ICON"         "$icon_file"
+        if [ "$tots_supported" = "1" ]; then
+            download "$URL_TOTS_LINUX" "$tots_archive"
+        else
+            warn "ToTS: для $(uname -m) в указанном релизе нет desktop-бинарника; пропускаю"
+        fi
     fi
     ok "файлы готовы"
 
@@ -203,14 +199,21 @@ main() {
     chmod +x "${APPDATA_DIR}/csqttr-core"
     cp -f "$latest_csqttr" "${APPDATA_DIR}/LATEST.CSQTTR"
 
-    step "Кладу PaperFlux core"
-    cp -f "$pf_exe" "${APPDATA_DIR}/paperflux-core"
-    chmod +x "${APPDATA_DIR}/paperflux-core"
+
+    if [ "$tots_supported" = "1" ]; then
+        step "Кладу ToTS client"
+        local tots_unpack="${TEMP_DIR}/tots-unpack"
+        rm -rf "$tots_unpack"; mkdir -p "$tots_unpack"
+        tar -xzf "$tots_archive" -C "$tots_unpack"
+        local tots_bin; tots_bin="$(find "$tots_unpack" -type f -name 'tots-client' -print -quit)"
+        [ -n "$tots_bin" ] || { fail "tots-client не найден в архиве"; exit 1; }
+        cp -f "$tots_bin" "${APPDATA_DIR}/tots-client"
+        chmod +x "${APPDATA_DIR}/tots-client"
+    fi
 
     step "Кладу LATEST-файлы"
     cp -f "$latest_csqtt" "${APPDATA_DIR}/LATEST.Csqtt"
     cp -f "$latest_csqtt219" "${APPDATA_DIR}/LATEST.CSQTT-2.1.9"
-    cp -f "$latest_pf"    "${APPDATA_DIR}/LATEST.PaperFlux"
 
     step "Создаю ярлык в меню"
     install_desktop_entry "$launcher" "$ICON_PATH"
@@ -223,7 +226,7 @@ main() {
     echo
     printf "  Приложение: %s\n" "$launcher"
     printf "  CSQTT:      %s\n" "${APPDATA_DIR}/csqtt-core"
-    printf "  PaperFlux:  %s\n" "${APPDATA_DIR}/paperflux-core"
+    [ "$tots_supported" = "1" ] && printf "  ToTS:       %s\n" "${APPDATA_DIR}/tots-client"
     echo
 }
 

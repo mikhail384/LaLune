@@ -17,7 +17,7 @@ class Router(BaseHTTPRequestHandler):
     selected = None
     connected = False
     token = False
-    settings = {"authMode": "manual", "workers": 9, "autoApiWorkers": 9}
+    settings = {"authMode": "manual", "externalHashesUrl": "", "workers": 9, "autoApiWorkers": 9}
     writes = []
     profiles = [PROFILE]
 
@@ -157,6 +157,15 @@ def smoke_test(url):
         page.get_by_role("button", name="Сохранить настройки").click()
         expect(page.locator("#settings-message")).to_have_text("Настройки сохранены")
         assert ("PATCH", "/settings", {"authMode": "autoApi", "autoApiWorkers": 18}) in Router.writes
+
+        page.get_by_label("Режим авторизации").select_option("externalHashes")
+        page.get_by_label("Публичный ZIP на Яндекс Диске").fill("https://disk.yandex.ru/d/TestPublicArchive")
+        page.get_by_role("button", name="Сохранить настройки").click()
+        expect(page.locator("#settings-message")).to_have_text("Настройки сохранены")
+        assert ("PATCH", "/settings", {
+            "authMode": "externalHashes",
+            "externalHashesUrl": "https://disk.yandex.ru/d/TestPublicArchive",
+        }) in Router.writes
 
         page.get_by_text("Журнал ядра", exact=True).click()
         expect(page.locator("#log-output")).to_have_text("[CORE] <script>")

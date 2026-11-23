@@ -41,7 +41,7 @@ class Links {
       'https://yoomoney.ru/to/4100119505530465/100';
 
   // ---------- Скачать ----------
-  static const String latestVersion    = '0.9.12';
+  static const String latestVersion    = '0.9.18';
   static const String yandexDisk       = 'https://disk.yandex.ru/d/e3_zJQfHn7xI_Q';
 
   // ---------- Счётчик ----------
@@ -68,13 +68,6 @@ class Links {
       subtitle: 'WebRTC relay',
       description: 'WebRTC-туннель, маскируется под обычный peer-to-peer звонок.',
       repo: 'https://github.com/Endlad2/olcrtc-core',
-    ),
-    ProtocolInfo(
-      name: 'OpenFlux',
-      subtitle: 'Docs + MAX',
-      description:
-          'Пробрасывает трафик через облачные документы и мессенджер MAX.',
-      repo: 'https://github.com/Endlad2/OpenFlux-core',
     ),
     ProtocolInfo(
       name: 'ToTS',

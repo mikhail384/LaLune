@@ -22,6 +22,7 @@ pub struct AppState {
     pub logs_path: PathBuf,
     pub logs_config_id_path: PathBuf,
     pub logs_config_id: Mutex<Option<i64>>,
+    pub selected_config_path: PathBuf,
     pub token_path: PathBuf,
     pub core_path: PathBuf,
 
@@ -122,6 +123,7 @@ impl AppState {
         let logs_config_id = std::fs::read_to_string(&logs_config_id_path)
             .ok()
             .and_then(|value| value.trim().parse::<i64>().ok());
+        let selected_config_path = app_dir.join("selected_config_id.txt");
         let token_path = app_dir.join("token.json");
         let core_path = core_path_for(&app_dir, "CSQTT");
 
@@ -137,6 +139,10 @@ impl AppState {
         std::fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
 
         let configs = ConfigStore::open(&configs_path)?;
+        let selected_config = std::fs::read_to_string(&selected_config_path)
+            .ok()
+            .and_then(|value| value.trim().parse::<i64>().ok())
+            .and_then(|id| configs.get(id).ok().flatten());
         let events = EventBus::new(1024);
 
         events.emit(crate::events::Event::log(format!(
@@ -151,11 +157,12 @@ impl AppState {
             logs_path,
             logs_config_id_path,
             logs_config_id: Mutex::new(logs_config_id),
+            selected_config_path,
             token_path,
             core_path,
             events,
             settings: RwLock::new(settings),
-            selected_config: RwLock::new(None),
+            selected_config: RwLock::new(selected_config),
             configs,
             vpn: Arc::new(VpnRuntime::new()),
             core: Mutex::new(None),

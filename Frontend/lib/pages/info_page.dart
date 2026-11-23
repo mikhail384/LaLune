@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart'
     show defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
+import '../widgets/glass_dialog.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -110,14 +111,14 @@ class _InfoPageState extends ConsumerState<InfoPage> {
 
     await showDialog<void>(
       context: context,
-      barrierColor: Colors.black.withOpacity(0.65),
-      builder: (ctx) => Dialog(
+      barrierColor: Colors.transparent,
+      builder: (ctx) => GlassDialog(
         backgroundColor: Colors.transparent,
         insetPadding: const EdgeInsets.all(20),
         child: Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: const Color(0xFF0F1540),
+            color: Colors.white.withOpacity(0.035),
             borderRadius: BorderRadius.circular(16),
             border: Border.all(color: Colors.white.withOpacity(0.12)),
           ),
@@ -200,7 +201,7 @@ class _InfoPageState extends ConsumerState<InfoPage> {
                   style: TextStyle(
                       fontSize: 26,
                       fontWeight: FontWeight.w700,
-                      color: Color(0xFFF7E84E))),
+                      color: Color(0xFFE5484D))),
               const SizedBox(height: 4),
               Text('Client v$_laluneVersion',
                   style: TextStyle(color: Colors.white.withOpacity(0.5))),
@@ -349,10 +350,10 @@ class _InfoPageState extends ConsumerState<InfoPage> {
             Text(label,
                 style: const TextStyle(
                     fontWeight: FontWeight.w600,
-                    color: Color(0xFF6C8CFF),
+                    color: Color(0xFF2FBF71),
                     decoration: TextDecoration.underline)),
             const SizedBox(width: 4),
-            const Icon(Icons.open_in_new, size: 14, color: Color(0xFF6C8CFF)),
+            const Icon(Icons.open_in_new, size: 14, color: Color(0xFF2FBF71)),
           ],
         ),
       ),

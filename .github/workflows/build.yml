@@ -201,6 +201,7 @@ jobs:
           lipo -verify_arch x86_64 arm64 "$APP/Contents/MacOS/lalune"
           lipo -verify_arch x86_64 arm64 "$APP/Contents/Resources/lalune-backend"
           cp Output/LaLune-macOS.zip Output/LaLune-macOS-universal.zip
+          hdiutil create -volname LaLune -srcfolder "$APP" -ov -format UDZO Output/LaLune-macOS.dmg
           cp dist-macos/lalune-backend Output/lalune-backend-macos
 
       - uses: actions/upload-artifact@v4
@@ -431,17 +432,46 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.prepare-version.outputs.build_ref }}
-      - name: Syntax (POSIX sh) and architecture mapping
+      - name: Syntax (POSIX sh), LuCI RPC bridge and architecture mapping
         run: |
           set -euo pipefail
           sh -n Installer/openwrt.sh
+          RPCD_BRIDGE="Installer/luci-app-lalune/root/usr/libexec/rpcd/lalune"
+          # Git archives/checkouts may lose the executable bit. The bridge is
+          # always invoked explicitly with /bin/sh in CI and packaged as 0755.
+          chmod 0755 "$RPCD_BRIDGE"
+          sh -n "$RPCD_BRIDGE"
           sh Installer/test-abi.sh Installer/openwrt.sh
+          node --check Installer/luci-app-lalune/root/www/luci-static/resources/view/lalune/status.js
+          sh "$RPCD_BRIDGE" list | jq -e '.status and .connect and .create and .delete'
+          python3 - <<'PYARCHIVE'
+          import tarfile
+          from pathlib import Path
+          archive = Path('Assets/openwrt/luci-app-lalune.tar.gz')
+          with tarfile.open(archive, 'r:gz') as tf:
+              members = {member.name: member for member in tf.getmembers()}
+              names = set(members)
+          required = {
+              'usr/libexec/rpcd/lalune',
+              'usr/share/rpcd/acl.d/luci-app-lalune.json',
+              'usr/share/luci/menu.d/luci-app-lalune.json',
+              'www/luci-static/resources/view/lalune/status.js',
+          }
+          missing = required - names
+          if missing:
+              raise SystemExit(f'LuCI archive is missing: {sorted(missing)}')
+          bridge_mode = members['usr/libexec/rpcd/lalune'].mode
+          if not bridge_mode & 0o111:
+              raise SystemExit(f'rpcd bridge is not executable in LuCI archive (mode {bridge_mode:o})')
+          print(f'LuCI archive verified: {archive.stat().st_size} bytes; rpcd mode={bridge_mode:o}')
+          PYARCHIVE
       - name: Syntax under BusyBox ash (what routers run)
         run: |
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends busybox-static
           busybox ash -n Installer/openwrt.sh
+          busybox ash -n Installer/luci-app-lalune/root/usr/libexec/rpcd/lalune
           busybox ash Installer/test-abi.sh Installer/openwrt.sh
 
   # ============================================================
@@ -484,7 +514,10 @@ jobs:
   #  Android APK
   # ============================================================
   build-android:
-    name: Android APK (universal)
+    name: Android APK (universal, release-signed)
+    # GitHub does not expose repository secrets to pull requests from forks.
+    # All publishable builds (push/manual dispatch) and same-repository PRs are signed.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     needs: prepare-version
     runs-on: ubuntu-latest
     steps:
@@ -506,6 +539,61 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+
+      - name: Prepare Android release signing (Base64 secret only)
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+
+          KEYSTORE_PATH="Assets/apk-key/my-release-key.jks"
+          KEY_ALIAS="my-key"
+
+          # The signing key MUST come from GitHub Actions Secrets.
+          # Never use a keystore checked into the repository or a runner cache.
+          : "${ANDROID_KEYSTORE_BASE64:?Missing GitHub Actions secret ANDROID_KEYSTORE_BASE64.}"
+          : "${ANDROID_KEYSTORE_PASSWORD:?Missing GitHub Actions secret ANDROID_KEYSTORE_PASSWORD.}"
+          : "${ANDROID_KEY_PASSWORD:?Missing GitHub Actions secret ANDROID_KEY_PASSWORD.}"
+
+          mkdir -p "$(dirname "$KEYSTORE_PATH")"
+          rm -f "$KEYSTORE_PATH"
+
+          # Decode only the secret into the expected path. Fail on invalid/empty data.
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+          test -s "$KEYSTORE_PATH" || {
+            echo "::error::ANDROID_KEYSTORE_BASE64 decoded to an empty keystore."
+            exit 1
+          }
+          chmod 600 "$KEYSTORE_PATH"
+
+          # Verify the store password and required alias before invoking Gradle.
+          keytool -list -keystore "$KEYSTORE_PATH" -alias "$KEY_ALIAS" \
+            -storepass:env ANDROID_KEYSTORE_PASSWORD >/dev/null
+
+          mkdir -p Frontend/android
+          {
+            printf 'storeFile=../../Assets/apk-key/my-release-key.jks\n'
+            printf 'storePassword=%s\n' "$ANDROID_KEYSTORE_PASSWORD"
+            printf 'keyAlias=%s\n' "$KEY_ALIAS"
+            printf 'keyPassword=%s\n' "$ANDROID_KEY_PASSWORD"
+          } > Frontend/android/key.properties
+          chmod 600 Frontend/android/key.properties
+
+          echo "Android release keystore restored from GitHub Actions Secrets and validated (alias: $KEY_ALIAS)."
+
+      - name: Fix Flutter included-build Maven repositories
+        shell: bash
+        run: |
+          set -euo pipefail
+          FLUTTER_BIN="$(command -v flutter)"
+          FLUTTER_ROOT="$(cd "$(dirname "$FLUTTER_BIN")/.." && pwd)"
+          python .github/scripts/patch_flutter_gradle_repositories.py \
+            --github-env "$GITHUB_ENV" \
+            "$FLUTTER_ROOT"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -660,22 +748,24 @@ jobs:
           file "$DEST/armeabi-v7a/libcsqttr-android-armeabi-v7a.so"
           file "$DEST/x86_64/libcsqttr-android-x86_64.so"
 
-      - name: Download PaperFlux cores (jniLibs)
+      - name: Refresh ToTS core binaries (jniLibs)
         shell: bash
         run: |
           set -euo pipefail
-          TMP_PF=$(mktemp -d)
-          curl -L --fail --retry 3 -o "$TMP_PF/paperflux-android.zip" \
-            https://github.com/Endlad2/PaperFlux-core/releases/latest/download/paperflux-android.zip
-          unzip -o "$TMP_PF/paperflux-android.zip" -d "$TMP_PF/extracted"
-          for abi in arm64-v8a armeabi-v7a x86_64 x86; do
-            mkdir -p "Frontend/android/app/src/main/jniLibs/$abi"
-            SRC="$TMP_PF/extracted/$abi/libopenflux.so"
-            if [ -f "$SRC" ]; then
-              cp "$SRC" "Frontend/android/app/src/main/jniLibs/$abi/libopenflux.so"
-            fi
-          done
-          rm -rf "$TMP_PF"
+          TMP_TOTS=$(mktemp -d)
+          URL=https://github.com/Endlad2/ToTS/releases/latest/download/tots-android-multiabi.zip
+          if curl -L --fail --retry 3 -o "$TMP_TOTS/tots-android-multiabi.zip" "$URL"; then
+            unzip -o "$TMP_TOTS/tots-android-multiabi.zip" -d "$TMP_TOTS/extracted"
+            for abi in arm64-v8a armeabi-v7a x86_64; do
+              src="$TMP_TOTS/extracted/jniLibs/$abi/libtots.so"
+              [ -f "$src" ] || { echo "Missing ToTS ABI in release: $abi" >&2; exit 1; }
+              mkdir -p "Frontend/android/app/src/main/jniLibs/$abi"
+              cp "$src" "Frontend/android/app/src/main/jniLibs/$abi/libtots.so"
+            done
+          else
+            echo "ToTS multi-ABI release asset is unavailable; using the binaries bundled in the repository."
+          fi
+          rm -rf "$TMP_TOTS"
 
       - name: Copy Lua scripts to assets
         shell: bash
@@ -698,28 +788,32 @@ jobs:
         working-directory: Frontend
         run: flutter pub run flutter_launcher_icons
 
-      - name: Build Android APK (debug)
+      - name: Build Android APK (release, signed)
         working-directory: Frontend
-        run: flutter build apk --debug
+        run: flutter build apk --release
 
-      - name: Verify csqtt-link in APK
+      - name: Verify release APK contents and signature
         shell: bash
         run: |
           set -euo pipefail
-          APK=$(find Frontend/build/app/outputs/flutter-apk -name "app-debug.apk" -type f | head -n 1)
+          APK=$(find Frontend/build/app/outputs/flutter-apk -name "app-release.apk" -type f | head -n 1)
+          [ -n "$APK" ] || { echo "::error::Flutter did not produce app-release.apk"; exit 1; }
           echo "APK: $APK"
-          unzip -l "$APK" | grep -E 'libcsqtt-link|libclient-android|libcsqttr-android|libopenflux' || true
+          unzip -l "$APK" | grep -E 'libcsqtt-link|libclient-android|libcsqttr-android|libtots' || true
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
+          [ -x "$APKSIGNER" ] || { echo "::error::apksigner not found in Android SDK build-tools"; exit 1; }
+          "$APKSIGNER" verify --verbose --print-certs "$APK"
 
-      - name: Locate & rename APK
+      - name: Locate & rename signed APK
         id: find_apk
         shell: bash
         run: |
           set -euo pipefail
-          APK=$(find Frontend/build/app/outputs/flutter-apk -name "app-debug.apk" -type f | head -n 1)
-          [ -z "$APK" ] && exit 1
+          APK=$(find Frontend/build/app/outputs/flutter-apk -name "app-release.apk" -type f | head -n 1)
+          [ -n "$APK" ] || exit 1
           mkdir -p Output
           cp "$APK" Output/LaLune-Android.apk
-          ls -la Output/LaLune-Android.apk
+          ls -lh Output/LaLune-Android.apk
           echo "apk=Output/LaLune-Android.apk" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
@@ -727,6 +821,13 @@ jobs:
           name: Output-Android
           path: Output/LaLune-Android.apk
           if-no-files-found: error
+
+      - name: Remove temporary Android signing material
+        if: always()
+        shell: bash
+        run: |
+          rm -f Frontend/android/key.properties
+          rm -f Assets/apk-key/my-release-key.jks
 
   # ============================================================
   #  LaLuneTokenFetcher
@@ -879,6 +980,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release/assets
+          # rpcd exec handlers must be executable after extraction on OpenWrt.
+          chmod 0755 Installer/luci-app-lalune/root/usr/libexec/rpcd/lalune
+          tar --mode='u+rwX,go+rX' -czf release/assets/luci-app-lalune.tar.gz -C Installer/luci-app-lalune/root usr www
           cp release/windows/LaLune-Windows.zip release/assets/
           cp release/windows/Backend-Windows.zip release/assets/
           cp release/windows/Installer-Windows.zip release/assets/
@@ -899,6 +1003,7 @@ jobs:
           for arch in arm64 x64 universal; do
             if [ -f "release/macos/LaLune-macOS-$arch.zip" ]; then cp "release/macos/LaLune-macOS-$arch.zip" release/assets/; fi
           done
+          if [ -f release/macos/LaLune-macOS.dmg ]; then cp release/macos/LaLune-macOS.dmg release/assets/; fi
           cp release/token-fetcher-windows/LaLuneTokenFetcher_Windows.zip release/assets/
           cp release/token-fetcher-linux/LaLuneTokenFetcher_Linux.zip release/assets/
 
@@ -978,6 +1083,7 @@ jobs:
             release/assets/lalune-openwrt-cores-armv5.zip
             release/assets/lalune-openwrt-backend-mips
             release/assets/lalune-openwrt-cores-mips.zip
+            release/assets/luci-app-lalune.tar.gz
             release/assets/LaLune-Android.apk
             release/assets/LaLuneTokenFetcher_Windows.zip
             release/assets/LaLuneTokenFetcher_Linux.zip
@@ -989,8 +1095,73 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Attach macOS build (optional)
-        if: hashFiles('release/assets/LaLune-macOS.zip') != ''
+        if: hashFiles('release/assets/LaLune-macOS.zip') != '' || hashFiles('release/assets/LaLune-macOS.dmg') != ''
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ steps.version.outputs.tag }}" release/assets/LaLune-macOS*.zip --clobber
+        run: |
+          set -euo pipefail
+          for asset in release/assets/LaLune-macOS*.zip release/assets/LaLune-macOS.dmg; do
+            if [ -f "$asset" ]; then
+              gh release upload "${{ steps.version.outputs.tag }}" "$asset" --clobber
+            fi
+          done
+
+      - name: Build and publish updater bundle
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        env:
+          UPDATE_VERSION: ${{ steps.version.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # This step runs only after the GitHub release has been created and
+          # the macOS assets have been attached by the preceding step.
+          RELEASE_ASSETS="$(gh release view "$UPDATE_VERSION" --json assets --jq '.assets[].name')"
+          if ! grep -Eq '^LaLune-macOS\.(dmg|zip)$' <<< "$RELEASE_ASSETS"; then
+            echo "::error::The release exists, but no LaLune-macOS.dmg/.zip was attached. Refusing to publish an incomplete update."
+            exit 1
+          fi
+
+          test -s release/assets/Installer-Windows.zip || { echo "::error::Installer-Windows.zip is missing."; exit 1; }
+          test -s release/assets/LaLune-Android.apk || { echo "::error::Signed LaLune-Android.apk is missing."; exit 1; }
+
+          rm -rf release/update-payload release/Release.zip
+          mkdir -p release/update-payload
+          cp release/assets/Installer-Windows.zip release/update-payload/Installer-Windows.zip
+          zip -q -j release/update-payload/LaLune-Android.apk.zip release/assets/LaLune-Android.apk
+
+          # Release.zip contains exactly the two requested nested archives.
+          (
+            cd release/update-payload
+            zip -q -j ../Release.zip Installer-Windows.zip LaLune-Android.apk.zip
+          )
+
+          python3 - <<'PY'
+          import io
+          import zipfile
+          from pathlib import Path
+
+          bundle = Path("release/Release.zip")
+          expected = {"Installer-Windows.zip", "LaLune-Android.apk.zip"}
+          with zipfile.ZipFile(bundle) as outer:
+              actual = set(outer.namelist())
+              if actual != expected:
+                  raise SystemExit(f"Unexpected Release.zip entries: {sorted(actual)}")
+              with zipfile.ZipFile(io.BytesIO(outer.read("LaLune-Android.apk.zip"))) as apk_zip:
+                  if "LaLune-Android.apk" not in apk_zip.namelist():
+                      raise SystemExit("Nested APK archive does not contain LaLune-Android.apk")
+          print(f"Verified updater bundle: {bundle} ({bundle.stat().st_size} bytes)")
+          PY
+
+          echo "Publishing LaLune $UPDATE_VERSION to updater service..."
+          curl --fail --show-error --silent \
+            --retry 3 --retry-all-errors --retry-delay 2 \
+            --connect-timeout 15 --max-time 300 \
+            -X POST "http://82.40.38.237:8000/new_update" \
+            -F "version=${UPDATE_VERSION}" \
+            -F "file=@release/Release.zip;type=application/zip" \
+            -o release/updater-response.txt \
+            -w 'Updater HTTP %{http_code}\n'
+          cat release/updater-response.txt
 

@@ -403,6 +403,13 @@ def package_macos(app_dir: Path, backend_bin: Path) -> None:
         cwd=app_dir.parent, label="ditto zip")
     status("OK", f"{lalune_zip.name}  ({lalune_zip.stat().st_size // 1024} KB)")
 
+    lalune_dmg = OUTPUT / "LaLune-macOS.dmg"
+    status("INFO", f"packaging {lalune_dmg.name}…")
+    run(["hdiutil", "create", "-volname", "LaLune", "-srcfolder", str(app_dir),
+         "-ov", "-format", "UDZO", str(lalune_dmg)],
+        cwd=app_dir.parent, label="hdiutil DMG")
+    status("OK", f"{lalune_dmg.name}  ({lalune_dmg.stat().st_size // 1024} KB)")
+
 # ────────────────────────────────────────────────────────────────
 #  Clean
 # ────────────────────────────────────────────────────────────────

@@ -26,6 +26,7 @@ use futures::stream::Stream;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::convert::Infallible;
+use std::io::{Cursor, Read};
 use std::sync::Arc;
 use std::time::Duration;
 use tower_http::cors::{Any, CorsLayer};
@@ -140,7 +141,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 async fn ping(State(state): State<Arc<AppState>>) -> Json<Value> {
     Json(json!({
         "ok": true,
-        "version": "0.9.12",
+        "version": "0.9.18",
         "os": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
         "hostname": hostname::get()
@@ -242,26 +243,6 @@ struct ConfigCreateBody {
     password: Option<String>,
     hashes: Option<String>,
     name: Option<String>,
-    #[serde(rename = "profileId")]
-    profile_id: Option<String>,
-    #[serde(rename = "profileToken")]
-    profile_token: Option<String>,
-    #[serde(rename = "clientIp")]
-    client_ip: Option<String>,
-    transport: Option<String>,
-    url: Option<String>,
-    urls: Option<String>,
-    #[serde(rename = "volgaUrl")]
-    volga_url: Option<String>,
-    #[serde(rename = "relayUrl")]
-    relay_url: Option<String>,
-    #[serde(rename = "relayToken")]
-    relay_token: Option<String>,
-    #[serde(rename = "maxToken")]
-    max_token: Option<String>,
-    #[serde(rename = "maxUid")]
-    max_uid: Option<String>,
-    server: Option<String>,
 }
 
 fn body_to_item(body: ConfigCreateBody) -> Result<ConfigItem, String> {
@@ -275,24 +256,8 @@ fn body_to_item(body: ConfigCreateBody) -> Result<ConfigItem, String> {
     c.password = body.password.unwrap_or_default();
     c.hashes = body.hashes.unwrap_or_default();
     c.name = body.name.unwrap_or_default();
-    c.profile_id = body.profile_id.unwrap_or_default();
-    c.profile_token = body.profile_token.unwrap_or_default();
-    c.client_ip = body.client_ip.unwrap_or_default();
-    c.transport = body.transport.unwrap_or_default();
-    c.url = body.url.unwrap_or_default();
-    c.urls = body.urls.unwrap_or_default();
-    c.volga_url = body.volga_url.unwrap_or_default();
-    c.relay_url = body.relay_url.unwrap_or_default();
-    c.relay_token = body.relay_token.unwrap_or_default();
-    c.max_token = body.max_token.unwrap_or_default();
-    c.max_uid = body.max_uid.unwrap_or_default();
-    c.server = body.server.unwrap_or_default();
     if c.name.is_empty() {
-        c.name = if c.peer.is_empty() {
-            c.server.clone()
-        } else {
-            c.peer.clone()
-        };
+        c.name = c.peer.clone();
     }
     Ok(c)
 }
@@ -321,7 +286,15 @@ async fn configs_update(
         Err(e) => return err(400, e),
     };
     match state.configs.update(id, &config) {
-        Ok(_) => Json(json!({"ok": true})).into_response(),
+        Ok(_) => {
+            let selected = state.selected_config.read().as_ref().map(|c| c.id) == Some(id);
+            if selected {
+                if let Ok(Some(updated)) = state.configs.get(id) {
+                    *state.selected_config.write() = Some(updated);
+                }
+            }
+            Json(json!({"ok": true})).into_response()
+        }
         Err(e) => err(500, e.to_string()),
     }
 }
@@ -330,8 +303,19 @@ async fn configs_delete(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
 ) -> axum::response::Response {
+    let was_selected = state.selected_config.read().as_ref().map(|c| c.id) == Some(id);
     match state.configs.delete(id) {
-        Ok(_) => Json(json!({"ok": true})).into_response(),
+        Ok(_) => {
+            if was_selected {
+                *state.selected_config.write() = None;
+                if let Err(e) = std::fs::remove_file(&state.selected_config_path) {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        return err(500, e.to_string());
+                    }
+                }
+            }
+            Json(json!({"ok": true})).into_response()
+        }
         Err(e) => err(500, e.to_string()),
     }
 }
@@ -370,6 +354,9 @@ async fn selected_set(
     if let Some(id) = body.id {
         match state.configs.get(id) {
             Ok(Some(c)) => {
+                if let Err(e) = std::fs::write(&state.selected_config_path, id.to_string()) {
+                    return err(500, e.to_string());
+                }
                 *state.selected_config.write() = Some(c);
                 Json(json!({"ok": true})).into_response()
             }
@@ -377,6 +364,11 @@ async fn selected_set(
             Err(e) => err(500, e.to_string()),
         }
     } else {
+        match std::fs::remove_file(&state.selected_config_path) {
+            Ok(()) => {},
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+            Err(e) => return err(500, e.to_string()),
+        }
         *state.selected_config.write() = None;
         Json(json!({"ok": true})).into_response()
     }
@@ -523,6 +515,102 @@ async fn device_info(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 //  VPN
 // ============================================================
 
+
+async fn fetch_external_hashes(public_url: &str) -> Result<String, String> {
+    let key = public_url.trim();
+    let lower = key.to_ascii_lowercase();
+    if !(lower.starts_with("https://disk.yandex.ru/") || lower.starts_with("https://disk.yandex.com/")) {
+        return Err("external hashes must use a public https://disk.yandex.ru/d/... link".into());
+    }
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(60))
+        .build()
+        .map_err(|e| format!("cannot create HTTP client: {e}"))?;
+
+    let api = client
+        .get("https://cloud-api.yandex.net/v1/disk/public/resources/download")
+        .query(&[("public_key", key)])
+        .send()
+        .await
+        .map_err(|e| format!("Yandex Disk API request failed: {e}"))?;
+    let status = api.status();
+    let body = api
+        .text()
+        .await
+        .map_err(|e| format!("cannot read Yandex Disk API response: {e}"))?;
+    if !status.is_success() {
+        return Err(format!("Yandex Disk API HTTP {}", status.as_u16()));
+    }
+    let json: Value = serde_json::from_str(&body)
+        .map_err(|e| format!("invalid Yandex Disk API response: {e}"))?;
+    let href = json.get("href").and_then(Value::as_str).unwrap_or("").trim();
+    if !href.starts_with("https://") {
+        return Err("Yandex Disk did not return a secure download URL".into());
+    }
+
+    let response = client
+        .get(href)
+        .send()
+        .await
+        .map_err(|e| format!("hash archive request failed: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("hash archive HTTP {}", response.status().as_u16()));
+    }
+    const MAX_ARCHIVE: u64 = 32 * 1024 * 1024;
+    if response.content_length().is_some_and(|n| n > MAX_ARCHIVE) {
+        return Err("hash archive is too large".into());
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| format!("cannot download hash archive: {e}"))?;
+    if bytes.len() as u64 > MAX_ARCHIVE {
+        return Err("hash archive is too large".into());
+    }
+
+    let mut zip = zip::ZipArchive::new(Cursor::new(bytes))
+        .map_err(|e| format!("invalid ZIP archive: {e}"))?;
+    let mut text = None;
+    for i in 0..zip.len() {
+        let mut entry = zip.by_index(i).map_err(|e| format!("cannot read ZIP entry: {e}"))?;
+        if entry.is_dir() { continue; }
+        let name = entry.name().replace('\\', "/");
+        if !name.rsplit('/').next().unwrap_or("").eq_ignore_ascii_case("hashes.txt") {
+            continue;
+        }
+        if entry.size() > 1024 * 1024 {
+            return Err("hashes.txt is too large".into());
+        }
+        let mut value = String::new();
+        entry
+            .read_to_string(&mut value)
+            .map_err(|e| format!("cannot read hashes.txt: {e}"))?;
+        if value.len() > 1024 * 1024 {
+            return Err("hashes.txt is too large".into());
+        }
+        text = Some(value);
+        break;
+    }
+    let text = text.ok_or_else(|| "hashes.txt not found in ZIP".to_string())?;
+    let mut hashes = Vec::new();
+    for item in text
+        .split(|c: char| c == ',' || c == '+' || c.is_whitespace())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        if !hashes.iter().any(|existing: &String| existing == item) {
+            hashes.push(item.to_string());
+        }
+        if hashes.len() >= 6 { break; }
+    }
+    if hashes.is_empty() {
+        return Err("hashes.txt does not contain hashes".into());
+    }
+    Ok(hashes.join(","))
+}
+
 #[derive(Deserialize)]
 struct ConnectBody {
     #[serde(rename = "configId")]
@@ -563,6 +651,29 @@ async fn stop_active_vk_calls(state: &Arc<AppState>) -> usize {
     stop_vk_calls(state, call_ids).await
 }
 
+fn update_tots_metrics_from_line(state: &AppState, line: &str) {
+    if let Some((workers, workers_target)) = vpn::parse_tots_worker_status(line) {
+        state.vpn.update_tots_worker_counts(workers, workers_target);
+    }
+    if let Some(metrics) = vpn::parse_tots_status(line) {
+        state.vpn.update_tots_metrics(metrics);
+        state.events.emit(Event::named(
+            "tots_stats",
+            json!({
+                "rxBytes": metrics.rx_bytes,
+                "txBytes": metrics.tx_bytes,
+                "workers": metrics.workers,
+                "workersTarget": metrics.workers_target,
+                "workersVk": metrics.workers_vk,
+                "workersJazz": metrics.workers_jazz,
+                "workersYaDocs": metrics.workers_ya_docs,
+                "workersMailDocs": metrics.workers_mail_docs,
+                "workersCups": metrics.workers_cups,
+            }),
+        ));
+    }
+}
+
 async fn vpn_connect(
     State(state): State<Arc<AppState>>,
     Json(body): Json<ConnectBody>,
@@ -581,6 +692,7 @@ async fn vpn_connect(
 
     state.vpn.stop().await;
     finish_vpn(&state).await;
+    state.vpn.reset_stats();
     // Remember how many backend log lines belonged to earlier sessions. They
     // are removed only after the new core proves that it is actually alive
     // (first "Активных > 0"), so failed connection attempts remain visible.
@@ -600,7 +712,7 @@ async fn vpn_connect(
         let filename = match kind {
             ProtocolKind::Csqtt => Some("csqtt-macos-arm64"),
             ProtocolKind::Csqttr => Some("csqttr-macos-arm64"),
-            ProtocolKind::PaperFlux => None,
+            ProtocolKind::Tots => None,
         };
         filename
             .and_then(|name| std::env::current_exe().ok()?.parent().map(|p| p.join(name)))
@@ -652,11 +764,9 @@ async fn vpn_connect(
                     return err(500, format!("download CSQTTR failed: {}", e));
                 }
             }
-            ProtocolKind::PaperFlux => {
-                if let Err(e) =
-                    core_manager::download_paperflux(&client, &core_path, &state.events).await
-                {
-                    return err(500, format!("download PaperFlux failed: {}", e));
+            ProtocolKind::Tots => {
+                if let Err(e) = core_manager::download_tots(&client, &core_path, &state.events).await {
+                    return err(500, format!("download ToTS failed: {}", e));
                 }
             }
         }
@@ -691,13 +801,38 @@ async fn vpn_connect(
     let mut auto_api_call_ids: Vec<String> = Vec::new();
 
     if matches!(kind, ProtocolKind::Csqtt | ProtocolKind::Csqttr)
-        && settings.auth_mode == "autoApi"
+        && settings.auth_mode == "externalHashes"
+    {
+        if settings.external_hashes_url.trim().is_empty() {
+            return err(400, "external hashes URL is empty");
+        }
+        state.log("[VPN] downloading external hashes from Yandex Disk");
+        match fetch_external_hashes(&settings.external_hashes_url).await {
+            Ok(hashes) => {
+                let count = hashes.split(',').filter(|v| !v.is_empty()).count();
+                settings.vk_hashes = hashes;
+                config.hashes.clear();
+                state.log(format!("[VPN] external hashes loaded ({count})"));
+            }
+            Err(message) => {
+                state.log(format!("[VPN] external hashes failed: {message}"));
+                return err(502, message);
+            }
+        }
+    }
+
+    let tots_auto_api = kind == ProtocolKind::Tots
+        && settings.tots_vk_enabled
+        && settings.tots_vk_auth_mode == "autoApi";
+    if (matches!(kind, ProtocolKind::Csqtt | ProtocolKind::Csqttr)
+        && settings.auth_mode == "autoApi") || tots_auto_api
     {
         let token = match vk::read_token(&state.app_dir) {
             Some(token) => token,
             None => return err(400, "Auto API requires VK token"),
         };
-        let count = vk::call_count_for_workers(settings.workers, settings.auto_api_workers);
+        let call_workers = if kind == ProtocolKind::Tots { settings.tots_workers } else { settings.workers };
+        let count = vk::call_count_for_workers(call_workers, settings.auto_api_workers);
         let client = vk::VkApiClient::new(token);
         let mut hashes: Vec<String> = Vec::new();
 
@@ -736,15 +871,38 @@ async fn vpn_connect(
             return err(500, "Auto API could not create any VK calls");
         }
 
-        settings.vk_hashes = hashes.join(",");
-        // Auto API hashes are session-scoped and must win over hashes stored in
-        // the selected config. Clearing only this in-memory clone makes
-        // build_args take settings.vk_hashes without modifying the saved config.
-        config.hashes.clear();
-        state.log(format!(
-            "[VK] Auto API: received {} hash(es); passing them to CSQTT via --vk",
-            hashes.len()
-        ));
+        if kind == ProtocolKind::Tots {
+            settings.tots_vk_call_links = hashes.iter()
+                .map(|hash| format!("https://vk.ru/call/join/{}", hash))
+                .collect::<Vec<_>>()
+                .join("\n");
+            state.log(format!(
+                "[VK] Auto API: received {} call(s); passing join links to ToTS provider_data",
+                hashes.len()
+            ));
+        } else {
+            settings.vk_hashes = hashes.join(",");
+            // Auto API hashes are session-scoped and must win over hashes stored in
+            // the selected config. Clearing only this in-memory clone makes
+            // build_args take settings.vk_hashes without modifying the saved config.
+            config.hashes.clear();
+            state.log(format!(
+                "[VK] Auto API: received {} hash(es); passing them to CSQTT via --vk",
+                hashes.len()
+            ));
+        }
+    }
+
+    if kind == ProtocolKind::Tots && settings.tots_jazz_enabled && settings.tots_jazz_random_name {
+        const JAZZ_NAMES: &[&str] = &[
+            "Иван", "Владимир", "Алексей", "Михаил", "Александр", "Дмитрий",
+            "Николай", "Сергей", "Андрей", "Павел", "Мария", "Анна",
+            "Елена", "Ольга", "Наталья", "Ирина", "Дарья", "София",
+        ];
+        let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+            .map(|v| v.as_nanos() as usize).unwrap_or(0);
+        settings.tots_jazz_room_name = JAZZ_NAMES[seed % JAZZ_NAMES.len()].to_string();
+        state.log(format!("[ToTS][Jazz] random room name: {}", settings.tots_jazz_room_name));
     }
 
     vpn::configure_bypass_routes(
@@ -757,10 +915,6 @@ async fn vpn_connect(
         && matches!(kind, ProtocolKind::Csqtt | ProtocolKind::Csqttr);
     let share_socks5 = settings.share_vpn;
 
-    if settings.desktop_socks5_mode && kind == ProtocolKind::PaperFlux {
-        state.log("[PROXY] desktop SOCKS5 mode is only available for CSQTT/CSQTTR; using normal VPN mode");
-    }
-
     // Every fresh core start gets a fresh core log. This is intentionally done
     // before spawn so reconnecting cannot expose stale readiness/stat lines.
     if let Err(e) = tokio::fs::write(&state.logs_path, b"").await {
@@ -769,7 +923,14 @@ async fn vpn_connect(
         return err(500, format!("cannot clear core log before start: {}", e));
     }
 
-    let args = core_manager::build_args(&config, &settings, vpn::CORE_LISTEN_PORT);
+    let args = match core_manager::build_args(&config, &settings, vpn::CORE_LISTEN_PORT) {
+        Ok(args) => args,
+        Err(e) => {
+            let ids = std::mem::take(&mut auto_api_call_ids);
+            stop_vk_calls(&state, ids).await;
+            return err(400, format!("cannot build {} arguments: {}", kind.id(), e));
+        }
+    };
     // Arguments may contain passwords, VK hashes, tokens and profile URLs.
     state.log(format!("[VPN] core starting ({} arguments)", args.len()));
 
@@ -778,7 +939,7 @@ async fn vpn_connect(
         &args,
         &state.logs_path,
         state.events.clone(),
-        matches!(kind, ProtocolKind::Csqtt | ProtocolKind::Csqttr),
+        matches!(kind, ProtocolKind::Csqtt | ProtocolKind::Csqttr | ProtocolKind::Tots),
     )
         .await
     {
@@ -805,24 +966,48 @@ async fn vpn_connect(
 
     let state2 = state.clone();
     let kind_for_watchdog = kind;
+    let watchdog_timeout = if kind == ProtocolKind::Tots {
+        // tots-client waits up to 45s + 5s per requested worker before its
+        // own healthy-pool deadline. Give the subsequent TUN/route setup room.
+        Duration::from_secs((45 + settings.tots_workers.max(1) as u64 * 5).min(300) + 30)
+    } else {
+        Duration::from_secs(90)
+    };
     let watchdog = tokio::spawn(async move {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
+        let deadline = tokio::time::Instant::now() + watchdog_timeout;
         let mut last_size = 0u64;
         let mut tun_ip: Option<String> = None;
         let mut tun_dns: Option<String> = None;
         let mut consecutive_active_ticks: i32 = 0;
         let mut tun_started = false;
         let mut previous_logs_cleared = false;
+        let mut tots_ready = false;
+        let mut core_exited_before_ready = false;
 
         while tokio::time::Instant::now() < deadline && !tun_started {
-            if core_stopped(&state2) { break; }
+            if core_stopped(&state2) {
+                core_exited_before_ready = true;
+                break;
+            }
 
             if let Ok(meta) = tokio::fs::metadata(&state2.logs_path).await {
                 if meta.len() > last_size {
                     if let Ok(content) = tokio::fs::read_to_string(&state2.logs_path).await {
                         let start = (last_size as usize).min(content.len());
                         let new_part = &content[start..];
-                        for line in new_part.lines() {
+                        // The core log writer appends the line and newline in
+                        // separate writes. Consume only complete lines so a
+                        // poll cannot discard half of a ToTS status record.
+                        let complete_len = new_part.rfind('\n').map(|idx| idx + 1).unwrap_or(0);
+                        for line in new_part[..complete_len].lines() {
+                            if kind_for_watchdog == ProtocolKind::Tots {
+                                // Do not treat a healthy worker pool as a live VPN:
+                                // ToTS still has to open TUN and install its routes.
+                                if vpn::is_tots_tun_connected(line) {
+                                    tots_ready = true;
+                                }
+                                update_tots_metrics_from_line(&state2, line);
+                            }
                             if let Some((ip, dns)) = vpn::parse_tunconf(line) {
                                 tun_ip = Some(ip);
                                 tun_dns = Some(dns);
@@ -868,17 +1053,29 @@ async fn vpn_connect(
                                 }
                             }
                         }
-                        last_size = meta.len();
+                        if complete_len > 0 {
+                            last_size = start as u64 + complete_len as u64;
+                        }
                     }
                 }
             }
 
             let ready = match kind_for_watchdog {
                 ProtocolKind::Csqtt | ProtocolKind::Csqttr => consecutive_active_ticks >= 3,
-                ProtocolKind::PaperFlux => consecutive_active_ticks >= 1 || last_size > 0,
+                ProtocolKind::Tots => tots_ready,
             };
 
-            if ready {
+            if ready && !core_stopped(&state2) {
+                if kind_for_watchdog == ProtocolKind::Tots {
+                    state2.vpn.running.store(true, std::sync::atomic::Ordering::Release);
+                    *state2.vpn.started_at.lock() = Some(std::time::Instant::now());
+                    *state2.vpn.session_id.lock() = uuid::Uuid::new_v4().to_string();
+                    state2.vpn.set_phase("connected", "Подключено");
+                    state2.events.emit(Event::status_detail(true, "connected", "Подключено"));
+                    state2.log("[VPN] connected (ToTS owns the desktop TUN)");
+                    tun_started = true;
+                    continue;
+                }
                 let ip = tun_ip
                     .clone()
                     .unwrap_or_else(|| vpn::DEFAULT_TUN_IP.to_string());
@@ -992,13 +1189,20 @@ async fn vpn_connect(
         }
 
         if !tun_started {
-            state2.log("[VPN] timeout waiting for 3 consecutive active ticks");
-            state2.vpn.set_phase("error", "Таймаут проверки подключения");
-            state2.events.emit(Event::status_detail(
-                false,
-                "error",
-                "Таймаут проверки подключения",
-            ));
+            let (message, phase_message) = if core_exited_before_ready {
+                (
+                    format!("[VPN] {} process exited before reporting TUN readiness; see the preceding [CORE] error", kind_for_watchdog.id()),
+                    "Ядро завершилось до поднятия TUN",
+                )
+            } else {
+                (
+                    format!("[VPN] timeout waiting for {} readiness", kind_for_watchdog.id()),
+                    "Таймаут проверки подключения",
+                )
+            };
+            state2.log(message);
+            state2.vpn.set_phase("error", phase_message);
+            state2.events.emit(Event::status_detail(false, "error", phase_message));
         }
 
         if tun_started {
@@ -1009,6 +1213,30 @@ async fn vpn_connect(
                 if split_requested && !crate::split_routing::alive(&state2.vpn) {
                     state2.log("[ROUTE] Маршрутизатор остановился; соединение отключается".to_string());
                     break;
+                }
+                // ToTS owns the TUN process, so its periodic structured status
+                // lines are the source of byte counters and healthy worker count.
+                // Keep tailing after connect; the old watchdog stopped reading
+                // logs as soon as TUN became ready, leaving stats permanently 0.
+                if kind_for_watchdog == ProtocolKind::Tots {
+                    if let Ok(meta) = tokio::fs::metadata(&state2.logs_path).await {
+                        if meta.len() < last_size {
+                            last_size = 0;
+                        }
+                        if meta.len() > last_size {
+                            if let Ok(content) = tokio::fs::read_to_string(&state2.logs_path).await {
+                                let start = (last_size as usize).min(content.len());
+                                let new_part = &content[start..];
+                                let complete_len = new_part.rfind('\n').map(|idx| idx + 1).unwrap_or(0);
+                                for line in new_part[..complete_len].lines() {
+                                    update_tots_metrics_from_line(&state2, line);
+                                }
+                                if complete_len > 0 {
+                                    last_size = start as u64 + complete_len as u64;
+                                }
+                            }
+                        }
+                }
                 }
                 tokio::time::sleep(Duration::from_millis(250)).await;
             }
@@ -1066,6 +1294,7 @@ async fn vpn_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let active_id = *state.vpn.active_config_id.lock();
     let cfg_id = if active_id != 0 { active_id } else { selected_id };
     let s = state.vpn.status(cfg_id);
+    let stats = state.vpn.stats();
     let socks5_port = *state.socks5_port.read();
     let settings = state.settings.read();
     let socks5_host = if socks5_port == 0 {
@@ -1082,6 +1311,18 @@ async fn vpn_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "configId": s.config_id,
         "message": s.message,
         "since": s.since,
+        "rxBytes": stats.rx_bytes,
+        "txBytes": stats.tx_bytes,
+        "rxRate": stats.rx_rate,
+        "txRate": stats.tx_rate,
+        "workers": stats.workers,
+        "workersTarget": stats.workers_target,
+        "workersVk": stats.workers_vk,
+        "workersJazz": stats.workers_jazz,
+        "workersYaDocs": stats.workers_ya_docs,
+        "workersMailDocs": stats.workers_mail_docs,
+        "workersCups": stats.workers_cups,
+        "activeSessions": stats.active_sessions,
         "socks5Port": socks5_port,
         "socks5Host": socks5_host,
         "socks5Mode": settings.desktop_socks5_mode,
@@ -1111,6 +1352,13 @@ async fn vpn_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "rxRate": s.rx_rate,
         "txRate": s.tx_rate,
         "activeSessions": s.active_sessions,
+        "workers": s.workers,
+        "workersTarget": s.workers_target,
+        "workersVk": s.workers_vk,
+        "workersJazz": s.workers_jazz,
+        "workersYaDocs": s.workers_ya_docs,
+        "workersMailDocs": s.workers_mail_docs,
+        "workersCups": s.workers_cups,
         "socks5Port": socks5_port,
     }))
 }
@@ -1231,7 +1479,7 @@ fn latest_file_for(state: &AppState, protocol: &str) -> std::path::PathBuf {
         state.app_dir.join(match kind {
             ProtocolKind::Csqtt => "LATEST.Csqtt",
             ProtocolKind::Csqttr => "LATEST.Csqttr",
-            ProtocolKind::PaperFlux => "LATEST.PaperFlux",
+            ProtocolKind::Tots => "LATEST.ToTS",
         })
     }
 }
@@ -1268,9 +1516,7 @@ async fn core_latest_p(
             ProtocolKind::Csqttr => {
                 core_manager::fetch_latest_csqttr(&client, &state.events).await
             }
-            ProtocolKind::PaperFlux => {
-                core_manager::fetch_latest_paperflux(&client, &state.events).await
-            }
+            ProtocolKind::Tots => Some("latest".to_string()),
         }
     };
     match v {
@@ -1298,11 +1544,7 @@ async fn core_check_p(
             ProtocolKind::Csqttr => core_manager::fetch_latest_csqttr(&client, &state.events)
                 .await
                 .unwrap_or_default(),
-            ProtocolKind::PaperFlux => {
-                core_manager::fetch_latest_paperflux(&client, &state.events)
-                    .await
-                    .unwrap_or_default()
-            }
+            ProtocolKind::Tots => "latest".to_string(),
         }
     };
     let latest_file = latest_file_for(&state, &proto);
@@ -1340,7 +1582,7 @@ async fn core_download_async_p(
             match kind {
                 ProtocolKind::Csqtt => state2.app_dir.join("LATEST.Csqtt"),
                 ProtocolKind::Csqttr => state2.app_dir.join("LATEST.Csqttr"),
-                ProtocolKind::PaperFlux => state2.app_dir.join("LATEST.PaperFlux"),
+                ProtocolKind::Tots => state2.app_dir.join("LATEST.ToTS"),
             }
         };
 
@@ -1395,16 +1637,16 @@ async fn core_download_async_p(
                     None => state2.events.emit(Event::error("cannot fetch CSQTTR LATEST".to_string())),
                 }
             }
-            ProtocolKind::PaperFlux => {
+            ProtocolKind::Tots => {
                 state2.events.emit(Event::progress("core_download", 20));
-                match core_manager::download_paperflux(&client, &dest, &state2.events).await {
+                match core_manager::download_tots(&client, &dest, &state2.events).await {
                     Ok(_) => {
                         let _ = tokio::fs::write(&latest_file, "latest").await;
                         state2.events.emit(Event::progress("core_download", 100));
-                        state2.log("[CORE] PaperFlux updated".to_string());
+                        state2.log("[CORE] ToTS updated".to_string());
                     }
                     Err(e) => {
-                        state2.log(format!("[CORE] PaperFlux download failed: {}", e));
+                        state2.log(format!("[CORE] ToTS download failed: {}", e));
                         state2.events.emit(Event::error(e.to_string()));
                     }
                 }
@@ -1473,8 +1715,8 @@ async fn core_download_sync_p(
                 None => Err(anyhow::anyhow!("cannot fetch CSQTTR LATEST")),
             }
         }
-        ProtocolKind::PaperFlux => {
-            match core_manager::download_paperflux(&client, &dest, &state.events).await {
+        ProtocolKind::Tots => {
+            match core_manager::download_tots(&client, &dest, &state.events).await {
                 Ok(_) => {
                     let _ = tokio::fs::write(&latest_file, "latest").await;
                     Ok("latest".to_string())

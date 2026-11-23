@@ -4,17 +4,18 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'glass_dialog.dart';
 import '../state/openwrt_installer.dart';
 import '../state/router_scanner.dart';
+import '../utils/log_exporter.dart';
 
 Future<String?> showOpenWrtActionDialog(BuildContext context) {
   return showDialog<String>(
     context: context,
-    barrierColor: Colors.black.withOpacity(0.65),
-    builder: (context) => AlertDialog(
-      backgroundColor: const Color(0xFF0F1540),
-      title: const Text('OpenWRT'),
-      content: const Text('Что сделать с роутером?'),
+    barrierColor: Colors.transparent,
+    builder: (context) => GlassAlertDialog(
+      title: const Text('Роутер (OpenWRT / Keenetic)'),
+      content: const Text('Что сделать с роутером? Поддерживаются OpenWRT и KeeneticOS.'),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
@@ -38,7 +39,7 @@ Future<String?> showOpenWrtActionDialog(BuildContext context) {
 Future<void> showOpenWrtInstallFlow(BuildContext context) async {
   final host = await showDialog<String>(
     context: context,
-    barrierColor: Colors.black.withOpacity(0.65),
+    barrierColor: Colors.transparent,
     builder: (_) => const _SshHostModal(),
   );
   if (host == null || !context.mounted) return;
@@ -56,9 +57,10 @@ Future<void> showOpenWrtInstallFlow(BuildContext context) async {
   await showDialog<void>(
     context: context,
     barrierDismissible: false,
-    barrierColor: Colors.black.withOpacity(0.7),
+    barrierColor: Colors.transparent,
     builder: (_) => _InstallProgressDialog(
       host: host,
+      port: credentials.port,
       username: credentials.username,
       password: credentials.password,
     ),
@@ -68,8 +70,9 @@ Future<void> showOpenWrtInstallFlow(BuildContext context) async {
 class _SshCredentials {
   final String username;
   final String password;
+  final int port;
 
-  const _SshCredentials(this.username, this.password);
+  const _SshCredentials(this.username, this.password, {this.port = 22});
 }
 
 Future<_SshCredentials?> _showCredentialsDialog(
@@ -78,7 +81,7 @@ Future<_SshCredentials?> _showCredentialsDialog(
 ) {
   return showDialog<_SshCredentials>(
     context: context,
-    barrierColor: Colors.black.withOpacity(0.65),
+    barrierColor: Colors.transparent,
     builder: (_) => _SshCredentialsDialog(host: host),
   );
 }
@@ -95,6 +98,7 @@ class _SshCredentialsDialog extends StatefulWidget {
 class _SshCredentialsDialogState extends State<_SshCredentialsDialog> {
   late final TextEditingController _userCtl;
   late final TextEditingController _passCtl;
+  late final TextEditingController _portCtl;
   bool _obscure = true;
 
   @override
@@ -102,39 +106,60 @@ class _SshCredentialsDialogState extends State<_SshCredentialsDialog> {
     super.initState();
     _userCtl = TextEditingController(text: 'root');
     _passCtl = TextEditingController();
+    _portCtl = TextEditingController(text: '22');
   }
 
   void _submit() {
     final user = _userCtl.text.trim();
     if (user.isEmpty) return;
+    final port = int.tryParse(_portCtl.text.trim()) ?? 22;
     FocusScope.of(context).unfocus();
-    Navigator.pop(context, _SshCredentials(user, _passCtl.text));
+    Navigator.pop(context, _SshCredentials(user, _passCtl.text, port: port));
   }
 
   @override
   void dispose() {
     _userCtl.dispose();
     _passCtl.dispose();
+    _portCtl.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: const Color(0xFF0F1540),
+    return GlassAlertDialog(
       title: Text('SSH · ${widget.host}'),
       content: SizedBox(
         width: 380,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            TextField(
-              controller: _userCtl,
-              autofocus: true,
-              decoration: const InputDecoration(
-                labelText: 'Логин SSH',
-                hintText: 'root',
-              ),
+            Row(
+              children: [
+                Expanded(
+                  flex: 3,
+                  child: TextField(
+                    controller: _userCtl,
+                    autofocus: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Логин SSH',
+                      hintText: 'root',
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  flex: 2,
+                  child: TextField(
+                    controller: _portCtl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'Порт SSH',
+                      hintText: '22 (Keenetic: 222)',
+                    ),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 10),
             TextField(
@@ -153,8 +178,9 @@ class _SshCredentialsDialogState extends State<_SshCredentialsDialog> {
             ),
             const SizedBox(height: 10),
             Text(
-              'Клиент подключится к порту 22, создаст ~/la-lune/, '
-              'установит backend и при необходимости CSQTT-ядро.',
+              'Поддерживаются OpenWRT и KeeneticOS (через Entware). '
+              'Порт по умолчанию 22 (для Keenetic может быть 222). '
+              'Для KN-3012 Speedster включите OPKG во внутренней памяти.',
               style: TextStyle(
                 fontSize: 11.5,
                 height: 1.45,
@@ -270,8 +296,7 @@ class _SshHostModalState extends State<_SshHostModal> {
 
   @override
   Widget build(BuildContext context) {
-    return Dialog(
-      backgroundColor: const Color(0xFF0F1540),
+    return GlassDialog(
       insetPadding: const EdgeInsets.all(20),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
@@ -431,11 +456,13 @@ class _SshHostModalState extends State<_SshHostModal> {
 
 class _InstallProgressDialog extends StatefulWidget {
   final String host;
+  final int port;
   final String username;
   final String password;
 
   const _InstallProgressDialog({
     required this.host,
+    this.port = 22,
     required this.username,
     required this.password,
   });
@@ -447,6 +474,27 @@ class _InstallProgressDialog extends StatefulWidget {
 class _InstallProgressDialogState extends State<_InstallProgressDialog> {
   String _status = 'Подготовка...';
   OpenWrtInstallResult? _result;
+  bool _sharing = false;
+
+  Future<void> _shareLog(OpenWrtInstallResult result) async {
+    if (_sharing || result.log.isEmpty) return;
+    setState(() => _sharing = true);
+    try {
+      await shareLogAsTxtFile(
+        content: result.log,
+        prefix: 'lalune_openwrt_install',
+        subject: 'LaLune OpenWRT install log (${widget.host})',
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Не удалось поделиться логом: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _sharing = false);
+    }
+  }
 
   @override
   void initState() {
@@ -457,6 +505,7 @@ class _InstallProgressDialogState extends State<_InstallProgressDialog> {
   Future<void> _run() async {
     final result = await OpenWrtInstaller.install(
       host: widget.host,
+      port: widget.port,
       username: widget.username,
       password: widget.password,
       onProgress: (message) {
@@ -471,9 +520,8 @@ class _InstallProgressDialogState extends State<_InstallProgressDialog> {
     final result = _result;
     return PopScope(
       canPop: result != null,
-      child: AlertDialog(
-        backgroundColor: const Color(0xFF0F1540),
-        title: Text(result == null
+      child: GlassAlertDialog(
+          title: Text(result == null
             ? 'Установка OpenWRT'
             : (result.ok ? 'Готово' : 'Ошибка установки')),
         content: SizedBox(
@@ -521,6 +569,12 @@ class _InstallProgressDialogState extends State<_InstallProgressDialog> {
         actions: result == null
             ? null
             : [
+                if (result.log.isNotEmpty)
+                  OutlinedButton.icon(
+                    onPressed: _sharing ? null : () => _shareLog(result),
+                    icon: const Icon(Icons.share_outlined, size: 18),
+                    label: const Text('Поделиться логом'),
+                  ),
                 ElevatedButton(
                   onPressed: () => Navigator.pop(context),
                   child: const Text('Готово'),

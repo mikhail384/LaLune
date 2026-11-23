@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //
-// Конфиги OpenWRT (только CSQTT, без PaperFlux).
+// Конфиги OpenWRT (поддерживаемые OpenWRT-протоколы).
 //
 // Приоритет парсеров csqtt://:
 //   1. csqtt-link (Rust, AES-256-GCM)
@@ -172,7 +172,7 @@ pub fn normalize_for_core(
     let trimmed = raw.trim();
     let lower = trimmed.to_ascii_lowercase();
     let mut best: Option<(usize, &str)> = None;
-    for scheme in ["csqttr://", "csqtt://", "olcrtc://", "tots://", "openflux://"] {
+    for scheme in ["csqttr://", "csqtt://", "olcrtc://", "tots://"] {
         if let Some(i) = lower.find(scheme) {
             if best.map_or(true, |(b, _)| i < b) {
                 best = Some((i, scheme));

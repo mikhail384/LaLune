@@ -248,7 +248,6 @@ def verify_stamped_version(version: str, build_number: int, windows_version: str
     require_text("Frontend/ios/project.yml", f'MARKETING_VERSION: "{version}"')
     require_text("Frontend/ios/project.yml", f'CURRENT_PROJECT_VERSION: "{build_number}"')
     require_text("Frontend/ios/Runner.xcodeproj/project.pbxproj", f'MARKETING_VERSION = {version};')
-    require_text("Backend/iOS/Info-patch.md", f'<string>{version}</string>')
     # README-OPENWRT.md is intentionally versionless; do not couple release stamping to docs.
 
     for lock_path, package_name in (
@@ -405,20 +404,6 @@ def main() -> int:
 
     # Keep version-bearing deployment/documentation snippets from lying about
     # the current release when somebody follows them manually.
-    replace_regex(
-        "Backend/iOS/Info-patch.md",
-        r'(<key>CFBundleShortVersionString</key>\s*\n<string>)[^<]+(</string>)',
-        rf"\g<1>{version}\g<2>",
-        count=1,
-        expected=1,
-    )
-    replace_regex(
-        "Backend/iOS/Info-patch.md",
-        r'(<key>CFBundleVersion</key>\s*\n<string>)[^<]+(</string>)',
-        rf"\g<1>{build_number}\g<2>",
-        count=1,
-        expected=1,
-    )
     # Installer/README-OPENWRT.md no longer embeds a literal JSON version.
     # Keeping the README out of release stamping makes workflow_dispatch idempotent
     # and prevents documentation wording changes from breaking the whole build.

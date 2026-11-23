@@ -8,6 +8,7 @@
 // Снизу — кнопка «Ввести IP роутера вручную».
 
 import 'package:flutter/material.dart';
+import 'glass_dialog.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/router_info.dart';
@@ -16,7 +17,7 @@ import '../state/router_notifier.dart';
 Future<RouterInfo?> showRouterModal(BuildContext context) {
   return showDialog<RouterInfo>(
     context: context,
-    barrierColor: Colors.black.withOpacity(0.65),
+    barrierColor: Colors.transparent,
     builder: (_) => const _RouterModal(),
   );
 }
@@ -80,8 +81,7 @@ class _RouterModalState extends ConsumerState<_RouterModal> {
     final list = map.values.toList()
       ..sort((a, b) => a.ip.compareTo(b.ip));
 
-    return Dialog(
-      backgroundColor: const Color(0xFF0F1540),
+    return GlassDialog(
       insetPadding: const EdgeInsets.all(20),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
@@ -250,12 +250,12 @@ class _RouterTile extends ConsumerWidget {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
           color: active
-              ? const Color(0xFF4A6CF7).withOpacity(0.18)
+              ? const Color(0xFF2FBF71).withOpacity(0.18)
               : Colors.white.withOpacity(0.04),
           borderRadius: BorderRadius.circular(10),
           border: Border.all(
             color: active
-                ? const Color(0xFF4A6CF7).withOpacity(0.55)
+                ? const Color(0xFF2FBF71).withOpacity(0.55)
                 : Colors.white.withOpacity(0.08),
           ),
         ),

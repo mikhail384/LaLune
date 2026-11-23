@@ -30,4 +30,23 @@ void main() {
     expect(rect.top, greaterThanOrEqualTo(viewport.top));
     expect(rect.bottom, lessThanOrEqualTo(viewport.bottom));
   });
+
+  testWidgets('does not cover the page with a modal scrim', (tester) async {
+    await tester.pumpWidget(MaterialApp(home: Builder(builder: (context) {
+      return TextButton(
+        onPressed: () => showAddConfigDialog(context),
+        child: const Text('open-no-scrim'),
+      );
+    })));
+
+    await tester.tap(find.text('open-no-scrim'));
+    await tester.pump();
+
+    final barriers = tester.widgetList<ModalBarrier>(find.byType(ModalBarrier));
+    expect(
+      barriers.where((barrier) => barrier.color == Colors.transparent),
+      isNotEmpty,
+    );
+  });
+
 }

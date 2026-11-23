@@ -23,6 +23,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.IpPrefix
+import android.net.LocalServerSocket
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -30,9 +31,11 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -40,13 +43,16 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.io.RandomAccessFile
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
+import java.util.UUID
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -69,9 +75,12 @@ class LaLuneVpnService : VpnService() {
         private const val NOTIFICATION_TICK_MS = 2_000L
 
         const val ACTION_STATUS = "com.lalune.lalune.VPN_STATUS"
+        const val ACTION_LOG = "com.lalune.lalune.VPN_LOG"
         const val EXTRA_CONNECTED = "connected"
         const val EXTRA_STATE = "state"
         const val EXTRA_MESSAGE = "message"
+        const val EXTRA_LOG_LINE = "line"
+        const val EXTRA_LOG_CORE = "core"
 
         /**
          * Process-wide snapshot of the last published VPN state. A freshly
@@ -107,6 +116,15 @@ class LaLuneVpnService : VpnService() {
             }
             ctx.sendBroadcast(i)
         }
+
+        fun notifyLog(ctx: Context, line: String, core: Boolean = false) {
+            val i = Intent(ACTION_LOG).apply {
+                setPackage(ctx.packageName)
+                putExtra(EXTRA_LOG_LINE, line)
+                putExtra(EXTRA_LOG_CORE, core)
+            }
+            ctx.sendBroadcast(i)
+        }
     }
 
     @Volatile private var detectedTunIP: String? = null
@@ -120,6 +138,8 @@ class LaLuneVpnService : VpnService() {
 
     private var vpnInterface: ParcelFileDescriptor? = null
     private var udpSocket: DatagramSocket? = null
+    private var totsTunFd: ParcelFileDescriptor? = null
+    private var totsRuntime: JSONObject? = null
     @Volatile private var isRunning = false
     @Volatile private var tunEstablished = false
     @Volatile private var establishing = false
@@ -136,11 +156,13 @@ class LaLuneVpnService : VpnService() {
         super.onCreate()
         coreManager = CoreManager(this)
         startForegroundCompat()
+        notifyLog(this, "[VPN] service created")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             "START" -> if (!isRunning) {
+                notifyLog(this, "[VPN] START received; configId=$snapshotConfigId")
                 isRunning = true
                 publishState("connecting", false, "Подключение")
                 startFlow()
@@ -160,8 +182,30 @@ class LaLuneVpnService : VpnService() {
         snapshotSessionId = java.util.UUID.randomUUID().toString()
         flowJob?.cancel()
         flowJob = scope.launch {
-            val logsFile = File(filesDir, "la-lune/logs.log")
-            watchLogsAndManageTunnel(logsFile)
+            val runtimeFile = File(filesDir, "la-lune/tots_runtime.json")
+            totsRuntime = try {
+                if (runtimeFile.exists()) JSONObject(runtimeFile.readText()) else null
+            } catch (e: Exception) {
+                Log.e(TAG, "invalid ToTS runtime: ${e.message}")
+                notifyLog(this@LaLuneVpnService, "[VPN] invalid ToTS runtime: ${e.message.orEmpty()}")
+                null
+            }
+            if (totsRuntime != null) {
+                notifyLog(this@LaLuneVpnService, "[VPN] ToTS runtime loaded; creating TUN")
+                establishing = true
+                val established = establishTun()
+                establishing = false
+                if (established && isRunning) {
+                    publishState("connected", true, "Подключено")
+                    Log.i(TAG, "ToTS TUN established and core received its descriptor over SCM_RIGHTS")
+                } else if (isRunning) {
+                    publishState("error", false, "Не удалось запустить ToTS")
+                    stopFlow()
+                }
+            } else {
+                val logsFile = File(filesDir, "la-lune/logs.log")
+                watchLogsAndManageTunnel(logsFile)
+            }
         }
         startNotificationTicker()
     }
@@ -316,14 +360,17 @@ class LaLuneVpnService : VpnService() {
 
         teardownTunnelOnlyLocked("before establish")
         try {
-            val tunIP = detectedTunIP ?: DEFAULT_TUN_IP
+            val runtime = totsRuntime
+            val isTots = runtime != null
+            val tunIP = if (isTots) runtime!!.optString("virtualIp", DEFAULT_TUN_IP) else detectedTunIP ?: DEFAULT_TUN_IP
+            val tunMtu = if (isTots) runtime!!.optInt("mtu", MTU).coerceIn(576, 1400) else MTU
             val dnsList = (detectedDNS ?: "$DEFAULT_DNS_1,$DEFAULT_DNS_2")
                 .split(",").map { it.trim() }.filter { it.isNotEmpty() }
 
             val routing = readRoutingSettings()
             val builder = Builder()
-                .setSession("LaLune")
-                .setMtu(MTU)
+                .setSession(if (isTots) "LaLune · ToTS" else "LaLune")
+                .setMtu(tunMtu)
                 .addAddress(tunIP, 32)
 
             val configuredIps = routing.optString("ipRoutingIps", "")
@@ -364,14 +411,32 @@ class LaLuneVpnService : VpnService() {
             val appArray = routing.optJSONArray("androidVpnApps") ?: JSONArray()
             val selectedPackages = (0 until appArray.length())
                 .mapNotNull { appArray.optString(it).takeIf { name -> name.isNotBlank() } }
+                .filter { !isTots || it != packageName }
                 .distinct()
             if (appMode == "whitelist") {
+                // With an allow-list Android cannot simultaneously add the VPN
+                // host to the disallow-list. Therefore at least one *other* app
+                // must be allowed for ToTS; otherwise an empty allow-list means
+                // "all apps" and the native ToTS transport would recurse into
+                // its own TUN.
+                if (isTots && selectedPackages.isEmpty()) {
+                    Log.e(TAG, "ToTS app whitelist is empty after excluding the LaLune package")
+                    notifyLog(this@LaLuneVpnService, "[VPN] ToTS: выберите хотя бы одно приложение для whitelist")
+                    return@withLock false
+                }
+                var allowedCount = 0
                 selectedPackages.forEach { packageName ->
                     try {
                         builder.addAllowedApplication(packageName)
+                        allowedCount++
                     } catch (e: Exception) {
                         Log.w(TAG, "Cannot allow app '$packageName': ${e.message}")
                     }
+                }
+                if (isTots && allowedCount == 0) {
+                    Log.e(TAG, "ToTS app whitelist has no valid applications")
+                    notifyLog(this@LaLuneVpnService, "[VPN] ToTS: whitelist не содержит доступных приложений")
+                    return@withLock false
                 }
             } else {
                 selectedPackages.forEach { packageName ->
@@ -403,6 +468,111 @@ class LaLuneVpnService : VpnService() {
             val iface = withContext(Dispatchers.Main) { builder.establish() } ?: run {
                 Log.e(TAG, "establish() null — no VPN permission")
                 return@withLock false
+            }
+
+            if (isTots) {
+                val inherited = try {
+                    ParcelFileDescriptor.dup(iface.fileDescriptor)
+                } catch (e: Exception) {
+                    try { iface.close() } catch (_: Exception) {}
+                    Log.e(TAG, "cannot duplicate ToTS TUN fd: ${e.message}", e)
+                    return@withLock false
+                }
+                // Do not pass the numeric fd through ProcessBuilder. Android's
+                // child-process launcher may close non-standard descriptors even
+                // after FD_CLOEXEC has been cleared. Transfer it explicitly with
+                // SCM_RIGHTS over an abstract AF_UNIX socket instead.
+                val fdSocketName = "lalune-tots-${UUID.randomUUID().toString().replace("-", "")}"
+                val fdServer = try {
+                    LocalServerSocket(fdSocketName)
+                } catch (e: Exception) {
+                    try { inherited.close() } catch (_: Exception) {}
+                    try { iface.close() } catch (_: Exception) {}
+                    Log.e(TAG, "cannot create ToTS fd handoff socket: ${e.message}", e)
+                    notifyLog(this@LaLuneVpnService, "[VPN] cannot create ToTS fd handoff socket: ${e.message.orEmpty()}")
+                    return@withLock false
+                }
+                val jsonArgs = runtime!!.optJSONArray("args") ?: JSONArray()
+                val args = mutableListOf<String>()
+                for (i in 0 until jsonArgs.length()) args += jsonArgs.optString(i)
+                args += "--tun-fd-socket"
+                args += fdSocketName
+
+                tunnelGeneration++
+                vpnInterface = iface
+                totsTunFd = inherited
+                tunEstablished = true
+                notifyLog(this@LaLuneVpnService, "[VPN] TUN fd=${inherited.fd} ready; starting ToTS")
+                val coreTunReady = CompletableDeferred<Boolean>()
+                val started = coreManager.startCore(
+                    protocol = CoreManager.PROTO_TOTS,
+                    args = args,
+                    onLog = { line ->
+                        Log.i(TAG, line)
+                        notifyLog(this@LaLuneVpnService, line, core = true)
+                        when {
+                            line.contains("ToTS Android TUN connected") -> coreTunReady.complete(true)
+                            line.contains("[CORE] process exited") || line.contains("Error:") -> coreTunReady.complete(false)
+                        }
+                    },
+                )
+                if (!started) {
+                    try { fdServer.close() } catch (_: Exception) {}
+                    notifyLog(this@LaLuneVpnService, "[VPN] ToTS process failed to start")
+                    tunEstablished = false
+                    try { inherited.close() } catch (_: Exception) {}
+                    totsTunFd = null
+                    try { iface.close() } catch (_: Exception) {}
+                    vpnInterface = null
+                    return@withLock false
+                }
+                val handedOff = try {
+                    val acceptJob = scope.async(Dispatchers.IO) { fdServer.accept() }
+                    val client = withTimeoutOrNull(15_000) { acceptJob.await() }
+                    if (client == null) {
+                        try { fdServer.close() } catch (_: Exception) {}
+                        acceptJob.cancel()
+                        throw IOException("ToTS did not request the TUN descriptor within 15 seconds")
+                    }
+                    client.use { socket ->
+                        socket.setFileDescriptorsForSend(arrayOf(inherited.fileDescriptor))
+                        // Android attaches SCM_RIGHTS descriptors to the next write.
+                        socket.outputStream.write(1)
+                        socket.outputStream.flush()
+                    }
+                    true
+                } catch (e: Exception) {
+                    Log.e(TAG, "ToTS TUN fd handoff failed: ${e.message}", e)
+                    notifyLog(this@LaLuneVpnService, "[VPN] ToTS TUN fd handoff failed: ${e.message.orEmpty()}")
+                    false
+                } finally {
+                    try { fdServer.close() } catch (_: Exception) {}
+                }
+                if (!handedOff) {
+                    coreManager.stopCore()
+                    tunEstablished = false
+                    try { inherited.close() } catch (_: Exception) {}
+                    totsTunFd = null
+                    try { iface.close() } catch (_: Exception) {}
+                    vpnInterface = null
+                    return@withLock false
+                }
+                notifyLog(this@LaLuneVpnService, "[VPN] TUN descriptor transferred; waiting for ToTS to confirm epoll readiness")
+                val ready = withTimeoutOrNull(15_000) { coreTunReady.await() } == true
+                if (!ready) {
+                    notifyLog(this@LaLuneVpnService, "[VPN] ToTS did not confirm TUN readiness")
+                    coreManager.stopCore()
+                    tunEstablished = false
+                    try { inherited.close() } catch (_: Exception) {}
+                    totsTunFd = null
+                    try { iface.close() } catch (_: Exception) {}
+                    vpnInterface = null
+                    return@withLock false
+                }
+                Log.i(TAG, "ToTS TUN up and epoll-ready: IP=$tunIP MTU=$tunMtu fd=${inherited.fd}")
+                notifyLog(this@LaLuneVpnService, "[VPN] ToTS TUN connected; IP=$tunIP MTU=$tunMtu")
+                updateNotification()
+                return@withLock true
             }
 
             val socket = try {
@@ -492,6 +662,8 @@ class LaLuneVpnService : VpnService() {
         bridgeJobs.clear()
         try { udpSocket?.close() } catch (_: Exception) {}
         udpSocket = null
+        try { totsTunFd?.close() } catch (_: Exception) {}
+        totsTunFd = null
         try { vpnInterface?.close() } catch (_: Exception) {}
         vpnInterface = null
     }
@@ -511,8 +683,16 @@ class LaLuneVpnService : VpnService() {
         bridgeJobs.clear()
         try { udpSocket?.close() } catch (_: Exception) {}
         udpSocket = null
+        try { totsTunFd?.close() } catch (_: Exception) {}
+        totsTunFd = null
         try { vpnInterface?.close() } catch (_: Exception) {}
         vpnInterface = null
+
+        if (totsRuntime != null) {
+            coreManager.stopCore()
+            try { File(filesDir, "la-lune/tots_runtime.json").delete() } catch (_: Exception) {}
+        }
+        totsRuntime = null
 
         activeSessions = 0
         snapshotActiveSessions = 0

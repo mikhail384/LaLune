@@ -4,13 +4,13 @@
 
 | Файл ↕▾ | Что делает ↕▾ |
 |---|---|
-| −`build.yml` | Desktop (Windows + Linux), Android APK, Token Fetcher, Release |
-| −`build-ios.yml` | iOS IPA (unsigned, для AltStore/Scarlet) |
-⚙
+| `build.yml` | Desktop (Windows + Linux + macOS), OpenWRT, Android APK, Token Fetcher, Release |
+| `build-ios.yml` | iOS IPA (unsigned, для AltStore/Scarlet) |
+| `deploy-site.yml` | Flutter Web → GitHub Pages |
 
 ## Триггеры
 
-Оба workflow запускаются:
+Сборочные workflow запускаются:
 
 - при `push` в `main` / `release` (`build-ios` — ещё `master`)
 - вручную через **Actions → Run workflow**
@@ -24,7 +24,7 @@
 ubuntu-22.04
 ├── python 3.12
 ├── rust stable
-├── flutter 3.24.5
+├── flutter 3.47.5
 ├── apt install gtk3-dev, clang, cmake, ninja, pkg-config
 └── python build.py --ci --target linux
      ├── cargo build --release (Backend/Desktop)
@@ -44,7 +44,7 @@ ubuntu-22.04
 windows-latest
 ├── python 3.12
 ├── rust stable
-├── flutter 3.24.5
+├── flutter 3.47.5
 └── python build.py --ci --target windows
      ├── cargo build --release (Backend/Desktop)
      ├── cargo build --release (Installer/launcher)
@@ -64,19 +64,28 @@ windows-latest
 ```
 ubuntu-latest
 ├── python 3.12
-├── flutter 3.24.5
+├── flutter 3.47.5
 ├── java 17
-├── Android SDK (preinstalled)
-├── copy Backend/Android/*.kt → Frontend/android/.../com/lalune/backend/
-├── copy Assets/ → Frontend/assets/
-├── copy Core/SmartTunnel.lua → Frontend/android/.../assets/
-├── download libclient-android-*.so → jniLibs/
+├── Android SDK + NDK 27
+├── restore Assets/apk-key/my-release-key.jks ONLY from ANDROID_KEYSTORE_BASE64 secret
+├── validate keystore password + alias my-key
+├── write temporary Frontend/android/key.properties from password secrets
+├── build native Android dependencies for supported ABIs
 ├── flutter pub get
-├── flutter build apk --debug
-└── cp app-debug.apk → Output/LaLune-Android.apk
+├── flutter build apk --release
+├── verify APK signature with apksigner
+└── cp signed app-release.apk → Output/LaLune-Android.apk
 ```
 
-Артефакт: `Output-Android` (`LaLune-Android.apk`).
+Артефакт: `Output-Android` (`LaLune-Android.apk`), release-подпись обязательна.
+
+Для сборки нужны GitHub Actions Secrets:
+
+- `ANDROID_KEYSTORE_BASE64` — Base64 содержимое `my-release-key.jks`.
+- `ANDROID_KEYSTORE_PASSWORD` — пароль keystore.
+- `ANDROID_KEY_PASSWORD` — пароль приватного ключа.
+
+CI удаляет любой JKS, пришедший из checkout, и восстанавливает keystore только из `ANDROID_KEYSTORE_BASE64`. Если секрет отсутствует или невалиден, job завершается ошибкой. После сборки временный JKS и `key.properties` удаляются.
 
 ### `build-token-fetcher`
 
@@ -104,7 +113,7 @@ GitHub Release с тегом вида `26.10.03.15.30`.
 ```
 macos-14
 ├── Xcode 15.4
-├── flutter stable
+├── flutter 3.29.0
 ├── xcodegen
 ├── copy Backend/iOS/*.swift → Frontend/ios/Runner/ + Tunnel/
 ├── copy Assets/ → Frontend/assets/

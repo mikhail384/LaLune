@@ -95,6 +95,7 @@ void main() {
 
   group('helpers', () {
     test('subscription detection', () {
+      expect(looksLikeSubscription('http://a.b/sub'), isTrue);
       expect(looksLikeSubscription('https://a.b/sub'), isTrue);
       expect(looksLikeSubscription('LaLuneSUB:https://a.b/sub'), isTrue);
       expect(looksLikeSubscription('data:application/json,{}'), isTrue);
@@ -124,9 +125,64 @@ void main() {
       expect(normalizeSubProtocol('CSQTT-2.5.1'), 'CSQTT 2.5.1');
       expect(normalizeSubProtocol('csqtt-2.1.9'), 'CSQTT 2.1.9');
       expect(normalizeSubProtocol('CSQTTR'), 'CSQTTR');
-      expect(normalizeSubProtocol('paperflux'), 'PaperFlux');
+      expect(normalizeSubProtocol('tots'), 'ToTS');
       expect(normalizeSubProtocol(''), 'CSQTT');
     });
+  });
+
+
+  test('parses icon and configs container from a wrapped JSON response', () {
+    const pixel =
+        'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+    final payload = jsonEncode({
+      'hoster': 'Wrapped',
+      'configs': [
+        {
+          'name': 'ToTS One',
+          'config': 'tots://ZXhhbXBsZQ==',
+          'protocol': 'tots',
+          'expires': 0,
+          'icon': pixel,
+        }
+      ],
+    });
+    final parsed = parseLaLuneSub(
+      'server prefix\n```json\n$payload\n```\nserver suffix',
+      source: 'https://example.test/sub',
+    );
+    expect(parsed.hoster, 'Wrapped');
+    expect(parsed.configs, hasLength(1));
+    expect(parsed.configs.single.protocol, 'ToTS');
+    expect(parsed.configs.single.icon, pixel);
+  });
+
+  test('parses base64url subscription payload and string config entries', () {
+    final payload = jsonEncode({
+      'hoster': 'Base64',
+      'configs': {
+        'A': 'csqttr://example',
+      },
+    });
+    final encoded = base64Url.encode(utf8.encode(payload)).replaceAll('=', '');
+    final parsed = parseLaLuneSub(
+      encoded,
+      source: 'data:text/plain,$encoded',
+    );
+    expect(parsed.hoster, 'Base64');
+    expect(parsed.configs.single.name, 'A');
+    expect(parsed.configs.single.protocol, 'CSQTTR');
+  });
+
+  test('ignores invalid non-image icon data', () {
+    final payload = jsonEncode({
+      'A': {
+        'config': 'csqtt://example',
+        'expires': '0',
+        'icon': 'data:text/plain;base64,SGVsbG8=',
+      }
+    });
+    final parsed = parseLaLuneSub(payload, source: 'https://example.test/sub');
+    expect(parsed.configs.single.icon, isNull);
   });
 
   group('fetchSubscriptionText', () {
@@ -160,7 +216,7 @@ void main() {
         return _resp('no', 503);
       });
       expect(
-          jsonDecode(await fetchSubscriptionText('https://x.test/ok',
+          jsonDecode(await fetchSubscriptionText('http://x.test/ok',
               client: client))['traffic'],
           '10TB');
       await expectLater(

@@ -6,8 +6,10 @@
 
 set -e
 
-BACKEND_BASE="https://github.com/mikhail384/LaLune/releases/latest/download"
+BACKEND_BASE="https://github.com/Endlad2/LaLune/releases/latest/download"
 BACKEND_URL=""
+LUCI_APP_URL="$BACKEND_BASE/luci-app-lalune.tar.gz"
+LUCI_APP_ARCHIVE="/tmp/luci-app-lalune.tar.gz"
 BACKEND_NAME="lalune-openwrt-backend"
 
 APP_DIR="${HOME}/.la-lune"
@@ -31,17 +33,22 @@ warn() { printf "[openwrt][WARN] %s\n" "$*" >&2; }
 fail() { printf "[openwrt][ERROR] %s\n" "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
-install_package() {
-    pkg="$1"
+PKG_UPDATED=0
+install_packages() {
     if have apk; then
-        apk add "$pkg"
+        apk add "$@"
     elif have opkg; then
-        opkg update >/dev/null 2>&1 || true
-        opkg install "$pkg"
+        if [ "$PKG_UPDATED" -eq 0 ]; then
+            opkg update >/dev/null 2>&1 || true
+            PKG_UPDATED=1
+        fi
+        opkg install "$@"
     else
         return 1
     fi
 }
+
+install_package() { install_packages "$1"; }
 
 download() {
     url="$1"; dest="$2"; tmp="${dest}.part"
@@ -142,8 +149,8 @@ log "router: ${DISTRIB_TARGET:-?} (${DISTRIB_ARCH:-$arch}) -> build $abi"
 log "app dir: $APP_DIR"
 mkdir -p "$APP_DIR"
 
-# Runtime requirements are now identical on ARM64 and ramips: the backend
-# creates lalune0 and routes router/LAN traffic with iptables fwmark rules.
+# Runtime requirements: the backend creates lalune0 and installs policy routing
+# plus native nftables NAT for router/LAN traffic.
 if ! ip -N -4 rule show >/dev/null 2>&1; then
     install_package ip-full || true
 fi
@@ -155,17 +162,46 @@ if [ ! -c /dev/net/tun ]; then
 fi
 [ -c /dev/net/tun ] || fail "установите kmod-tun для TUN"
 
-if ! have iptables && ! have iptables-nft; then
-    install_package iptables-nft || install_package iptables || true
-fi
-(have iptables || have iptables-nft) || fail "установите iptables-nft (нужны mangle/MARK и nat/MASQUERADE)"
+# OpenWrt 22.03+ is firewall4/nftables. Install the native nft CLI and the
+# kernel NAT modules instead of relying on the incomplete iptables-nft
+# MASQUERADE compatibility extension (the source of LALUNE_NAT RULE_APPEND).
+install_packages firewall4 nftables kmod-nf-nat kmod-nft-nat rpcd luci-light luci-base uhttpd uhttpd-mod-ubus uhttpd-mod-ucode uclient-fetch jsonfilter \
+    || fail "не удалось установить nftables/NAT/LuCI зависимости; проверьте feeds и совпадение kmod с ядром"
+/etc/init.d/firewall enable >/dev/null 2>&1 || true
+/etc/init.d/firewall reload >/dev/null 2>&1 || /etc/init.d/firewall restart >/dev/null 2>&1 || true
+have nft || fail "пакет nftables установлен, но команда nft не найдена"
+nft list tables >/dev/null 2>&1 || fail "nft не может обращаться к netfilter; проверьте kmod-nft-core/kmod-nft-nat"
 
-# NAT для клиентов LAN: на сборках без xt_MASQUERADE iptables пишет
-# "Extension MASQUERADE revision 0 not supported". Модули ядра ставим
-# по возможности (версия kmod должна совпадать с ядром), ошибки не фатальны.
-for pkg in kmod-ipt-nat kmod-nft-nat kmod-nft-compat iptables-mod-nat-extra iptables-mod-extra kmod-ipt-extra; do
-    install_package "$pkg" >/dev/null 2>&1 || true
-done
+# Probe the actual kernel masquerade target before starting the VPN.
+nft delete table ip lalune_probe >/dev/null 2>&1 || true
+if ! nft -f - <<'NFT'
+table ip lalune_probe {
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        oifname "lo" masquerade
+    }
+}
+NFT
+then
+    nft delete table ip lalune_probe >/dev/null 2>&1 || true
+    fail "ядро не поддерживает nft masquerade; установите kmod-nf-nat и kmod-nft-nat именно для текущего kernel"
+fi
+nft delete table ip lalune_probe >/dev/null 2>&1 || true
+
+install_luci_panel() {
+    log "installing LuCI panel and authenticated rpcd API bridge"
+    if [ ! -s "$LUCI_APP_ARCHIVE" ]; then
+        download "$LUCI_APP_URL" "$LUCI_APP_ARCHIVE"
+    fi
+    tar -tzf "$LUCI_APP_ARCHIVE" >/dev/null 2>&1 || fail "архив luci-app-lalune повреждён"
+    tar -xzf "$LUCI_APP_ARCHIVE" -C /
+    chmod 755 /usr/libexec/rpcd/lalune
+    /etc/init.d/rpcd restart >/dev/null 2>&1 || true
+    /etc/init.d/uhttpd enable >/dev/null 2>&1 || true
+    /etc/init.d/uhttpd restart >/dev/null 2>&1 || true
+    log "LuCI panel installed: Services -> LaLune VPN"
+}
+install_luci_panel
 
 if ! have nohup; then
     install_package coreutils-nohup || true
@@ -195,6 +231,7 @@ sleep 1
 
 if kill -0 "$new_pid" 2>/dev/null; then
     log "backend запущен (PID=$new_pid)"
+    rm -f "$LUCI_APP_ARCHIVE"
     log "  api: http://0.0.0.0:1062/ping"
     log "  cores: CSQTT / CSQTTR / CSQTT 2.1.9 встроены в backend"
 else
