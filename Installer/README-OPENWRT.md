@@ -8,7 +8,7 @@
 | `aarch64_*` | `lalune-openwrt-backend` | Cudy, Xiaomi AX, Raspberry Pi |
 | `x86_64` | `-x86_64` | мини-ПК, виртуальные машины |
 | `i386_pentium4` | `-i386` | x86 с SSE2 |
-| `mipsel_*` (кроме `mipsel_mips32`) | `-ramips` | mt7621, mt76x8, mt7620 |
+| `mipsel_*` (кроме `mipsel_mips32`) | `-ramips` | mt7621, mt76x8, mt7620, Keenetic KN-1211 |
 | `mips_*` (кроме `mips_mips32`) | `-mips` | ath79, lantiq, realtek |
 | `arm_cortex-a5/a7/a8/a9/a15/a53*` | `-armv7` | ipq40xx, mvebu, bcm27xx |
 | прочие `arm_*` | `-armv5` | arm926ej-s, xscale, arm1176 |
@@ -16,7 +16,17 @@
 Не поддерживаются: PowerPC, MIPS64, LoongArch, RISC-V (backend не прошёл проверку
 в эмуляторе), mips32r1 (Broadcom bmips) и
 `i386_pentium-mmx` (нет SSE2).
-Внутри всех backend уже встроены **CSQTT**, **CSQTTR** и **CSQTT 2.1.9**.
+В полной сборке встроены **CSQTT**, **CSQTTR** и **CSQTT 2.1.9**. Для роутеров
+с малой памятью установщик использует лёгкую сборку и загружает выбранное ядро
+по мере подключения, сохраняя на роутере только одно дополнительное ядро.
+В лёгкой сборке CSQTTR кладёт приложение при установке; для первого запуска
+CSQTT или CSQTT 2.1.9 роутеру нужен доступ к GitHub или его прокси. При смене
+протокола загружается только выбранное ядро.
+
+Keenetic KN-1211 использует `mipsel_24kc` (MT7628NN, 64 МБ RAM, 32 МБ flash).
+При старом OpenWrt с firewall3 установщик оставляет iptables; на OpenWrt 22.03+
+он использует firewall4/nftables. На старой прошивке установщик не ставит LuCI-
+панель LaLune, но мобильное приложение подключается к API роутера напрямую.
 
 ## Установка
 
@@ -42,13 +52,16 @@ sh openwrt.sh --status
 
 - создаёт `~/.la-lune/`;
 - выбирает `lalune-openwrt-backend[-<abi>]` по `DISTRIB_ARCH` (таблица выше);
-- проверяет/ставит `ip-full`, `kmod-tun`, `iptables-nft`/`iptables` и `nohup`;
+- проверяет/ставит `ip-full`, `kmod-tun` и `nohup`; для firewall4 использует nftables,
+  а для старого firewall3 — iptables и проверяет поддержку MASQUERADE;
 - скачивает backend и делает его executable;
 - останавливает предыдущий процесс, запускает новый через `nohup`;
 - пишет PID в `~/.la-lune/backend.pid`, лог — в
   `~/.la-lune/LaLuneManager.log`.
 
-Отдельные core-файлы не скачиваются.
+В полной сборке отдельные core-файлы не скачиваются. В лёгкой сборке ядро
+загружается при первом подключении; при смене протокола предыдущее отдельное
+ядро удаляется, чтобы освободить место на flash.
 
 ## VPN routing
 

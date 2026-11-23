@@ -162,19 +162,21 @@ if [ ! -c /dev/net/tun ]; then
 fi
 [ -c /dev/net/tun ] || fail "установите kmod-tun для TUN"
 
-# OpenWrt 22.03+ is firewall4/nftables. Install the native nft CLI and the
-# kernel NAT modules instead of relying on the incomplete iptables-nft
-# MASQUERADE compatibility extension (the source of LALUNE_NAT RULE_APPEND).
-install_packages firewall4 nftables kmod-nf-nat kmod-nft-nat rpcd luci-light luci-base uhttpd uhttpd-mod-ubus uhttpd-mod-ucode uclient-fetch jsonfilter \
-    || fail "не удалось установить nftables/NAT/LuCI зависимости; проверьте feeds и совпадение kmod с ядром"
-/etc/init.d/firewall enable >/dev/null 2>&1 || true
-/etc/init.d/firewall reload >/dev/null 2>&1 || /etc/init.d/firewall restart >/dev/null 2>&1 || true
-have nft || fail "пакет nftables установлен, но команда nft не найдена"
-nft list tables >/dev/null 2>&1 || fail "nft не может обращаться к netfilter; проверьте kmod-nft-core/kmod-nft-nat"
+HAS_FW4=0
+if have fw4 || [ -x /sbin/fw4 ] || [ -x /usr/sbin/fw4 ]; then
+    HAS_FW4=1
+    # OpenWrt 22.03+ uses firewall4/nftables. iptables-nft alone does not
+    # guarantee that the kernel NAT expression is available.
+    install_packages firewall4 nftables kmod-nf-nat kmod-nft-nat rpcd luci-light luci-base uhttpd uhttpd-mod-ubus uhttpd-mod-ucode uclient-fetch jsonfilter \
+        || fail "не удалось установить nftables/NAT/LuCI зависимости; проверьте feeds и совпадение kmod с ядром"
+    /etc/init.d/firewall enable >/dev/null 2>&1 || true
+    /etc/init.d/firewall reload >/dev/null 2>&1 || /etc/init.d/firewall restart >/dev/null 2>&1 || true
+    have nft || fail "пакет nftables установлен, но команда nft не найдена"
+    nft list tables >/dev/null 2>&1 || fail "nft не может обращаться к netfilter; проверьте kmod-nft-core/kmod-nft-nat"
 
-# Probe the actual kernel masquerade target before starting the VPN.
-nft delete table ip lalune_probe >/dev/null 2>&1 || true
-if ! nft -f - <<'NFT'
+    # Probe the actual kernel masquerade target before starting the VPN.
+    nft delete table ip lalune_probe >/dev/null 2>&1 || true
+    if ! nft -f - <<'NFT'
 table ip lalune_probe {
     chain postrouting {
         type nat hook postrouting priority srcnat; policy accept;
@@ -182,11 +184,28 @@ table ip lalune_probe {
     }
 }
 NFT
-then
+    then
+        nft delete table ip lalune_probe >/dev/null 2>&1 || true
+        fail "ядро не поддерживает nft masquerade; установите kmod-nf-nat и kmod-nft-nat именно для текущего kernel"
+    fi
     nft delete table ip lalune_probe >/dev/null 2>&1 || true
-    fail "ядро не поддерживает nft masquerade; установите kmod-nf-nat и kmod-nft-nat именно для текущего kernel"
+else
+    # Older OpenWrt releases (including the KN-1211 19.07 image) use firewall3.
+    # Keep the firmware's legacy firewall and check real kernel MASQUERADE support.
+    log "legacy firewall3 detected; preparing iptables NAT"
+    install_packages iptables kmod-ipt-nat || true
+    install_packages iptables-mod-extra || true
+    have iptables || fail "iptables требуется старой прошивке OpenWrt"
+    probe_chain="LALUNE_PROBE_$$"
+    iptables -t nat -N "$probe_chain" >/dev/null 2>&1 || fail "iptables NAT table недоступна"
+    if ! iptables -t nat -A "$probe_chain" -j MASQUERADE >/dev/null 2>&1; then
+        iptables -t nat -F "$probe_chain" >/dev/null 2>&1 || true
+        iptables -t nat -X "$probe_chain" >/dev/null 2>&1 || true
+        fail "ядро не поддерживает iptables MASQUERADE; включите kmod-ipt-nat для этой прошивки"
+    fi
+    iptables -t nat -F "$probe_chain" >/dev/null 2>&1 || true
+    iptables -t nat -X "$probe_chain" >/dev/null 2>&1 || true
 fi
-nft delete table ip lalune_probe >/dev/null 2>&1 || true
 
 install_luci_panel() {
     log "installing LuCI panel and authenticated rpcd API bridge"
@@ -201,7 +220,7 @@ install_luci_panel() {
     /etc/init.d/uhttpd restart >/dev/null 2>&1 || true
     log "LuCI panel installed: Services -> LaLune VPN"
 }
-install_luci_panel
+if [ "$HAS_FW4" -eq 1 ]; then install_luci_panel; fi
 
 if ! have nohup; then
     install_package coreutils-nohup || true

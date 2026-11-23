@@ -49,7 +49,12 @@ pub fn supported_protocols() -> Vec<serde_json::Value> {
             },
             "realtime": true,
             "description": if core == Core::ToTs { "VK, Jazz и ToTS transport" } else { "VK Calls, TURN и WRAP" },
-            "coreAsset": if available_core(core) { core.filename() } else { core_asset_name() },
+            "coreAsset": if available_core(core) {
+                core.filename().to_string()
+            } else {
+                crate::bundled_cores::release_asset_name(core)
+                    .unwrap_or_else(|| core_asset_name().to_string())
+            },
             "bundled": available_core(core),
         })).collect()
 }
@@ -154,6 +159,88 @@ pub async fn download_core(
     }
 
     Err(anyhow!("failed to download core after 3 attempts"))
+}
+
+/// Download a pinned runtime from this LaLune release for a lean backend.
+/// Stream it to disk so a 64 MB router does not hold the full core in RAM.
+pub async fn download_release_asset(
+    client: &reqwest::Client,
+    asset: &str,
+    dest: &Path,
+    events: &EventBus,
+) -> Result<()> {
+    let base_url = format!(
+        "https://github.com/mikhail384/LaLune/releases/latest/download/{asset}"
+    );
+    let urls = [
+        base_url.clone(),
+        format!("{}{}", PROXY_URL, urlencode(&base_url)),
+        format!("{}{}", PROXY_URL, urlencode(&base_url)),
+    ];
+    let tmp = dest.with_extension("part");
+
+    for (i, url) in urls.iter().enumerate() {
+        let level = i + 1;
+        let ua = if level == 3 { USER_AGENT_CURL } else { USER_AGENT_BROWSER };
+        events.emit(Event::log(format!(
+            "[DOWNLOAD][LEVEL {level}] {}",
+            truncate(url, 120)
+        )));
+        let response = match client.get(url).header("User-Agent", ua).send().await {
+            Ok(response) if response.status().as_u16() == 200 => response,
+            _ => continue,
+        };
+        if let Some(parent) = dest.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        let _ = tokio::fs::remove_file(&tmp).await;
+        let mut file = tokio::fs::File::create(&tmp).await?;
+        let mut response = response;
+        let mut size = 0u64;
+        let mut failed = false;
+        loop {
+            let chunk = match response.chunk().await {
+                Ok(Some(chunk)) => chunk,
+                Ok(None) => break,
+                Err(_) => {
+                    failed = true;
+                    break;
+                }
+            };
+            size += chunk.len() as u64;
+            if size > 64 * 1024 * 1024 {
+                failed = true;
+                break;
+            }
+            if file.write_all(&chunk).await.is_err() {
+                failed = true;
+                break;
+            }
+        }
+        if failed || size < 1024 {
+            drop(file);
+            let _ = tokio::fs::remove_file(&tmp).await;
+            continue;
+        }
+        file.flush().await?;
+        drop(file);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = tokio::fs::metadata(&tmp).await?.permissions();
+            perms.set_mode(0o755);
+            tokio::fs::set_permissions(&tmp, perms).await?;
+        }
+        tokio::fs::rename(&tmp, dest).await?;
+        events.emit(Event::log(format!(
+            "[DOWNLOAD][LEVEL {level}] OK ({size} bytes, {asset})"
+        )));
+        return Ok(());
+    }
+
+    let _ = tokio::fs::remove_file(&tmp).await;
+    Err(anyhow!("failed to download runtime asset {asset} after 3 attempts"))
 }
 
 fn urlencode(s: &str) -> String {

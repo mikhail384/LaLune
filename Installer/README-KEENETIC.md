@@ -13,6 +13,7 @@
 |---|---|---|---|
 | **Speedster (KN-3012 / KN-3010)** | `mipsel` (EN7561DU / MT7621) | **Внутренняя память** (`storage:`) | `lalune-openwrt-backend-ramips` |
 | **Air (KN-3110)** | `mipsel` (MT7628) | **Внутренняя память** (`storage:`) | `lalune-openwrt-backend-ramips` |
+| **4G (KN-1211)** | `mipsel` (MT7628NN) | USB-накопитель или внутренняя память | `lalune-openwrt-backend-ramips` |
 | **Giga (KN-1010), Viva (KN-1910), Hopper (KN-3810)** | `mipsel` (MT7621) | USB-накопитель или встроенная память | `lalune-openwrt-backend-ramips` |
 | **Titan (KN-1811), Peak (KN-2710)** | `aarch64` (MT7986 / MT7622) | USB-накопитель | `lalune-openwrt-backend` |
 | **Ultra (KN-2410), Giga (KN-1011)** | `armv7` (Cortex-A7) | USB-накопитель | `lalune-openwrt-backend-armv7` |

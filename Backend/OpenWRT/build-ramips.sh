@@ -118,7 +118,7 @@ install -m 755 "$binary" output/lalune-openwrt-backend-ramips
 cp "$LALUNE_OPENWRT_CORES" output/lalune-openwrt-cores-ramips.zip
 
 # Лёгкая сборка для роутеров с малой флеш-памятью: без вшитых ядер (экономит ~13 МБ);
-# нужное ядро кладётся отдельным файлом в /usr/lib/lalune-run (его заливает приложение).
+# CSQTTR приложение кладёт при установке; другие ядра backend загружает по требованию.
 (
     unset LALUNE_OPENWRT_CORES
     export LALUNE_OPENWRT_LEAN=1

@@ -507,6 +507,9 @@ jobs:
           path: |
             Backend/OpenWRT/output/lalune-openwrt-backend-${{ matrix.abi }}
             Backend/OpenWRT/output/lalune-openwrt-cores-${{ matrix.abi }}.zip
+            Backend/OpenWRT/output/csqtt-client-${{ matrix.abi }}
+            Backend/OpenWRT/output/csqttr-client-${{ matrix.abi }}
+            Backend/OpenWRT/output/csqtt-219-${{ matrix.abi }}
           if-no-files-found: error
           compression-level: 0
 
@@ -997,6 +1000,7 @@ jobs:
           for abi in x86_64 i386 armv7 armv5 mips; do
             cp "release/openwrt-multi/lalune-openwrt-backend-$abi" release/assets/
             cp "release/openwrt-multi/lalune-openwrt-cores-$abi.zip" release/assets/
+            for core in csqtt-client csqttr-client csqtt-219; do cp "release/openwrt-multi/$core-$abi" release/assets/; done
           done
           cp release/android/LaLune-Android.apk release/assets/
           if [ -f release/macos/LaLune-macOS.zip ]; then cp release/macos/LaLune-macOS.zip release/assets/; fi
@@ -1084,6 +1088,21 @@ jobs:
             release/assets/lalune-openwrt-cores-armv5.zip
             release/assets/lalune-openwrt-backend-mips
             release/assets/lalune-openwrt-cores-mips.zip
+            release/assets/csqtt-client-x86_64
+            release/assets/csqttr-client-x86_64
+            release/assets/csqtt-219-x86_64
+            release/assets/csqtt-client-i386
+            release/assets/csqttr-client-i386
+            release/assets/csqtt-219-i386
+            release/assets/csqtt-client-armv7
+            release/assets/csqttr-client-armv7
+            release/assets/csqtt-219-armv7
+            release/assets/csqtt-client-armv5
+            release/assets/csqttr-client-armv5
+            release/assets/csqtt-219-armv5
+            release/assets/csqtt-client-mips
+            release/assets/csqttr-client-mips
+            release/assets/csqtt-219-mips
             release/assets/luci-app-lalune.tar.gz
             release/assets/LaLune-Android.apk
             release/assets/LaLuneTokenFetcher_Windows.zip

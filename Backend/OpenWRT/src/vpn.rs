@@ -412,7 +412,16 @@ impl OpenWrtRouting {
         // nft предпочтительнее и при наличии iptables: матч `skuid` исключает пакеты ядра из
         // разметки, а iptables `-m owner` (xt_owner) на малых прошивках часто отсутствует.
         let nft_ok = Command::new("nft").args(["list", "tables"]).output().is_ok_and(|o| o.status.success());
-        let use_nft = nft_ok || iptables_program().is_none();
+        let fw4_present = Path::new("/sbin/fw4").exists() || Path::new("/usr/sbin/fw4").exists();
+        let openwrt_release = Path::new("/etc/openwrt_release").is_file();
+        let firewall3_present = !fw4_present
+            && openwrt_release
+            && (Path::new("/sbin/fw3").exists()
+                || Path::new("/usr/sbin/fw3").exists()
+                || Path::new("/etc/init.d/firewall").exists());
+        // Keep nftables on KeeneticOS and firewall4. Only force legacy iptables
+        // when the router identifies itself as an older OpenWrt firewall3 system.
+        let use_nft = (nft_ok && !firewall3_present) || iptables_program().is_none();
         if use_nft && !nft_ok {
             bail!("Не найдены ни рабочий nftables, ни legacy iptables; установите nftables");
         }
@@ -672,7 +681,7 @@ fn ip_numeric(args: &[&str]) -> Result<String> {
 fn require_program(program: &str) -> Result<()> {
     let status = Command::new(program).arg("--version").output();
     if status.is_err() {
-        bail!("Не найдена команда {program}; установщик OpenWRT должен поставить ip-full и nftables");
+        bail!("Не найдена команда {program}; установщик OpenWRT должен поставить ip-full и nftables/iptables");
     }
     Ok(())
 }

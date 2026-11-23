@@ -31,7 +31,15 @@ impl Core {
     }
 
     pub fn supported(id: &str) -> Option<Self> {
-        Self::parse(id).filter(|core| *core == Self::Csqtt || available_core(*core))
+        // A lean release keeps one runtime on flash at a time. CSQTTR and the
+        // pinned legacy CSQTT runtime can be fetched on demand when a profile
+        // selects them; ToTS is only available when embedded in the bundle.
+        Self::parse(id).filter(|core| match *core {
+            Self::Csqtt | Self::Csqttr | Self::Legacy => {
+                available_core(*core) || release_asset_name(*core).is_some()
+            }
+            Self::ToTs => available_core(*core),
+        })
     }
 
     pub fn id(self) -> &'static str {
@@ -72,6 +80,27 @@ pub fn available_core(core: Core) -> bool {
     zip::ZipArchive::new(Cursor::new(bytes))
         .and_then(|mut archive| archive.by_name(core.filename()).map(|_| ()))
         .is_ok()
+}
+
+/// Runtime asset shipped alongside the backend for this target. The aarch64
+/// release embeds all supported cores and does not need standalone files.
+pub fn release_asset_name(core: Core) -> Option<String> {
+    let prefix = match core {
+        Core::Csqtt => "csqtt-client",
+        Core::Csqttr => "csqttr-client",
+        Core::Legacy => "csqtt-219",
+        Core::ToTs => return None,
+    };
+    let abi = match std::env::consts::ARCH {
+        "mips" if cfg!(target_endian = "little") => "ramips",
+        "mips" => "mips",
+        "x86_64" => "x86_64",
+        "x86" => "i386",
+        "arm" if cfg!(target_feature = "v7") => "armv7",
+        "arm" => "armv5",
+        _ => return None,
+    };
+    Some(format!("{prefix}-{abi}"))
 }
 
 pub struct TemporaryCore(PathBuf, bool);

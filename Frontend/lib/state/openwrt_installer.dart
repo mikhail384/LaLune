@@ -718,21 +718,24 @@ if [ "$IS_KEENETIC" = "1" ]; then
   install_packages ip-full iptables curl ca-certificates ca-bundle || true
   log 'Keenetic Web UI will be available at http://<router-ip>:1062/panel'
 else
-  # firewall4 uses native nftables. Install the nft CLI and kernel NAT modules;
-  # iptables-nft alone does not guarantee that xt_MASQUERADE is available.
-  install_packages firewall4 nftables kmod-nf-nat kmod-nft-nat rpcd luci-light luci-base uhttpd uhttpd-mod-ubus uhttpd-mod-ucode uclient-fetch jsonfilter || {
-    echo 'Could not install nftables/NAT/LuCI dependencies; check package feeds and kernel-matched kmods' >&2
-    pkg_error_tail
-    exit 27
-  }
-  /etc/init.d/firewall enable >/dev/null 2>&1 || true
-  /etc/init.d/firewall reload >/dev/null 2>&1 || /etc/init.d/firewall restart >/dev/null 2>&1 || true
-  have nft || { echo 'nftables package installed but nft command is missing' >&2; exit 27; }
-  nft list tables >/dev/null 2>&1 || { echo 'nft cannot access netfilter; check kmod-nft-core/kmod-nft-nat' >&2; exit 27; }
+  HAS_FW4=0
+  if have fw4 || [ -x /sbin/fw4 ] || [ -x /usr/sbin/fw4 ]; then
+    HAS_FW4=1
+    # OpenWrt 22.03+ uses firewall4/nftables. iptables-nft alone does not
+    # guarantee that the kernel NAT expression is available.
+    install_packages firewall4 nftables kmod-nf-nat kmod-nft-nat rpcd luci-light luci-base uhttpd uhttpd-mod-ubus uhttpd-mod-ucode uclient-fetch jsonfilter || {
+      echo 'Could not install nftables/NAT/LuCI dependencies; check package feeds and kernel-matched kmods' >&2
+      pkg_error_tail
+      exit 27
+    }
+    /etc/init.d/firewall enable >/dev/null 2>&1 || true
+    /etc/init.d/firewall reload >/dev/null 2>&1 || /etc/init.d/firewall restart >/dev/null 2>&1 || true
+    have nft || { echo 'nftables package installed but nft command is missing' >&2; exit 27; }
+    nft list tables >/dev/null 2>&1 || { echo 'nft cannot access netfilter; check kmod-nft-core/kmod-nft-nat' >&2; exit 27; }
 
-  # Probe the running kernel's masquerade support before any VPN route is enabled.
-  nft delete table ip lalune_probe >/dev/null 2>&1 || true
-  if ! nft -f - <<'NFT'
+    # Probe the running kernel's masquerade support before any VPN route is enabled.
+    nft delete table ip lalune_probe >/dev/null 2>&1 || true
+    if ! nft -f - <<'NFT'
 table ip lalune_probe {
   chain postrouting {
     type nat hook postrouting priority srcnat; policy accept;
@@ -740,24 +743,43 @@ table ip lalune_probe {
   }
 }
 NFT
-  then
+    then
+      nft delete table ip lalune_probe >/dev/null 2>&1 || true
+      echo 'Kernel nft masquerade is unavailable; install kmod-nf-nat and kmod-nft-nat matching the running kernel' >&2
+      exit 27
+    fi
     nft delete table ip lalune_probe >/dev/null 2>&1 || true
-    echo 'Kernel nft masquerade is unavailable; install kmod-nf-nat and kmod-nft-nat matching the running kernel' >&2
-    exit 27
-  fi
-  nft delete table ip lalune_probe >/dev/null 2>&1 || true
 
-  # Install LuCI files as another authenticated frontend to the existing API.
-  if [ ! -s "$LUCI_APP_ARCHIVE" ]; then
-    download "$LUCI_APP_URL" "$LUCI_APP_ARCHIVE"
+    # Install LuCI files as another authenticated frontend to the existing API.
+    if [ ! -s "$LUCI_APP_ARCHIVE" ]; then
+      download "$LUCI_APP_URL" "$LUCI_APP_ARCHIVE"
+    fi
+    tar -tzf "$LUCI_APP_ARCHIVE" >/dev/null 2>&1 || { echo 'luci-app-lalune archive is invalid' >&2; exit 27; }
+    tar -xzf "$LUCI_APP_ARCHIVE" -C /
+    chmod 755 /usr/libexec/rpcd/lalune
+    /etc/init.d/rpcd restart >/dev/null 2>&1 || true
+    /etc/init.d/uhttpd enable >/dev/null 2>&1 || true
+    /etc/init.d/uhttpd restart >/dev/null 2>&1 || true
+    log 'LuCI panel installed: Services -> LaLune VPN'
+  else
+    # Older OpenWrt (for example 19.07 on KN-1211) uses firewall3/iptables.
+    # Do not install firewall4, nftables, or the newer ucode LuCI stack there.
+    log 'legacy firewall3 detected; preparing iptables NAT'
+    install_packages iptables kmod-ipt-nat || true
+    install_packages iptables-mod-extra || true
+    have iptables || { echo 'iptables is required for this legacy OpenWrt firewall' >&2; pkg_error_tail; exit 27; }
+    probe_chain="LALUNE_PROBE_$$"
+    iptables -t nat -N "$probe_chain" >/dev/null 2>&1 || { echo 'iptables NAT table is unavailable' >&2; exit 27; }
+    if ! iptables -t nat -A "$probe_chain" -j MASQUERADE >/dev/null 2>&1; then
+      iptables -t nat -F "$probe_chain" >/dev/null 2>&1 || true
+      iptables -t nat -X "$probe_chain" >/dev/null 2>&1 || true
+      echo 'Kernel iptables MASQUERADE is unavailable; enable/install kmod-ipt-nat for this firmware' >&2
+      exit 27
+    fi
+    iptables -t nat -F "$probe_chain" >/dev/null 2>&1 || true
+    iptables -t nat -X "$probe_chain" >/dev/null 2>&1 || true
+    log 'iptables MASQUERADE is available; LaLune API panel will use the mobile app'
   fi
-  tar -tzf "$LUCI_APP_ARCHIVE" >/dev/null 2>&1 || { echo 'luci-app-lalune archive is invalid' >&2; exit 27; }
-  tar -xzf "$LUCI_APP_ARCHIVE" -C /
-  chmod 755 /usr/libexec/rpcd/lalune
-  /etc/init.d/rpcd restart >/dev/null 2>&1 || true
-  /etc/init.d/uhttpd enable >/dev/null 2>&1 || true
-  /etc/init.d/uhttpd restart >/dev/null 2>&1 || true
-  log 'LuCI panel installed: Services -> LaLune VPN'
 fi
 
 if [ ! -c /dev/net/tun ]; then
@@ -821,7 +843,11 @@ else
 fi
 chmod +x "$BACKEND_PATH"
 
-log 'backend contains bundled CSQTT / CSQTTR / CSQTT 2.1.9 cores'
+if [ "${LEAN:-0}" -eq 1 ]; then
+  log 'lean backend installed; selected protocol cores will be loaded on demand'
+else
+  log 'backend contains bundled CSQTT / CSQTTR / CSQTT 2.1.9 cores'
+fi
 
 # Останавливаем предыдущий экземпляр, если он был запущен нашим установщиком.
 if [ -f "$PID_FILE" ]; then

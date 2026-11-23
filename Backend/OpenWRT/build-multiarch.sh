@@ -8,11 +8,11 @@
 #
 # Static musl binaries are cross-compiled with Rust + `zig cc` as the C
 # compiler/linker (one pinned zig works for every target, no per-arch SDK).
-# Builds the three pinned cores, embeds them in the backend and smoke-tests
-# the result (natively or under qemu-user).
+# Builds the three pinned cores, embeds them in the backend, publishes standalone
+# runtime files for lean builds, and smoke-tests the result (natively or under qemu-user).
 #
 # Usage: build-multiarch.sh <abi> [cache-dir]
-# Output: output/lalune-openwrt-backend-<abi>, output/lalune-openwrt-cores-<abi>.zip
+# Output: backend, core bundle, and csqtt-client/csqttr-client/csqtt-219 runtime files per ABI.
 
 set -euo pipefail
 export LC_ALL=C
@@ -252,4 +252,7 @@ cleanup_smoke
 
 install -m 755 "$binary" "output/lalune-openwrt-backend-$abi"
 cp "$LALUNE_OPENWRT_CORES" "output/lalune-openwrt-cores-$abi.zip"
+for core in csqtt-client csqttr-client csqtt-219; do
+    install -m 755 "$work/$core" "output/$core-$abi"
+done
 log "done: output/lalune-openwrt-backend-$abi"

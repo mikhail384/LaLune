@@ -541,19 +541,76 @@ async fn vpn_connect(State(state): State<Arc<AppState>>, Json(body): Json<Connec
     let _connecting = Connecting::new(&state.vpn.connecting);
     state.log(format!("[VPN] connecting using {}", kind.id()));
 
-    let bundle_core = match bundled_cores::extract(kind).await {
+    let mut bundle_core = match bundled_cores::extract(kind).await {
         Ok(core) => core,
         Err(error) => return err(500, format!("Не удалось извлечь ядро: {error:#}")),
     };
-    if bundle_core.is_none() && kind != Core::ToTs && !state.core_path.exists() {
-        state.log("[VPN] core not found, downloading...");
-        let client = reqwest::Client::builder().timeout(Duration::from_secs(30)).build().unwrap();
-        let version = match core_manager::fetch_latest(&client, &state.events).await {
-            Some(v) => v, None => return err(500, "cannot fetch LATEST"),
-        };
-        if let Err(e) = core_manager::download_core(&client, &version, &state.core_path, &state.events).await {
-            return err(500, format!("download failed: {}", e));
+    if bundle_core.is_none()
+        && matches!(kind, Core::Csqtt | Core::Csqttr | Core::Legacy)
+        && !bundled_cores::available_core(kind)
+    {
+        let runtime_dir = std::path::Path::new(bundled_cores::LEAN_DIR);
+        let runtime_path = runtime_dir.join(kind.filename());
+        // On low-flash devices keep just one external runtime. The next
+        // protocol switch downloads the selected core after freeing this slot.
+        for other in [Core::Csqtt, Core::Csqttr, Core::Legacy] {
+            if other != kind {
+                let _ = tokio::fs::remove_file(runtime_dir.join(other.filename())).await;
+            }
         }
+        if !runtime_path.is_file() {
+            if let Some(asset) = bundled_cores::release_asset_name(kind) {
+                state.log(format!("[VPN] загрузка ядра {} для лёгкой сборки", kind.id()));
+                let client = reqwest::Client::builder()
+                    .timeout(Duration::from_secs(180))
+                    .build()
+                    .unwrap();
+                if let Err(error) = core_manager::download_release_asset(
+                    &client,
+                    &asset,
+                    &runtime_path,
+                    &state.events,
+                )
+                .await
+                {
+                    return err(
+                        502,
+                        format!("Не удалось загрузить ядро {}: {error:#}", kind.id()),
+                    );
+                }
+            } else if kind == Core::Csqtt && !state.core_path.exists() {
+                state.log("[VPN] core not found, downloading...");
+                let client = reqwest::Client::builder()
+                    .timeout(Duration::from_secs(180))
+                    .build()
+                    .unwrap();
+                let version = match core_manager::fetch_latest(&client, &state.events).await {
+                    Some(v) => v,
+                    None => return err(502, "cannot fetch LATEST"),
+                };
+                if let Err(error) = core_manager::download_core(
+                    &client,
+                    &version,
+                    &state.core_path,
+                    &state.events,
+                )
+                .await
+                {
+                    return err(502, format!("download failed: {error:#}"));
+                }
+            } else if kind != Core::Csqtt {
+                return err(500, format!("Нет сборки {} для этой архитектуры", kind.id()));
+            }
+        }
+        bundle_core = match bundled_cores::extract(kind).await {
+            Ok(core) => core,
+            Err(error) => {
+                return err(
+                    500,
+                    format!("Не удалось открыть ядро {}: {error:#}", kind.id()),
+                )
+            }
+        };
     }
 
     let mut runtime_config = config.clone();
@@ -590,14 +647,25 @@ async fn vpn_connect(State(state): State<Arc<AppState>>, Json(body): Json<Connec
     } else {
         None
     };
-    let core_path = bundle_core.as_ref().map(|core| core.path()).unwrap_or(&state.core_path);
+    let core_path = bundle_core
+        .as_ref()
+        .map(|core| core.path().to_path_buf())
+        .unwrap_or_else(|| {
+            if matches!(kind, Core::Csqtt | Core::Csqttr | Core::Legacy)
+                && std::path::Path::new(bundled_cores::LEAN_DIR).join(kind.filename()).is_file()
+            {
+                std::path::Path::new(bundled_cores::LEAN_DIR).join(kind.filename())
+            } else {
+                state.core_path.clone()
+            }
+        });
     let core_result = if kind == Core::ToTs {
         if !runtime_config.raw_link.starts_with("tots://") {
             return err(400, "В профиле ToTS отсутствует исходная ссылка");
         }
         state.log("[ToTS] запускаю один worker; OpenWRT создаст TUN и включит policy routing после готовности транспорта");
         CoreProcess::spawn_tots(
-            core_path,
+            &core_path,
             &runtime_config.raw_link,
             1,
             state.core_logs.clone(),
@@ -606,7 +674,7 @@ async fn vpn_connect(State(state): State<Arc<AppState>>, Json(body): Json<Connec
     } else {
         let args = core_manager::build_args(&runtime_config, &settings, vpn::CORE_LISTEN_PORT);
         CoreProcess::spawn(
-            core_path,
+            &core_path,
             &args,
             state.core_logs.clone(),
             state.events.clone(),
