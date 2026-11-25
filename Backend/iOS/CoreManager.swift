@@ -185,30 +185,35 @@ final class CoreManager {
 
     // MARK: - Shared settings для Tunnel
 
-    func writeSharedSettings(
+    func tunnelSettings(
         from settingsJson: [String: Any],
         protocol proto: String,
         peer: String,
         password: String,
-        hashes: String
-    ) {
+        hashes: String,
+        configId: Int64
+    ) -> [String: NSObject] {
+        [
+            "protocol": proto as NSString,
+            "peer": peer as NSString,
+            "password": password as NSString,
+            "hashes": hashes as NSString,
+            "configId": NSNumber(value: configId),
+            "workers": NSNumber(value: settingsJson["workers"] as? Int ?? 9),
+            "obfs": (settingsJson["obfs"] as? String ?? "video") as NSString,
+            "fingerprint": (settingsJson["fingerprint"] as? String ?? "firefox") as NSString,
+            "clientIds": (settingsJson["clientIds"] as? String ?? "8202606,6287487") as NSString,
+            "vkAuthMode": (settingsJson["vkAuthMode"] as? String ?? "vkcalls") as NSString,
+            "captchaMode": (settingsJson["captchaMode"] as? String ?? "auto") as NSString,
+            "turnTransport": (settingsJson["turnTransport"] as? String ?? "udp") as NSString,
+            "validateVkHashes": NSNumber(value: settingsJson["validateVkHashes"] as? Bool ?? false),
+            "deviceId": (settingsJson["deviceId"] as? String ?? "") as NSString,
+        ]
+    }
+
+    func writeSharedSettings(_ settings: [String: NSObject]) {
         let shared = UserDefaults(suiteName: APP_GROUP)
-        shared?.set(proto, forKey: "protocol")
-        shared?.set(peer, forKey: "peer")
-        shared?.set(password, forKey: "password")
-        shared?.set(hashes, forKey: "hashes")
-        shared?.set(settingsJson["workers"] as? Int ?? 9, forKey: "workers")
-
-        // CSQTT-поля
-        shared?.set(settingsJson["obfs"] as? String ?? "video", forKey: "obfs")
-        shared?.set(settingsJson["fingerprint"] as? String ?? "firefox", forKey: "fingerprint")
-        shared?.set(settingsJson["clientIds"] as? String ?? "8202606,6287487", forKey: "clientIds")
-        shared?.set(settingsJson["vkAuthMode"] as? String ?? "vkcalls", forKey: "vkAuthMode")
-        shared?.set(settingsJson["captchaMode"] as? String ?? "auto", forKey: "captchaMode")
-        shared?.set(settingsJson["turnTransport"] as? String ?? "udp", forKey: "turnTransport")
-        shared?.set(settingsJson["validateVkHashes"] as? Bool ?? false, forKey: "validateVkHashes")
-
-        shared?.set(settingsJson["deviceId"] as? String ?? "", forKey: "deviceId")
+        for (key, value) in settings { shared?.set(value, forKey: key) }
         shared?.synchronize()
     }
 }

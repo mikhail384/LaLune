@@ -45,6 +45,23 @@ impl Drop for Fixture {
 }
 
 #[tokio::test]
+async fn settings_api_persists_auto_mode_without_changing_manual_workers() {
+    let fixture = Fixture::new().await;
+    let settings = fixture.json("GET", "/settings", Value::Null, StatusCode::OK).await;
+    assert_eq!(settings["autoWorkers"], false);
+
+    fixture.json("PATCH", "/settings", json!({"workers": 37, "autoWorkers": true}), StatusCode::OK).await;
+    let settings = fixture.json("GET", "/settings", Value::Null, StatusCode::OK).await;
+    assert_eq!(settings["autoWorkers"], true);
+    assert_eq!(settings["workers"], 37);
+
+    fixture.json("PUT", "/settings/autoWorkers", json!(false), StatusCode::OK).await;
+    let stored: Value = serde_json::from_slice(&std::fs::read(fixture.dir.join("settings.json")).unwrap()).unwrap();
+    assert_eq!(stored["autoWorkers"], false);
+    assert_eq!(stored["workers"], 37);
+}
+
+#[tokio::test]
 async fn panel_assets_are_served_with_same_origin_policy() {
     let fixture = Fixture::new().await;
     for (path, kind) in [
@@ -84,4 +101,29 @@ async fn panel_can_import_profile_and_validate_auto_api_without_network() {
     assert!(!token.to_string().contains("fixture-vk-token"));
     let path = fixture.dir.join("token.json");
     assert_eq!(std::fs::metadata(path).unwrap().permissions().mode() & 0o777, 0o600);
+}
+
+#[tokio::test]
+async fn idle_backend_rejects_active_only_probe() {
+    let fixture = Fixture::new().await;
+    fixture.json("POST", "/vpn/measure", json!({"temporary":false,"configId":1}), StatusCode::CONFLICT).await;
+    let status = fixture.json("GET", "/vpn/status", Value::Null, StatusCode::OK).await;
+    assert_eq!(status["state"], "disconnected");
+}
+
+#[tokio::test]
+async fn failed_temporary_probe_preserves_selection_and_does_not_create_profile() {
+    let fixture = Fixture::new().await;
+    let link = "csqtt://connect?v=2&host=192.0.2.2&peer=46000&password=fixture-password&hashes=a+b";
+    let profile = fixture.json("POST", "/configs", json!({"protocol":"CSQTT","link":link}), StatusCode::OK).await;
+    let id = profile["id"].as_i64().unwrap();
+    fixture.json("PUT", "/configs/selected", json!({"id":id}), StatusCode::OK).await;
+    fixture.json("PATCH", "/settings", json!({"authMode":"autoApi"}), StatusCode::OK).await;
+    fixture.json("POST", "/vpn/measure", json!({"temporary":true,"link":link,"protocol":"CSQTT"}), StatusCode::BAD_REQUEST).await;
+    let status = fixture.json("GET", "/vpn/status", Value::Null, StatusCode::OK).await;
+    assert_eq!(status["state"], "disconnected");
+    let selected = fixture.json("GET", "/configs/selected", Value::Null, StatusCode::OK).await;
+    assert_eq!(selected["id"], id);
+    let profiles = fixture.json("GET", "/configs", Value::Null, StatusCode::OK).await;
+    assert_eq!(profiles.as_array().unwrap().len(), 1);
 }

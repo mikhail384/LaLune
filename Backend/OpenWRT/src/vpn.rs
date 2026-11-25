@@ -100,6 +100,7 @@ pub struct VpnRuntime {
     pub handle: Mutex<Option<crate::linux_tun::Session>>,
     routing: Mutex<Option<OpenWrtRouting>>,
     pub core_uid: AtomicU32,
+    pub lifecycle: tokio::sync::Mutex<()>,
     pub operation: tokio::sync::Mutex<()>,
     pub watchdog: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
@@ -118,6 +119,7 @@ impl VpnRuntime {
             handle: Mutex::new(None),
             routing: Mutex::new(None),
             core_uid: AtomicU32::new(0),
+            lifecycle: tokio::sync::Mutex::new(()),
             operation: tokio::sync::Mutex::new(()),
             watchdog: Mutex::new(None),
         }
@@ -168,6 +170,27 @@ impl VpnRuntime {
         *self.started_at.lock() = None;
         *self.tun_conf.lock() = None;
     }
+}
+
+/// Force both the route lookup and egress onto LaLune's policy-routed TUN.
+pub fn latency_socket(_runtime: &VpnRuntime, source: std::net::Ipv4Addr) -> Result<tokio::net::TcpSocket> {
+    use std::os::fd::AsRawFd;
+    let socket = tokio::net::TcpSocket::new_v4()?;
+    let name = std::ffi::CString::new(TUN_NAME)?;
+    let mark: u32 = 0x1062;
+    let fd = socket.as_raw_fd();
+    let result = unsafe {
+        libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_BINDTODEVICE,
+            name.as_ptr().cast(), name.as_bytes_with_nul().len() as libc::socklen_t)
+    };
+    if result != 0 { return Err(std::io::Error::last_os_error().into()); }
+    let result = unsafe {
+        libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_MARK,
+            (&mark as *const u32).cast(), std::mem::size_of::<u32>() as libc::socklen_t)
+    };
+    if result != 0 { return Err(std::io::Error::last_os_error().into()); }
+    socket.bind(std::net::SocketAddr::new(source.into(), 0))?;
+    Ok(socket)
 }
 
 pub fn start_tun(runtime: Arc<VpnRuntime>, tun_ip: String, tun_dns: String, events: EventBus) -> Result<()> {

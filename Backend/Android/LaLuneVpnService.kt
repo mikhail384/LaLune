@@ -19,17 +19,26 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.net.IpPrefix
 import android.net.LocalServerSocket
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.os.PowerManager
+import android.system.ErrnoException
+import android.system.Os
+import android.system.OsConstants
+import android.system.StructPollfd
 import android.util.Log
+import androidx.core.content.ContextCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -37,17 +46,18 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
+import java.io.FileDescriptor
 import java.io.RandomAccessFile
-import java.io.FileInputStream
-import java.io.FileOutputStream
 import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -75,6 +85,8 @@ class LaLuneVpnService : VpnService() {
         private const val NOTIFICATION_TICK_MS = 2_000L
 
         const val ACTION_STATUS = "com.lalune.lalune.VPN_STATUS"
+        const val ACTION_SETTINGS_CHANGED = "com.lalune.lalune.SETTINGS_CHANGED"
+        const val SETTING_AUTO_SLEEP = "androidAutoSleepTunnel"
         const val ACTION_LOG = "com.lalune.lalune.VPN_LOG"
         const val EXTRA_CONNECTED = "connected"
         const val EXTRA_STATE = "state"
@@ -96,11 +108,15 @@ class LaLuneVpnService : VpnService() {
         val tunRxBytes = java.util.concurrent.atomic.AtomicLong(0)
 
         @Volatile var snapshotConnected: Boolean = false
+        @Volatile var snapshotTunnelSleeping: Boolean = false
         @Volatile var snapshotActiveSessions: Int = 0
         @Volatile var snapshotSessionId: String = ""
         @Volatile var snapshotConfigId: Long = 0
         @Volatile var snapshotState: String = "disconnected"
         @Volatile var snapshotMessage: String = ""
+        @Volatile private var activeService: LaLuneVpnService? = null
+
+        fun probeTunnelLatency(configId: Long): Long? = activeService?.measureLatency(configId)
 
         fun notifyStatus(
             ctx: Context,
@@ -134,20 +150,29 @@ class LaLuneVpnService : VpnService() {
     @Volatile private var trafficMB: String = "0.00"
     @Volatile private var connectionState: String = "disconnected"
     @Volatile private var connectionMessage: String = ""
-    @Volatile private var rescanLogsRequested: Boolean = false
 
     private var vpnInterface: ParcelFileDescriptor? = null
     private var udpSocket: DatagramSocket? = null
-    private var totsTunFd: ParcelFileDescriptor? = null
+    private var totsTransport: ParcelFileDescriptor? = null
+    private var totsReader: Job? = null
+    private var coreReady = false
     private var totsRuntime: JSONObject? = null
     @Volatile private var isRunning = false
     @Volatile private var tunEstablished = false
-    @Volatile private var establishing = false
     @Volatile private var tunnelGeneration = 0L
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val tunnelMutex = Mutex()
+    private val tunnelUpdates = Channel<Unit>(Channel.CONFLATED)
+    private val sleepReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            tunnelUpdates.trySend(Unit)
+        }
+    }
+    private var stopping = false
     private lateinit var coreManager: CoreManager
+    private val latencyProbe = TunnelLatencyProbe()
+    private var tunAddress: String? = null
     private var notificationTickerJob: Job? = null
     private var flowJob: Job? = null
     private val bridgeJobs = mutableListOf<Job>()
@@ -155,13 +180,24 @@ class LaLuneVpnService : VpnService() {
     override fun onCreate() {
         super.onCreate()
         coreManager = CoreManager(this)
+        activeService = this
         startForegroundCompat()
+        ContextCompat.registerReceiver(this, sleepReceiver, IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(ACTION_SETTINGS_CHANGED)
+        }, ContextCompat.RECEIVER_NOT_EXPORTED)
+        scope.launch {
+            for (update in tunnelUpdates) {
+                while (isActive && !reconcileTunnel()) delay(TUN_RETRY_DELAY_MS)
+            }
+        }
         notifyLog(this, "[VPN] service created")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            "START" -> if (!isRunning) {
+            "START" -> if (!isRunning && !stopping) {
                 notifyLog(this, "[VPN] START received; configId=$snapshotConfigId")
                 isRunning = true
                 publishState("connecting", false, "Подключение")
@@ -191,16 +227,15 @@ class LaLuneVpnService : VpnService() {
                 null
             }
             if (totsRuntime != null) {
-                notifyLog(this@LaLuneVpnService, "[VPN] ToTS runtime loaded; creating TUN")
-                establishing = true
-                val established = establishTun()
-                establishing = false
-                if (established && isRunning) {
-                    publishState("connected", true, "Подключено")
-                    Log.i(TAG, "ToTS TUN established and core received its descriptor over SCM_RIGHTS")
+                val started = tunnelMutex.withLock {
+                    if (!isRunning) return@withLock false
+                    startTotsCoreLocked(totsRuntime!!).also { coreReady = it }
+                }
+                if (started) {
+                    tunnelUpdates.trySend(Unit)
                 } else if (isRunning) {
                     publishState("error", false, "Не удалось запустить ToTS")
-                    stopFlow()
+                    withContext(Dispatchers.Main) { stopFlow() }
                 }
             } else {
                 val logsFile = File(filesDir, "la-lune/logs.log")
@@ -229,15 +264,6 @@ class LaLuneVpnService : VpnService() {
         Log.d(TAG, "watching ${logsFile.absolutePath}")
 
         while (isRunning) {
-            if (rescanLogsRequested) {
-                lastOffset = 0L
-                consecutiveActiveTicks = 0
-                detectedTunIP = null
-                detectedDNS = null
-                rescanLogsRequested = false
-                Log.i(TAG, "re-reading logs for fresh TUN parameters")
-            }
-
             if (logsFile.exists()) {
                 try {
                     RandomAccessFile(logsFile, "r").use { file ->
@@ -272,7 +298,7 @@ class LaLuneVpnService : VpnService() {
                                 trafficMB = String.format("%.2f", traffic)
                                 updateNotification()
 
-                                if (!tunEstablished && !establishing) {
+                                if (consecutiveActiveTicks < REQUIRED_ACTIVE_TICKS && isRunning) {
                                     if (active > 0) {
                                         consecutiveActiveTicks++
                                         if (consecutiveActiveTicks == 1) {
@@ -291,21 +317,12 @@ class LaLuneVpnService : VpnService() {
                 }
             }
 
-            val readyForTun = !tunEstablished && !establishing &&
-                consecutiveActiveTicks >= REQUIRED_ACTIVE_TICKS
-
-            if (readyForTun) {
-                establishing = true
-                val established = establishTun()
-                establishing = false
-
-                if (established && isRunning) {
-                    publishState("connected", true, "Подключено")
-                    Log.i(TAG, "TUN created after $REQUIRED_ACTIVE_TICKS active ticks")
-                } else if (isRunning) {
-                    consecutiveActiveTicks = 0
-                    rescanLogsRequested = true
-                    delay(TUN_RETRY_DELAY_MS)
+            if (consecutiveActiveTicks >= REQUIRED_ACTIVE_TICKS) {
+                tunnelMutex.withLock {
+                    if (isRunning && !coreReady) {
+                        coreReady = true
+                        tunnelUpdates.trySend(Unit)
+                    }
                 }
             }
 
@@ -354,20 +371,45 @@ class LaLuneVpnService : VpnService() {
         return value + if (value.contains(':')) "/128" else "/32"
     }
 
-    private suspend fun establishTun(): Boolean = tunnelMutex.withLock {
-        if (tunEstablished || !isRunning) return@withLock false
+    private suspend fun reconcileTunnel(): Boolean = tunnelMutex.withLock {
+        if (!isRunning || !coreReady) return@withLock true
+        val routing = readRoutingSettings()
+        val interactive = getSystemService(PowerManager::class.java)?.isInteractive ?: true
+        if (!interactive && routing.optBoolean(SETTING_AUTO_SLEEP, true)) {
+            if (!snapshotTunnelSleeping) {
+                snapshotTunnelSleeping = true
+                teardownTunnelOnlyLocked("screen off")
+                if (isRunning) publishState("connected", true, "Туннель спит")
+            }
+            return@withLock true
+        }
+        if (tunEstablished) return@withLock true
+        if (!establishTunLocked(routing)) {
+            if (isRunning && totsRuntime != null && !snapshotConnected) {
+                publishState("error", false, "Не удалось создать TUN для ToTS")
+                scope.launch(Dispatchers.Main) { stopFlow() }
+                return@withLock true
+            }
+            return@withLock false
+        }
+        snapshotTunnelSleeping = false
+        if (isRunning) publishState("connected", true, "Подключено")
+        true
+    }
+
+    private fun establishTunLocked(routing: JSONObject): Boolean {
         Log.d(TAG, "establishTun")
 
         teardownTunnelOnlyLocked("before establish")
-        try {
+        return try {
             val runtime = totsRuntime
             val isTots = runtime != null
             val tunIP = if (isTots) runtime!!.optString("virtualIp", DEFAULT_TUN_IP) else detectedTunIP ?: DEFAULT_TUN_IP
+            val transport = if (isTots) checkNotNull(totsTransport) else null
             val tunMtu = if (isTots) runtime!!.optInt("mtu", MTU).coerceIn(576, 1400) else MTU
             val dnsList = (detectedDNS ?: "$DEFAULT_DNS_1,$DEFAULT_DNS_2")
                 .split(",").map { it.trim() }.filter { it.isNotEmpty() }
 
-            val routing = readRoutingSettings()
             val builder = Builder()
                 .setSession(if (isTots) "LaLune · ToTS" else "LaLune")
                 .setMtu(tunMtu)
@@ -422,7 +464,7 @@ class LaLuneVpnService : VpnService() {
                 if (isTots && selectedPackages.isEmpty()) {
                     Log.e(TAG, "ToTS app whitelist is empty after excluding the LaLune package")
                     notifyLog(this@LaLuneVpnService, "[VPN] ToTS: выберите хотя бы одно приложение для whitelist")
-                    return@withLock false
+                    return false
                 }
                 var allowedCount = 0
                 selectedPackages.forEach { packageName ->
@@ -436,7 +478,7 @@ class LaLuneVpnService : VpnService() {
                 if (isTots && allowedCount == 0) {
                     Log.e(TAG, "ToTS app whitelist has no valid applications")
                     notifyLog(this@LaLuneVpnService, "[VPN] ToTS: whitelist не содержит доступных приложений")
-                    return@withLock false
+                    return false
                 }
             } else {
                 selectedPackages.forEach { packageName ->
@@ -463,116 +505,24 @@ class LaLuneVpnService : VpnService() {
                 }
             }
 
-            builder.setBlocking(true)
+            builder.setBlocking(false)
 
-            val iface = withContext(Dispatchers.Main) { builder.establish() } ?: run {
+            val iface = builder.establish() ?: run {
                 Log.e(TAG, "establish() null — no VPN permission")
-                return@withLock false
+                return false
             }
 
-            if (isTots) {
-                val inherited = try {
-                    ParcelFileDescriptor.dup(iface.fileDescriptor)
-                } catch (e: Exception) {
-                    try { iface.close() } catch (_: Exception) {}
-                    Log.e(TAG, "cannot duplicate ToTS TUN fd: ${e.message}", e)
-                    return@withLock false
-                }
-                // Do not pass the numeric fd through ProcessBuilder. Android's
-                // child-process launcher may close non-standard descriptors even
-                // after FD_CLOEXEC has been cleared. Transfer it explicitly with
-                // SCM_RIGHTS over an abstract AF_UNIX socket instead.
-                val fdSocketName = "lalune-tots-${UUID.randomUUID().toString().replace("-", "")}"
-                val fdServer = try {
-                    LocalServerSocket(fdSocketName)
-                } catch (e: Exception) {
-                    try { inherited.close() } catch (_: Exception) {}
-                    try { iface.close() } catch (_: Exception) {}
-                    Log.e(TAG, "cannot create ToTS fd handoff socket: ${e.message}", e)
-                    notifyLog(this@LaLuneVpnService, "[VPN] cannot create ToTS fd handoff socket: ${e.message.orEmpty()}")
-                    return@withLock false
-                }
-                val jsonArgs = runtime!!.optJSONArray("args") ?: JSONArray()
-                val args = mutableListOf<String>()
-                for (i in 0 until jsonArgs.length()) args += jsonArgs.optString(i)
-                args += "--tun-fd-socket"
-                args += fdSocketName
-
+            if (transport != null) {
                 tunnelGeneration++
                 vpnInterface = iface
-                totsTunFd = inherited
+                tunAddress = tunIP
                 tunEstablished = true
-                notifyLog(this@LaLuneVpnService, "[VPN] TUN fd=${inherited.fd} ready; starting ToTS")
-                val coreTunReady = CompletableDeferred<Boolean>()
-                val started = coreManager.startCore(
-                    protocol = CoreManager.PROTO_TOTS,
-                    args = args,
-                    onLog = { line ->
-                        Log.i(TAG, line)
-                        notifyLog(this@LaLuneVpnService, line, core = true)
-                        when {
-                            line.contains("ToTS Android TUN connected") -> coreTunReady.complete(true)
-                            line.contains("[CORE] process exited") || line.contains("Error:") -> coreTunReady.complete(false)
-                        }
-                    },
-                )
-                if (!started) {
-                    try { fdServer.close() } catch (_: Exception) {}
-                    notifyLog(this@LaLuneVpnService, "[VPN] ToTS process failed to start")
-                    tunEstablished = false
-                    try { inherited.close() } catch (_: Exception) {}
-                    totsTunFd = null
-                    try { iface.close() } catch (_: Exception) {}
-                    vpnInterface = null
-                    return@withLock false
+                val generation = tunnelGeneration
+                bridgeJobs += scope.launch {
+                    readTun(iface, generation) { buf, size -> writePacket(transport, buf, size) }
                 }
-                val handedOff = try {
-                    val acceptJob = scope.async(Dispatchers.IO) { fdServer.accept() }
-                    val client = withTimeoutOrNull(15_000) { acceptJob.await() }
-                    if (client == null) {
-                        try { fdServer.close() } catch (_: Exception) {}
-                        acceptJob.cancel()
-                        throw IOException("ToTS did not request the TUN descriptor within 15 seconds")
-                    }
-                    client.use { socket ->
-                        socket.setFileDescriptorsForSend(arrayOf(inherited.fileDescriptor))
-                        // Android attaches SCM_RIGHTS descriptors to the next write.
-                        socket.outputStream.write(1)
-                        socket.outputStream.flush()
-                    }
-                    true
-                } catch (e: Exception) {
-                    Log.e(TAG, "ToTS TUN fd handoff failed: ${e.message}", e)
-                    notifyLog(this@LaLuneVpnService, "[VPN] ToTS TUN fd handoff failed: ${e.message.orEmpty()}")
-                    false
-                } finally {
-                    try { fdServer.close() } catch (_: Exception) {}
-                }
-                if (!handedOff) {
-                    coreManager.stopCore()
-                    tunEstablished = false
-                    try { inherited.close() } catch (_: Exception) {}
-                    totsTunFd = null
-                    try { iface.close() } catch (_: Exception) {}
-                    vpnInterface = null
-                    return@withLock false
-                }
-                notifyLog(this@LaLuneVpnService, "[VPN] TUN descriptor transferred; waiting for ToTS to confirm epoll readiness")
-                val ready = withTimeoutOrNull(15_000) { coreTunReady.await() } == true
-                if (!ready) {
-                    notifyLog(this@LaLuneVpnService, "[VPN] ToTS did not confirm TUN readiness")
-                    coreManager.stopCore()
-                    tunEstablished = false
-                    try { inherited.close() } catch (_: Exception) {}
-                    totsTunFd = null
-                    try { iface.close() } catch (_: Exception) {}
-                    vpnInterface = null
-                    return@withLock false
-                }
-                Log.i(TAG, "ToTS TUN up and epoll-ready: IP=$tunIP MTU=$tunMtu fd=${inherited.fd}")
-                notifyLog(this@LaLuneVpnService, "[VPN] ToTS TUN connected; IP=$tunIP MTU=$tunMtu")
-                updateNotification()
-                return@withLock true
+                notifyLog(this, "[VPN] ToTS TUN connected; IP=$tunIP MTU=$tunMtu")
+                return true
             }
 
             val socket = try {
@@ -584,19 +534,23 @@ class LaLuneVpnService : VpnService() {
             } catch (e: Exception) {
                 try { iface.close() } catch (_: Exception) {}
                 Log.e(TAG, "setupSocket: ${e.message}", e)
-                return@withLock false
+                return false
             }
 
             tunnelGeneration++
             val generation = tunnelGeneration
             vpnInterface = iface
             udpSocket = socket
+            tunAddress = tunIP
             tunEstablished = true
             Log.i(TAG, "TUN up: IP=$tunIP, UDP bridge to 127.0.0.1:$CORE_PORT")
 
-            bridgeJobs.forEach { it.cancel() }
-            bridgeJobs.clear()
-            bridgeJobs += scope.launch { tunToUdp(iface, socket, generation) }
+            bridgeJobs += scope.launch {
+                readTun(iface, generation) { buf, size ->
+                    socket.send(DatagramPacket(buf, size))
+                    true
+                }
+            }
             bridgeJobs += scope.launch { udpToTun(iface, socket, generation) }
             updateNotification()
             true
@@ -607,49 +561,185 @@ class LaLuneVpnService : VpnService() {
         }
     }
 
-    private suspend fun tunToUdp(
-        iface: ParcelFileDescriptor,
-        socket: DatagramSocket,
-        generation: Long,
-    ) {
-        val input = FileInputStream(iface.fileDescriptor)
-        val buf = ByteArray(65535)
-        while (isRunning && tunEstablished && generation == tunnelGeneration) {
-            try {
-                val n = input.read(buf)
-                if (n > 0) {
-                    socket.send(DatagramPacket(buf.copyOf(n), n))
-                    tunTxBytes.addAndGet(n.toLong())
+    /** Keep a packet-oriented endpoint alive across VpnService TUN generations.
+     * The ToTS runner uses read/write and epoll on the supplied descriptor;
+     * passing the real TUN would let its process keep the interface open. */
+    private suspend fun startTotsCoreLocked(runtime: JSONObject): Boolean {
+        val localFd = FileDescriptor()
+        val coreFd = FileDescriptor()
+        var ok = false
+        try {
+            Os.socketpair(OsConstants.AF_UNIX, OsConstants.SOCK_DGRAM or OsConstants.SOCK_CLOEXEC, 0, localFd, coreFd)
+            Os.fcntlInt(localFd, OsConstants.F_SETFL, OsConstants.O_NONBLOCK)
+            val transport = ParcelFileDescriptor.dup(localFd)
+            totsTransport = transport
+            val fdSocketName = "lalune-tots-${UUID.randomUUID().toString().replace("-", "")}"
+            val coreTunReady = CompletableDeferred<Boolean>()
+            LocalServerSocket(fdSocketName).use { server ->
+                val jsonArgs = runtime.optJSONArray("args") ?: JSONArray()
+                val args = MutableList(jsonArgs.length()) { jsonArgs.optString(it) }
+                args += listOf("--tun-fd-socket", fdSocketName)
+                if (!coreManager.startCore(CoreManager.PROTO_TOTS, args = args, onLog = { line ->
+                        Log.i(TAG, line)
+                        notifyLog(this, line, core = true)
+                        when {
+                            line.contains("ToTS Android TUN connected") -> coreTunReady.complete(true)
+                            line.contains("[CORE] process exited") || line.contains("Error:") ->
+                                coreTunReady.complete(false)
+                        }
+                    })) return false
+                val handoff = scope.async {
+                    server.accept().use { socket ->
+                        if (socket.peerCredentials.uid != android.os.Process.myUid()) {
+                            throw IOException("unexpected ToTS socket peer")
+                        }
+                        socket.setFileDescriptorsForSend(arrayOf(coreFd))
+                        socket.outputStream.write(1)
+                    }
                 }
-            } catch (e: Exception) {
-                if (isRunning && generation == tunnelGeneration) Log.w(TAG, "tunToUdp: ${e.message}")
-                break
+                try {
+                    if (withTimeoutOrNull(15_000) { handoff.await() } == null) {
+                        throw IOException("ToTS did not request the packet descriptor")
+                    }
+                } finally {
+                    handoff.cancel()
+                }
+            }
+            if (withTimeoutOrNull(15_000) { coreTunReady.await() } != true) {
+                throw IOException("ToTS did not confirm packet transport readiness")
+            }
+            totsReader = scope.launch { readFromTots(transport) }
+            ok = true
+            return true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "ToTS packet transport startup failed", e)
+            notifyLog(this, "[VPN] ToTS packet transport startup failed: ${e.message.orEmpty()}")
+            return false
+        } finally {
+            if (localFd.valid()) runCatching { Os.close(localFd) }
+            if (coreFd.valid()) runCatching { Os.close(coreFd) }
+            if (!ok) {
+                coreManager.stopCore()
+                closeTotsTransportLocked()
             }
         }
     }
 
-    private suspend fun udpToTun(
+    private fun tunnelActive(generation: Long): Boolean =
+        isRunning && tunEstablished && generation == tunnelGeneration
+
+    private fun measureLatency(configId: Long): Long? = runBlocking {
+        val (source, generation) = tunnelMutex.withLock {
+            if (!tunnelActive(tunnelGeneration) || snapshotConfigId != configId) return@runBlocking null
+            (tunAddress ?: return@runBlocking null) to tunnelGeneration
+        }
+        val elapsed = latencyProbe.measure(source) { packet ->
+            runBlocking {
+                tunnelMutex.withLock {
+                    if (!tunnelActive(generation) || snapshotConfigId != configId) {
+                        throw IOException("tunnel detached")
+                    }
+                    val transport = totsTransport
+                    if (transport != null) {
+                        if (!writePacket(transport, packet, packet.size)) throw IOException("transport busy")
+                    } else {
+                        val socket = udpSocket ?: throw IOException("transport missing")
+                        socket.send(DatagramPacket(packet, packet.size))
+                    }
+                }
+            }
+        }
+        elapsed.takeIf { tunnelActive(generation) && snapshotConfigId == configId }
+    }
+
+    // Nonblocking descriptors let a detach invalidate an old bridge without
+    // leaving threads behind in a blocking read or write on that TUN.
+    private fun waitForPacket(poll: Array<StructPollfd>): Boolean {
+        if (Os.poll(poll, 250) == 0) return false
+        if ((poll[0].revents.toInt() and OsConstants.POLLIN) == 0) {
+            throw IOException("packet descriptor no longer readable")
+        }
+        return true
+    }
+
+    private fun readPacket(fd: FileDescriptor, buf: ByteArray): Int = try {
+        Os.read(fd, buf, 0, buf.size)
+    } catch (e: ErrnoException) {
+        if (e.errno == OsConstants.EAGAIN || e.errno == OsConstants.EINTR) 0 else throw e
+    }
+
+    private fun writePacket(fd: ParcelFileDescriptor, buf: ByteArray, size: Int): Boolean = try {
+        Os.write(fd.fileDescriptor, buf, 0, size) == size
+    } catch (e: ErrnoException) {
+        if (e.errno == OsConstants.EAGAIN || e.errno == OsConstants.EINTR || e.errno == OsConstants.ENOBUFS) {
+            false // Best effort, like the UDP bridge.
+        } else throw e
+    }
+
+    private fun pollRead(fd: FileDescriptor): Array<StructPollfd> = arrayOf(StructPollfd().apply {
+        this.fd = fd
+        events = OsConstants.POLLIN.toShort()
+    })
+
+    private suspend fun readTun(
         iface: ParcelFileDescriptor,
-        socket: DatagramSocket,
         generation: Long,
+        send: (ByteArray, Int) -> Boolean,
     ) {
-        val output = FileOutputStream(iface.fileDescriptor)
+        val fd = iface.fileDescriptor
+        val poll = pollRead(fd)
         val buf = ByteArray(65535)
-        while (isRunning && tunEstablished && generation == tunnelGeneration) {
-            try {
-                val packet = DatagramPacket(buf, buf.size)
-                socket.receive(packet)
-                output.write(packet.data, 0, packet.length)
-                tunRxBytes.addAndGet(packet.length.toLong())
-            } catch (e: Exception) {
-                if (isRunning && generation == tunnelGeneration) Log.w(TAG, "udpToTun: ${e.message}")
-                break
+        try {
+            while (tunnelActive(generation)) {
+                if (!waitForPacket(poll)) continue
+                if (!tunnelActive(generation)) break
+                val n = readPacket(fd, buf)
+                if (n > 0 && tunnelActive(generation) && send(buf, n)) tunTxBytes.addAndGet(n.toLong())
             }
+        } catch (e: Exception) {
+            if (tunnelActive(generation)) Log.w(TAG, "TUN -> core: ${e.message}")
         }
     }
 
-    private suspend fun teardownTunnelOnly(reason: String) = tunnelMutex.withLock {
-        teardownTunnelOnlyLocked(reason)
+    private suspend fun readFromTots(transport: ParcelFileDescriptor) {
+        val fd = transport.fileDescriptor
+        val poll = pollRead(fd)
+        val buf = ByteArray(65535)
+        try {
+            while (isRunning) {
+                if (!waitForPacket(poll)) continue
+                tunnelMutex.withLock {
+                    if (!isRunning) return
+                    val n = readPacket(fd, buf)
+                    // Keep draining the core even with no TUN so it never stalls.
+                    if (n > 0 && tunEstablished) vpnInterface?.let { writeToTun(it, buf, n) }
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (isRunning) Log.w(TAG, "ToTS -> TUN: ${e.message}")
+        }
+    }
+
+    private fun writeToTun(iface: ParcelFileDescriptor, buf: ByteArray, n: Int) {
+        if (!latencyProbe.consume(buf, n) && writePacket(iface, buf, n)) tunRxBytes.addAndGet(n.toLong())
+    }
+
+    private fun udpToTun(iface: ParcelFileDescriptor, socket: DatagramSocket, generation: Long) {
+        val buf = ByteArray(65535)
+        val packet = DatagramPacket(buf, buf.size)
+        try {
+            while (tunnelActive(generation)) {
+                packet.length = buf.size
+                socket.receive(packet)
+                if (tunnelActive(generation)) writeToTun(iface, packet.data, packet.length)
+            }
+        } catch (e: Exception) {
+            if (tunnelActive(generation)) Log.w(TAG, "UDP -> TUN: ${e.message}")
+        }
     }
 
     private fun teardownTunnelOnlyLocked(reason: String) {
@@ -658,63 +748,68 @@ class LaLuneVpnService : VpnService() {
         }
         tunnelGeneration++
         tunEstablished = false
+        latencyProbe.cancel()
+        tunAddress = null
         bridgeJobs.forEach { it.cancel() }
         bridgeJobs.clear()
-        try { udpSocket?.close() } catch (_: Exception) {}
+        udpSocket?.close()
         udpSocket = null
-        try { totsTunFd?.close() } catch (_: Exception) {}
-        totsTunFd = null
-        try { vpnInterface?.close() } catch (_: Exception) {}
+        runCatching { vpnInterface?.close() }
         vpnInterface = null
+    }
+
+    private fun closeTotsTransportLocked() {
+        totsReader?.cancel()
+        totsReader = null
+        runCatching { totsTransport?.close() }
+        totsTransport = null
+    }
+
+    override fun onRevoke() {
+        // An actual revoke (including replacement by another VPN) must never
+        // get interpreted as a screen sleep and later re-establish the TUN.
+        scope.launch(Dispatchers.Main) { stopFlow() }
     }
 
     private fun stopFlow() {
-        Log.d(TAG, "stopFlow")
+        if (stopping) return
+        stopping = true
         isRunning = false
-        establishing = false
         flowJob?.cancel()
-        flowJob = null
         notificationTickerJob?.cancel()
-        notificationTickerJob = null
+        scope.launch {
+            tunnelMutex.withLock { releaseSessionLocked() }
+            withContext(Dispatchers.Main) {
+                publishState("disconnected", false, "")
+                ServiceCompat.stopForeground(this@LaLuneVpnService, ServiceCompat.STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
+        }
+    }
 
-        tunnelGeneration++
-        tunEstablished = false
-        bridgeJobs.forEach { it.cancel() }
-        bridgeJobs.clear()
-        try { udpSocket?.close() } catch (_: Exception) {}
-        udpSocket = null
-        try { totsTunFd?.close() } catch (_: Exception) {}
-        totsTunFd = null
-        try { vpnInterface?.close() } catch (_: Exception) {}
-        vpnInterface = null
-
+    private fun releaseSessionLocked() {
+        teardownTunnelOnlyLocked("service stop")
         if (totsRuntime != null) {
             coreManager.stopCore()
-            try { File(filesDir, "la-lune/tots_runtime.json").delete() } catch (_: Exception) {}
+            runCatching { File(filesDir, "la-lune/tots_runtime.json").delete() }
         }
+        closeTotsTransportLocked()
         totsRuntime = null
-
-        activeSessions = 0
+        coreReady = false
+        snapshotTunnelSleeping = false
         snapshotActiveSessions = 0
-        consecutiveActiveTicks = 0
-        trafficMB = "0.00"
-        detectedTunIP = null
-        detectedDNS = null
-        connectionState = "disconnected"
-        connectionMessage = ""
-        notifyStatus(this, false, "disconnected", "")
-        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
-        stopSelf()
     }
 
     override fun onDestroy() {
-        stopFlow()
+        isRunning = false
+        unregisterReceiver(sleepReceiver)
+        tunnelUpdates.close()
         scope.cancel()
-        snapshotConnected = false
+        runBlocking { tunnelMutex.withLock { releaseSessionLocked() } }
+        publishState("disconnected", false, "")
+        activeService = null
         snapshotSessionId = ""
         snapshotConfigId = 0
-        snapshotState = "disconnected"
-        snapshotMessage = ""
         super.onDestroy()
     }
 
@@ -747,7 +842,8 @@ class LaLuneVpnService : VpnService() {
 
         val text = when (connectionState) {
             "checking" -> "Проверка"
-            "connected" -> "Активных: $activeSessions | Трафик: $trafficMB МБ"
+            "connected" -> if (snapshotTunnelSleeping) "Туннель спит"
+                           else "Активных: $activeSessions | Трафик: $trafficMB МБ"
             else -> "Подключение"
         }
 

@@ -160,6 +160,7 @@ fieldset:disabled { opacity: 1; }
 #profile-select { margin-bottom: .75rem; }
 .fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
 .full { grid-column: 1 / -1; }
+.worker-auto { margin-top: .45rem; }
 .advanced, .checks { margin-top: .7rem; }
 .checks { display: grid; gap: .5rem; }
 

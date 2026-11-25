@@ -19,6 +19,22 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
+  test('Android sleep and OpenWrt worker preferences round-trip', () {
+    final defaults = Settings.fromJson({});
+    expect(defaults.androidAutoSleepTunnel, isTrue);
+    expect(defaults.autoWorkers, isFalse);
+
+    final updated = defaults.copyWith(
+      workers: 30,
+      autoWorkers: true,
+      androidAutoSleepTunnel: false,
+    );
+    final decoded = Settings.fromJson(updated.toJson());
+    expect(decoded.autoWorkers, isTrue);
+    expect(decoded.workers, 30);
+    expect(decoded.androidAutoSleepTunnel, isFalse);
+  });
+
   final desired = Settings(
     desktopSocks5Mode: true,
     ipRoutingMode: 'blacklist',

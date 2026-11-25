@@ -72,6 +72,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/vpn/connect", post(vpn_connect))
         .route("/vpn/disconnect", post(vpn_disconnect))
         .route("/vpn/status", get(vpn_status))
+        .route("/vpn/measure", post(vpn_measure))
         .route("/vpn/reconnect", post(vpn_reconnect))
         .route("/vpn/stats", get(vpn_stats))
         .route("/vpn/tunconf", get(vpn_tunconf))
@@ -677,17 +678,21 @@ async fn vpn_connect(
     State(state): State<Arc<AppState>>,
     Json(body): Json<ConnectBody>,
 ) -> axum::response::Response {
-    let _operation = state.vpn.operation.lock().await;
+    let _lifecycle = state.vpn.lifecycle.lock().await;
     let config = if let Some(id) = body.config_id {
         state.configs.get(id).ok().flatten()
     } else {
         state.selected_config.read().clone()
     };
 
-    let mut config = match config {
-        Some(c) => c,
-        None => return err(400, "no config selected"),
-    };
+    match config {
+        Some(config) => connect_profile(&state, config, false).await,
+        None => err(400, "no config selected"),
+    }
+}
+
+async fn connect_profile(state: &Arc<AppState>, mut config: ConfigItem, _temporary: bool) -> axum::response::Response {
+    let _operation = state.vpn.operation.lock().await;
 
     state.vpn.stop().await;
     finish_vpn(&state).await;
@@ -1208,7 +1213,12 @@ async fn finish_vpn(state: &Arc<AppState>) {
     if let Some(lua) = state.lua() { lua.on_disconnect(); }
 }
 
-async fn vpn_disconnect(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+async fn vpn_disconnect(State(state): State<Arc<AppState>>) -> Json<Value> {
+    let _lifecycle = state.vpn.lifecycle.lock().await;
+    disconnect_profile(&state).await
+}
+
+async fn disconnect_profile(state: &Arc<AppState>) -> Json<Value> {
     let _operation = state.vpn.operation.lock().await;
     state.vpn.set_phase("disconnecting", "Отключение...");
     state.events.emit(Event::status_detail(false, "disconnecting", "Отключение..."));
@@ -1216,6 +1226,102 @@ async fn vpn_disconnect(State(state): State<Arc<AppState>>) -> impl IntoResponse
     state.vpn.stop().await;
     finish_vpn(&state).await;
     Json(json!({"ok": true}))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MeasureBody {
+    temporary: bool,
+    config_id: Option<i64>,
+    link: Option<String>,
+    protocol: Option<String>,
+}
+
+async fn vpn_measure(State(state): State<Arc<AppState>>, Json(body): Json<MeasureBody>) -> axum::response::Response {
+    // The task owns temporary VPN cleanup even after the HTTP client goes away.
+    match tokio::spawn(async move { measure_profile(state, body).await }).await {
+        Ok(response) => response,
+        Err(_) => err(500, "VPN measurement task failed"),
+    }
+}
+
+async fn measure_profile(state: Arc<AppState>, body: MeasureBody) -> axum::response::Response {
+    let Ok(_lifecycle) = state.vpn.lifecycle.try_lock() else {
+        return err(409, "VPN operation in progress");
+    };
+    let configured = *state.vpn.active_config_id.lock();
+    let ready = state.vpn.running.load(std::sync::atomic::Ordering::Acquire);
+    if !body.temporary {
+        if !ready || configured == 0 || body.config_id != Some(configured) {
+            return err(409, "requested VPN profile is not connected");
+        }
+        return probe_tunnel(&state).await;
+    }
+    if ready || configured != 0 || !core_stopped(&state) {
+        return err(409, "VPN is not disconnected");
+    }
+    let config = match (body.config_id, body.link) {
+        (Some(id), None) => match state.configs.get(id) {
+            Ok(Some(config)) => config,
+            _ => return err(404, "profile not found"),
+        },
+        (None, Some(link)) => match parse_link_for_protocol(&link, body.protocol.as_deref().unwrap_or("CSQTT")) {
+            Ok(mut config) => { config.id = -1; config },
+            Err(error) => return err(400, error.to_string()),
+        },
+        _ => return err(400, "provide a profile id or link"),
+    };
+    let id = config.id;
+    let start = connect_profile(&state, config, true).await;
+    let outcome = if start.status().is_success() {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(95);
+        loop {
+            if state.vpn.running.load(std::sync::atomic::Ordering::Acquire)
+                && *state.vpn.active_config_id.lock() == id
+            {
+                break probe_tunnel(&state).await;
+            }
+            if core_stopped(&state) || tokio::time::Instant::now() >= deadline {
+                break err(504, "temporary VPN did not become ready");
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    } else { start };
+    let _ = disconnect_profile(&state).await;
+    outcome
+}
+
+async fn probe_tunnel(state: &Arc<AppState>) -> axum::response::Response {
+    let _operation = state.vpn.operation.lock().await;
+    if !state.vpn.running.load(std::sync::atomic::Ordering::Acquire) || core_stopped(state) {
+        return err(409, "VPN is not connected");
+    }
+    // The Rust-managed TUN supplies its address; ToTS owns its interface
+    // and does not populate tun_conf.
+    let source = match state.vpn.tun_conf.lock().clone() {
+        Some(conf) => match conf.ip.parse::<std::net::Ipv4Addr>() {
+            Ok(source) => Some(source),
+            Err(_) => return err(500, "invalid tunnel IPv4 address"),
+        },
+        None => None,
+    };
+    let target = std::net::SocketAddr::from(([1, 1, 1, 1], 443));
+    if *state.socks5_port.read() != 0 {
+        if let Err(error) = vpn::ensure_proxy_route(&state.vpn, target.ip(), &state.events) {
+            return err(503, error.to_string());
+        }
+    }
+    let socket = match vpn::latency_socket(&state.vpn, source) {
+        Ok(socket) => socket,
+        Err(error) => return err(503, error.to_string()),
+    };
+    let started = std::time::Instant::now();
+    // Time a TCP handshake to a fixed public IPv4; no peer probing, DNS,
+    // application payload, or fallback to the unprotected network.
+    match tokio::time::timeout(Duration::from_secs(5), socket.connect(target)).await {
+        Ok(Ok(_)) => Json(json!({"latencyMs": started.elapsed().as_millis().max(1) as u64})).into_response(),
+        _ => err(504, "tunnel latency probe did not respond"),
+    }
 }
 
 async fn vpn_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {

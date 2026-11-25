@@ -7,7 +7,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:flutter/services.dart';
 
+import '../api/api_exception.dart';
 import '../models/config_item.dart';
+import '../models/vpn_status.dart';
 import '../models/subscription.dart';
 import '../state/configs_notifier.dart';
 import '../state/logs_notifier.dart';
@@ -48,7 +50,7 @@ class ConnectionPage extends ConsumerStatefulWidget {
 
 class _ConnectionPageState extends ConsumerState<ConnectionPage> {
   final Map<String, int> _profilePings = <String, int>{};
-  bool _pingsMeasured = false;
+  Set<String> _attemptedPings = {};
   bool _measuringPings = false;
 
   @override
@@ -58,6 +60,7 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
   }
 
   Future<void> _toggle() async {
+    if (_measuringPings) return;
     final vpn = ref.read(vpnProvider);
     if (vpn.state == 'disconnecting') return;
     if (vpn.connected ||
@@ -127,68 +130,87 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
 
   Future<void> _measureAllPings() async {
     if (_measuringPings) return;
-    final configsState = ref.read(configsProvider);
-    final subsState = ref.read(subscriptionsProvider);
-    final managedIds = subsState.managedIds;
-    final plain = managedIds.isEmpty
-        ? configsState.items
-        : configsState.items.where((c) => !managedIds.contains(c.id)).toList();
-
+    final configs = ref.read(configsProvider);
+    final subs = ref.read(subscriptionsProvider);
+    final managedIds = subs.managedIds;
+    final profiles = [
+      for (final config in configs.items)
+        if (!managedIds.contains(config.id))
+          PingProfile(configPingKey(config.id), config.id),
+      for (final sub in subs.items)
+        for (final config in sub.configs)
+          PingProfile(subConfigPingKey(sub.id, config), sub.backendIds[config.key],
+              link: config.expired ? null : config.config,
+              protocol: config.protocol),
+    ];
+    final api = ref.read(apiClientProvider);
+    final backend = api.baseUrl;
+    var backendChanged = false;
+    final backendChanges = api.baseUrlChanges.listen((_) {
+      backendChanged = true;
+    });
+    bool onSameBackend() => !backendChanged && api.baseUrl == backend;
+    var stop = false;
+    String? error;
     setState(() {
       _measuringPings = true;
-      _pingsMeasured = false;
+      _attemptedPings = {};
       _profilePings.clear();
     });
-
-    final api = ref.read(apiClientProvider);
-    final results = <String, int>{};
-    final jobs = <Future<void>>[];
-
-    for (final config in plain) {
-      jobs.add(() async {
-        final ping = await probeProfile(config);
-        if (ping != null) results[configPingKey(config.id)] = ping;
-      }());
-    }
-
-    for (final sub in subsState.items) {
-      for (final config in sub.configs) {
-        if (config.expired) continue;
-        jobs.add(() async {
-          try {
-            final parsed = await api.postJson('/configs/parse', {
-              'link': config.config,
-              'protocol': config.protocol,
-            });
-            final item = ConfigItem.fromJson(parsed);
-            final ping = await probeProfile(item);
-            if (ping != null) {
-              results[subConfigPingKey(sub.id, config)] = ping;
-            }
-          } catch (_) {
-            // Ошибка одного профиля не должна отменять параллельный замер остальных.
-          }
-        }());
+    try {
+      final initial = VpnStatus.fromJson(await api.getJson('/vpn/status'));
+      if (!initial.connected && initial.state != 'disconnected' && initial.state != 'error') {
+        throw ApiException('Дождитесь завершения операции VPN');
       }
-    }
-
-    await Future.wait(jobs);
-    if (!mounted) return;
-    setState(() {
-      _profilePings
-        ..clear()
-        ..addAll(results);
-      _pingsMeasured = true;
-      _measuringPings = false;
-    });
-    final total = jobs.length;
-    Toast.show(
-      context,
-      total == 0
+      // Expired subscription profiles cannot be newly connected. They can
+      // still be measured if one was already active when the request began.
+      final eligible = initial.connected
+          ? profiles
+          : profiles.where((profile) => profile.link != null ||
+              profile.key.startsWith('config:'));
+      final result = await measurePings(
+        profiles: eligible,
+        connected: initial.connected,
+        activeId: initial.configId,
+        canContinue: () => mounted && onSameBackend() && !stop,
+        measure: (body) async {
+          try {
+            final response = await api.postJson('/vpn/measure', body,
+                timeout: initial.connected
+                    ? const Duration(seconds: 15)
+                    : const Duration(minutes: 4));
+            final latency = response['latencyMs'];
+            return latency is num && latency.isFinite && latency > 0
+                ? latency.toInt()
+                : null;
+          } on ApiException catch (e) {
+            if (e.statusCode == null || e.statusCode == 403 ||
+                e.statusCode == 409 || e.statusCode == 501 ||
+                e.statusCode == 405) {
+              stop = true;
+            }
+            if (stop || initial.connected) error = e.message;
+            return null;
+          }
+        },
+      );
+      if (!mounted || !onSameBackend()) return;
+      setState(() {
+        _attemptedPings = result.attempted;
+        _profilePings.addAll(result.latencies);
+      });
+      Toast.show(context, error ?? (result.attempted.isEmpty
           ? 'Нет профилей для проверки'
-          : 'Задержка измерена: ${results.length} из $total',
-      isError: total > 0 && results.isEmpty,
-    );
+          : 'Задержка измерена: ${result.latencies.length} из ${result.attempted.length}'),
+          isError: error != null || (result.attempted.isNotEmpty && result.latencies.isEmpty));
+    } catch (e) {
+      if (mounted && onSameBackend()) {
+        Toast.show(context, e is ApiException ? e.message : 'Ошибка замера задержки', isError: true);
+      }
+    } finally {
+      await backendChanges.cancel();
+      if (mounted) setState(() => _measuringPings = false);
+    }
   }
 
   Future<void> _showAddDialog() async {
@@ -464,7 +486,12 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
                           ],
                           Text(
                             visuallyConnected
-                                ? 'Подключено'
+                                // Android auto-sleep keeps the core alive with
+                                // the TUN detached; report that state instead
+                                // of a misleading "Подключено".
+                                ? (vpn.message == 'Туннель спит'
+                                    ? 'Туннель спит'
+                                    : 'Подключено')
                                 : (vpn.state == 'checking'
                                     ? 'Проверка...'
                                     : (vpn.state == 'connecting'
@@ -588,7 +615,8 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
                   refreshingSubs: subsState.refreshing,
                   onRefreshSubs: _refreshSubscriptions,
                   measuringPings: _measuringPings,
-                  pingsMeasured: _pingsMeasured,
+                  attemptedPings: _attemptedPings,
+                  activeProfileOnly: vpn.connected,
                   pings: _profilePings,
                   onMeasurePings: _measureAllPings,
                   onToggleSub: (s) => ref

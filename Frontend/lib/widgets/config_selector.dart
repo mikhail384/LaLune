@@ -35,7 +35,8 @@ class ConfigSelector extends StatelessWidget {
 
   // --- замер задержки ---
   final bool measuringPings;
-  final bool pingsMeasured;
+  final Set<String> attemptedPings;
+  final bool activeProfileOnly;
   final Map<String, int> pings;
   final VoidCallback? onMeasurePings;
 
@@ -58,7 +59,8 @@ class ConfigSelector extends StatelessWidget {
     this.onDeleteSub,
     this.onSelectSubConfig,
     this.measuringPings = false,
-    this.pingsMeasured = false,
+    this.attemptedPings = const {},
+    this.activeProfileOnly = false,
     this.pings = const {},
     this.onMeasurePings,
   });
@@ -128,7 +130,9 @@ class ConfigSelector extends StatelessWidget {
                             )
                           : IconButton(
                               onPressed: onMeasurePings,
-                              tooltip: 'Измерить задержку всех профилей',
+                              tooltip: activeProfileOnly
+                                  ? 'Измерить задержку активного профиля'
+                                  : 'Измерить задержку всех профилей',
                               padding: EdgeInsets.zero,
                               iconSize: 19,
                               icon: Icon(Icons.speed,
@@ -161,7 +165,7 @@ class ConfigSelector extends StatelessWidget {
                     config: c,
                     selected: c.id == selectedId,
                     ping: pings[configPingKey(c.id)],
-                    pingMeasured: pingsMeasured,
+                    pingMeasured: attemptedPings.contains(configPingKey(c.id)),
                     onSelect: () => onSelect(c),
                     onDelete: () => onDelete(c.id),
                   )),
@@ -189,7 +193,7 @@ class ConfigSelector extends StatelessWidget {
                 expanded: expandedSubs.contains(sub.id),
                 selectedBackendId: selectedId,
                 pings: pings,
-                pingMeasured: pingsMeasured,
+                attemptedPings: attemptedPings,
                 onToggle: () => onToggleSub?.call(sub),
                 onOpenControl: sub.subControl == null
                     ? null
@@ -209,7 +213,7 @@ class _SubGroup extends StatelessWidget {
   final bool expanded;
   final int? selectedBackendId;
   final Map<String, int> pings;
-  final bool pingMeasured;
+  final Set<String> attemptedPings;
   final VoidCallback onToggle;
   final VoidCallback? onOpenControl;
   final VoidCallback onDelete;
@@ -220,7 +224,7 @@ class _SubGroup extends StatelessWidget {
     required this.expanded,
     required this.selectedBackendId,
     required this.pings,
-    required this.pingMeasured,
+    required this.attemptedPings,
     required this.onToggle,
     required this.onOpenControl,
     required this.onDelete,
@@ -316,7 +320,11 @@ class _SubGroup extends StatelessWidget {
                           ),
                         ),
                       _PingIndicator(
-                          ping: _bestPing, measured: pingMeasured, compact: true),
+                        ping: _bestPing,
+                        measured: sub.configs.any((config) => attemptedPings
+                            .contains(subConfigPingKey(sub.id, config))),
+                        compact: true,
+                      ),
                       const SizedBox(width: 5),
                       _TrashButton(onPressed: onDelete, tooltip: 'Удалить подписку'),
                     ],
@@ -372,7 +380,7 @@ class _SubGroup extends StatelessWidget {
               selected: sub.backendIds[c.key] != null &&
                   sub.backendIds[c.key] == selectedBackendId,
               ping: pings[subConfigPingKey(sub.id, c)],
-              pingMeasured: pingMeasured,
+              pingMeasured: attemptedPings.contains(subConfigPingKey(sub.id, c)),
               onTap: () => onSelectConfig(c),
             ),
       ],

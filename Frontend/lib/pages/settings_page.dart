@@ -9,6 +9,7 @@
 //   - При загрузке: если у выбранного конфига хеши непустые — берём их,
 //     иначе берём settings.vkHashes.
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -126,11 +127,14 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   }
 
   Future<void> _load() async {
+    if (!mounted) return;
+    final api = ref.read(apiClientProvider);
+    final baseUrl = api.baseUrl;
     await Future.wait([
       ref.read(settingsProvider.notifier).reload(),
       ref.read(configsProvider.notifier).reload(),
     ]);
-    if (!mounted) return;
+    if (!mounted || api.baseUrl != baseUrl) return;
 
     final s = ref.read(settingsProvider).data;
     final cfg = ref.read(configsProvider).selected;
@@ -230,14 +234,16 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   }
 
   Future<void> _save() async {
-    if (_busy) return;
+    if (_busy || _loading) return;
+    final api = ref.read(apiClientProvider);
+    final baseUrl = api.baseUrl;
 
     // Commit the active IME edit before normalizing controllers or building
     // the payload. On Android the keyboard can keep a composing value alive
     // while the user scrolls to this button without pressing its checkmark.
     FocusManager.instance.primaryFocus?.unfocus();
     await WidgetsBinding.instance.endOfFrame;
-    if (!mounted) return;
+    if (!mounted || _loading || api.baseUrl != baseUrl) return;
 
     final workersText = _workersCtl.text.trim();
     final autoApiWorkersText = _autoApiWorkersCtl.text.trim();
@@ -295,6 +301,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       // Keep the button usable even if a provider or transport throws.
     }
     if (!mounted) return;
+    if (api.baseUrl != baseUrl) {
+      setState(() => _busy = false);
+      return;
+    }
     setState(() {
       _busy = false;
       _s = s;
@@ -400,14 +410,23 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         _syncSelectedConfigAfterFrame();
       }
     });
+    ref.listen<RouterState>(routerProvider, (previous, next) {
+      if (previous?.activeRouter?.ip == next.activeRouter?.ip) return;
+      setState(() => _loading = true);
+      // The API base-URL subscriptions also reload; start after those events
+      // so this page waits for the current router's own settings and configs.
+      unawaited(Future.microtask(_load));
+    });
     if (_loading) return const Center(child: CircularProgressIndicator());
 
     final vk = ref.watch(vkProvider);
     final routerState = ref.watch(routerProvider);
+    final isOpenWrt =
+        routerState.activeRouter?.platform.toLowerCase() == 'openwrt';
 
     final items = <WidgetBuilder>[
       (_) => _sectionTitle('Основные настройки'),
-      (_) => GlassCard(child: _buildMainBlock()),
+      (_) => GlassCard(child: _buildMainBlock(isOpenWrt: isOpenWrt)),
       (_) => const SizedBox(height: 18),
       if (!_isTots) ...[
         (_) => _sectionTitle('Авторизация'),
@@ -422,6 +441,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           ? GlassCard(child: _buildTotsBlock(vk))
           : GlassCard(child: _buildCsqttAdvancedBlock()),
       (_) => const SizedBox(height: 18),
+      if (_isAndroid && routerState.activeRouter == null) ...[
+        (_) => _sectionTitle('Продвинутые настройки Android'),
+        (_) => GlassCard(child: _buildAndroidAdvancedBlock()),
+        (_) => const SizedBox(height: 18),
+      ],
       (_) => _sectionTitle('Экспериментальное'),
       (_) => GlassCard(child: _buildExperimentalBlock(routerState: routerState)),
       (_) => const SizedBox(height: 22),
@@ -450,8 +474,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     );
   }
 
-  Widget _buildMainBlock() {
+  Widget _buildMainBlock({required bool isOpenWrt}) {
     final cfg = _selectedConfig;
+    final automaticWorkers = isOpenWrt && _s.autoWorkers;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -497,31 +522,34 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         if (!_isTots) Padding(
           padding: const EdgeInsets.symmetric(vertical: 5),
           child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               SizedBox(
                 width: 130,
-                child:Padding(
-                              padding: const EdgeInsets.only(top: 12),
-                              child:  Text('Workers',
-                    style:
-                        TextStyle(color: Colors.white.withOpacity(0.7)))),
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Text('Workers',
+                      style: TextStyle(color: Colors.white.withOpacity(0.7))),
+                ),
               ),
               Expanded(
                 child: Builder(builder: (context) {
                   final value = int.tryParse(_workersCtl.text.trim());
                   return TextField(
                     controller: _workersCtl,
+                    enabled: !automaticWorkers,
                     keyboardType: TextInputType.number,
                     style: const TextStyle(fontSize: 13.5),
                     decoration: InputDecoration(
                       hintText: '$kDefaultWorkers',
-                      helperText: 'Рекомендуется $kDefaultWorkers · допустимо от '
-                          '$kMinWorkers до $kMaxWorkers. После сохранения '
-                          'переподключитесь; фактическое число согласуется с сервером.',
+                      helperText: automaticWorkers
+                          ? 'Роутер подберёт число воркеров по доступной памяти при подключении.'
+                          : 'Рекомендуется $kDefaultWorkers · допустимо от '
+                              '$kMinWorkers до $kMaxWorkers. После сохранения '
+                              'переподключитесь; фактическое число согласуется с сервером.',
                       helperMaxLines: 8,
                       helperStyle: const TextStyle(fontSize: 10.5),
-                      suffixIcon: value == kDefaultWorkers
+                      suffixIcon: automaticWorkers || value == kDefaultWorkers
                           ? null
                           : IconButton(
                               tooltip: 'Сбросить на $kDefaultWorkers',
@@ -543,6 +571,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             ],
           ),
         ),
+        if (!_isTots && isOpenWrt)
+          _toggleRow('Авто воркеры', _s.autoWorkers, (v) {
+            setState(() => _s = _s.copyWith(autoWorkers: v));
+            _markDirty();
+          }),
       ],
     );
   }
@@ -944,6 +977,24 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     );
   }
 
+  Widget _buildAndroidAdvancedBlock() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _toggleRow('Auto-sleep tunnel', _s.androidAutoSleepTunnel, (value) {
+          setState(() => _s = _s.copyWith(androidAutoSleepTunnel: value));
+          _markDirty();
+        }),
+        Text(
+          'Когда экран выключен, туннель приостанавливается, но ядро '
+          'продолжает работать. Без автосна туннель остаётся активным.',
+          style: TextStyle(fontSize: 11.5, height: 1.4,
+              color: Colors.white.withOpacity(0.55)),
+        ),
+      ],
+    );
+  }
+
   Widget _buildCsqttAdvancedBlock() {
     return Column(
       children: [
@@ -1019,27 +1070,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               _authOption('externalHashes', 'Внешние хеши',
                   'Скачивать hashes.txt из публичного ZIP на Яндекс Диске при каждом запуске VPN',
                   enabled: true, vk: vk),
-              if (_authMode == 'autoApi' || _authMode == 'autoVk') ...[
-                const SizedBox(height: 12),
-                if (!hasToken)
-                  _buildLoginButton(vk)
-                else
-                  _buildTokenActiveBadge(),
-              ],
-              if (vk.fetching && (_authMode == 'autoApi' || _authMode == 'autoVk')) ...[
-                const SizedBox(height: 10),
-                LinearProgressIndicator(
-                  value: vk.progress / 100.0,
-                  backgroundColor: Colors.white.withOpacity(0.1),
-                  valueColor:
-                      const AlwaysStoppedAnimation(Color(0xFFE5484D)),
-                  minHeight: 4,
-                ),
-                const SizedBox(height: 6),
-                Text(vk.message,
-                    style: TextStyle(
-                        fontSize: 11, color: Colors.white.withOpacity(0.6))),
-              ],
               if (_authMode == 'manual') ...[
                 const SizedBox(height: 14),
                 Padding(
@@ -1082,6 +1112,25 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   ),
                   onChanged: (_) => _markDirty(),
                 ),
+              ],
+              const SizedBox(height: 12),
+              if (!hasToken)
+                _buildLoginButton(vk)
+              else
+                _buildTokenActiveBadge(),
+              if (vk.fetching) ...[
+                const SizedBox(height: 10),
+                LinearProgressIndicator(
+                  value: vk.progress / 100.0,
+                  backgroundColor: Colors.white.withOpacity(0.1),
+                  valueColor:
+                      const AlwaysStoppedAnimation(Color(0xFFE5484D)),
+                  minHeight: 4,
+                ),
+                const SizedBox(height: 6),
+                Text(vk.message,
+                    style: TextStyle(
+                        fontSize: 11, color: Colors.white.withOpacity(0.6))),
               ],
             ],
           ),

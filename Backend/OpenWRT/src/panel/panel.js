@@ -152,6 +152,11 @@ function updateAuthFields() {
 }
 
 const settingsControls = [...settingsForm.querySelectorAll("[name]")];
+const autoWorkers = settingsForm.elements.autoWorkers;
+
+function updateWorkerFields() {
+  settingsForm.elements.workers.disabled = autoWorkers.checked;
+}
 
 function settingValue(control) {
   if (control.type === "checkbox") return control.checked;
@@ -175,6 +180,7 @@ function showSettings(values) {
     settings[control.name] = settingValue(control);
   }
   updateAuthFields();
+  updateWorkerFields();
 }
 
 async function refreshToken() {
@@ -320,6 +326,7 @@ byId("disconnect").addEventListener("click", () => {
 });
 
 authMode.addEventListener("change", updateAuthFields);
+autoWorkers.addEventListener("change", updateWorkerFields);
 settingsForm.addEventListener("submit", (event) => {
   event.preventDefault();
   const patch = {};

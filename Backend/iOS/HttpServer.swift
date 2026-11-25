@@ -161,6 +161,8 @@ final class HttpServer {
         case 404: return "Not Found"
         case 409: return "Conflict"
         case 500: return "Internal Server Error"
+        case 503: return "Service Unavailable"
+        case 504: return "Gateway Timeout"
         default: return "OK"
         }
     }

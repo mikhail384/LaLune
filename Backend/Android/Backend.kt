@@ -103,6 +103,11 @@ class Backend(private val context: Context) {
     @Volatile private var lastTx = 0L
 
     @Volatile private var running = false
+    private val vpnLifecycle = java.util.concurrent.locks.ReentrantLock()
+    // Read and written under vpnLifecycle. A timed-out STOP cannot be allowed
+    // to tear down a subsequent ordinary connection.
+    private var temporaryCleanupPending = false
+    @Volatile private var temporaryMeasurement = false
     @Volatile private var vpnConnected = false
     @Volatile private var vpnState = "disconnected"
     @Volatile private var vpnMessage = ""
@@ -204,7 +209,7 @@ class Backend(private val context: Context) {
                 logFn = { line -> addLog(line) },
                 logsFn = { logs.toList() },
                 vkTokenFn = { readVkToken() },
-                vpnRunningFn = { vpnConnected },
+                vpnRunningFn = { vpnConnected && !temporaryMeasurement },
             ).also { it.init() }
         } catch (e: Exception) {
             Log.e(TAG, "[LUA] init failed: ${e.message}", e)
@@ -359,7 +364,8 @@ class Backend(private val context: Context) {
 
     private fun statusText(code: Int): String = when (code) {
         200 -> "OK"; 400 -> "Bad Request"; 401 -> "Unauthorized"
-        404 -> "Not Found"; 409 -> "Conflict"; 500 -> "Internal Server Error"
+        403 -> "Forbidden"; 404 -> "Not Found"; 409 -> "Conflict"
+        500 -> "Internal Server Error"; 504 -> "Gateway Timeout"
         else -> "OK"
     }
 
@@ -489,15 +495,16 @@ class Backend(private val context: Context) {
                     "totalMemMb" to 0
                 )
 
-                path == "/vpn/connect" && method == "POST" -> vpnConnect(body)
-                path == "/vpn/disconnect" && method == "POST" -> vpnDisconnect()
+                path == "/vpn/connect" && method == "POST" -> withVpnLifecycle { vpnConnect(body) }
+                path == "/vpn/disconnect" && method == "POST" -> withVpnLifecycle(allowCleanup = true) { vpnDisconnect() }
+                path == "/vpn/measure" && method == "POST" -> withVpnLifecycle { vpnMeasure(body) }
                 path == "/vpn/status" && method == "GET" -> 200 to jsonOk(
                     "state" to vpnState,
                     "connected" to vpnConnected, "uptimeSec" to 0,
                     "configId" to LaLuneVpnService.snapshotConfigId, "message" to vpnMessage, "since" to "",
                     "socks5Port" to socks5Port
                 )
-                path == "/vpn/reconnect" && method == "POST" -> {
+                path == "/vpn/reconnect" && method == "POST" -> withVpnLifecycle {
                     vpnDisconnect(); Thread.sleep(300); vpnConnect("{}")
                 }
                 path == "/vpn/stats" && method == "GET" -> {
@@ -1019,6 +1026,7 @@ class Backend(private val context: Context) {
         put("totsMailDocsData", "")
         put("totsCupsData", "")
         put("enableSmartTunnel", false)
+        put(LaLuneVpnService.SETTING_AUTO_SLEEP, true)
         put("showCoreLogs", false)
         put("shareVpn", false)
     }
@@ -1026,6 +1034,8 @@ class Backend(private val context: Context) {
     private fun loadSettings(): JSONObject = try {
         val settings = if (settingsFile.exists()) JSONObject(settingsFile.readText()) else defaultSettings()
         settings.put("deviceId", ensureDeviceId())
+        val sleepKey = LaLuneVpnService.SETTING_AUTO_SLEEP
+        settings.put(sleepKey, settings.optBoolean(sleepKey, true))
         settings
     } catch (_: Exception) { defaultSettings().put("deviceId", ensureDeviceId()) }
 
@@ -1047,7 +1057,12 @@ class Backend(private val context: Context) {
         }
         s.put("externalHashesUrl", s.optString("externalHashesUrl", "").trim())
         s.put("deviceId", ensureDeviceId())
-        try { settingsFile.writeText(s.toString()) } catch (_: Exception) {}
+        val sleepKey = LaLuneVpnService.SETTING_AUTO_SLEEP
+        s.put(sleepKey, s.optBoolean(sleepKey, true))
+        try {
+            settingsFile.writeText(s.toString())
+            context.sendBroadcast(Intent(LaLuneVpnService.ACTION_SETTINGS_CHANGED).setPackage(context.packageName))
+        } catch (_: Exception) {}
     }
 
     private fun replaceSettings(body: String): Pair<Int, String> = try {
@@ -1371,13 +1386,95 @@ class Backend(private val context: Context) {
         return out
     }
 
-    private fun vpnConnect(body: String): Pair<Int, String> {
+    private inline fun withVpnLifecycle(
+        allowCleanup: Boolean = false,
+        run: () -> Pair<Int, String>,
+    ): Pair<Int, String> {
+        if (!vpnLifecycle.tryLock()) return 409 to jsonErr("VPN operation in progress")
+        try {
+            if (temporaryCleanupPending) {
+                if (LaLuneVpnService.snapshotConfigId == 0L) {
+                    temporaryCleanupPending = false
+                    temporaryMeasurement = false
+                } else if (!allowCleanup) return 409 to jsonErr("temporary VPN has not disconnected")
+            }
+            return run()
+        } finally {
+            vpnLifecycle.unlock()
+        }
+    }
+
+    private fun vpnMeasure(body: String): Pair<Int, String> {
+        val request = try { JSONObject(body) } catch (_: Exception) {
+            return 400 to jsonErr("invalid measurement request")
+        }
+        val temporary = request.opt("temporary") as? Boolean
+            ?: return 400 to jsonErr("missing temporary flag")
+        val id = request.optLong("configId", 0)
+        if (!temporary) {
+            if (id <= 0 || !LaLuneVpnService.snapshotConnected || LaLuneVpnService.snapshotConfigId != id) {
+                return 409 to jsonErr("requested VPN profile is not connected")
+            }
+            return probeVpnLatency(id)
+        }
+        if (vpnState !in listOf("disconnected", "error") || LaLuneVpnService.snapshotConnected ||
+            LaLuneVpnService.snapshotConfigId != 0L) return 409 to jsonErr("VPN is not disconnected")
+        // Do not start a permission Activity from a time-limited measurement;
+        // a late result could start a VPN after the temporary session ends.
+        if (VpnService.prepare(context) != null) {
+            return 403 to jsonErr("Сначала разрешите VPN обычным подключением")
+        }
+        val link = request.optString("link", "")
+        val profile = when {
+            id > 0 && link.isEmpty() -> findConfig(id) ?: return 404 to jsonErr("profile not found")
+            id == 0L && link.isNotEmpty() -> try {
+                parseLink(link, request.optString("protocol", PROTO_CSQTT)).put("id", -1)
+            } catch (_: Exception) { return 400 to jsonErr("invalid profile link") }
+            else -> return 400 to jsonErr("provide a profile id or link")
+        }
+        val profileId = profile.getLong("id")
+        temporaryMeasurement = true
+        val outcome = try {
+            val start = vpnConnect("{}", profile)
+            if (start.first != 200) start else {
+                val deadline = android.os.SystemClock.elapsedRealtime() + 95_000
+                while (android.os.SystemClock.elapsedRealtime() < deadline && vpnState != "error" &&
+                    LaLuneVpnService.snapshotConfigId == profileId && !LaLuneVpnService.snapshotConnected) {
+                    Thread.sleep(150)
+                }
+                if (LaLuneVpnService.snapshotConnected && LaLuneVpnService.snapshotConfigId == profileId) {
+                    probeVpnLatency(profileId)
+                } else 504 to jsonErr("temporary VPN did not become ready")
+            }
+        } finally {
+            // The temporary START has already been submitted; never release the
+            // lifecycle guard while the service is still using this profile.
+            temporaryCleanupPending = LaLuneVpnService.snapshotConfigId != 0L
+            vpnDisconnect(sendStop = temporaryCleanupPending, temporary = true)
+            val deadline = android.os.SystemClock.elapsedRealtime() + 5_000
+            while (LaLuneVpnService.snapshotConfigId != 0L && android.os.SystemClock.elapsedRealtime() < deadline) {
+                Thread.sleep(50)
+            }
+            temporaryCleanupPending = LaLuneVpnService.snapshotConfigId != 0L
+            temporaryMeasurement = temporaryCleanupPending
+        }
+        return if (!temporaryCleanupPending) outcome
+        else 409 to jsonErr("temporary VPN has not disconnected")
+    }
+
+    private fun probeVpnLatency(id: Long): Pair<Int, String> {
+        val latency = LaLuneVpnService.probeTunnelLatency(id)
+            ?: return 504 to jsonErr("tunnel latency probe did not respond")
+        return 200 to jsonOk("latencyMs" to latency)
+    }
+
+    private fun vpnConnect(body: String, temporaryProfile: JSONObject? = null): Pair<Int, String> {
         // A new connection attempt starts with an empty log (the file itself is
         // truncated when the core starts).
         logs.clear()
         val settings = loadSettings()
         val requestedId = try { JSONObject(body).optLong("configId", 0) } catch (_: Exception) { 0 }
-        val sel = (if (requestedId != 0L) {
+        val sel = temporaryProfile ?: (if (requestedId != 0L) {
             findConfig(requestedId)?.also { writeSelectedConfig(it) }
                 ?: return 404 to jsonErr("config not found")
         } else {
@@ -1403,17 +1500,7 @@ class Backend(private val context: Context) {
             catch (_: Exception) { return 500 to jsonErr("cannot prepare ToTS runtime") }
             addLog("[VPN] ToTS runtime prepared; requesting Android VPN service")
 
-            LaLuneVpnService.snapshotConfigId = selectedId
-            markVpnConnecting()
-            mainHandler.post {
-                val act = activity
-                if (act == null) { startVpnService(); return@post }
-                val intent = VpnService.prepare(act)
-                if (intent != null) act.startActivityForResult(intent, REQ_VPN)
-                else startVpnService()
-            }
-            luaRuntime?.onConnect()
-            return 200 to jsonOk("ok" to true, "status" to "connecting")
+            return beginVpnService(selectedId, temporary = temporaryProfile != null)
         } else {
             try { totsRuntimeFile.delete() } catch (_: Exception) {}
         }
@@ -1452,10 +1539,21 @@ class Backend(private val context: Context) {
         )
         if (!started) return 500 to jsonErr("csqtt core start failed")
 
-        if (settings.optBoolean("shareVpn", false)) startSocks5()
+        if (temporaryProfile == null && settings.optBoolean("shareVpn", false)) startSocks5()
 
+        return beginVpnService(selectedId, temporary = temporaryProfile != null)
+    }
+
+    private fun beginVpnService(selectedId: Long, temporary: Boolean): Pair<Int, String> {
         LaLuneVpnService.snapshotConfigId = selectedId
         markVpnConnecting()
+        // The temporary path does not need an Activity. Submit START before
+        // returning to the caller so cleanup cannot overtake a posted START.
+        if (temporary) {
+            if (startVpnService()) return 200 to jsonOk("ok" to true, "status" to "connecting")
+            LaLuneVpnService.snapshotConfigId = 0
+            return 500 to jsonErr("Не удалось запустить VPN-сервис")
+        }
         mainHandler.post {
             val act = activity
             if (act == null) { startVpnService(); return@post }
@@ -1819,7 +1917,7 @@ class Backend(private val context: Context) {
         )
     }
 
-    private fun startVpnService() {
+    private fun startVpnService(): Boolean {
         val i = Intent(context, LaLuneVpnService::class.java).apply { action = "START" }
         addLog("[VPN] starting LaLuneVpnService")
         try {
@@ -1828,6 +1926,7 @@ class Backend(private val context: Context) {
             } else {
                 context.startService(i)
             }
+            return true
         } catch (e: Exception) {
             addLog("[VPN] failed to start service: ${e.javaClass.simpleName}: ${e.message.orEmpty()}")
             vpnConnected = false
@@ -1837,12 +1936,15 @@ class Backend(private val context: Context) {
                 "status",
                 JSONObject().put("connected", false).put("state", vpnState).put("message", vpnMessage)
             )
+            return false
         }
     }
 
-    private fun vpnDisconnect(): Pair<Int, String> {
-        val i = Intent(context, LaLuneVpnService::class.java).apply { action = "STOP" }
-        try { context.startService(i) } catch (_: Exception) {}
+    private fun vpnDisconnect(sendStop: Boolean = true, temporary: Boolean = false): Pair<Int, String> {
+        if (sendStop) {
+            val i = Intent(context, LaLuneVpnService::class.java).apply { action = "STOP" }
+            try { context.startService(i) } catch (_: Exception) {}
+        }
         coreManager?.stopCore()
         try { totsRuntimeFile.delete() } catch (_: Exception) {}
         stopSocks5()
@@ -1854,7 +1956,7 @@ class Backend(private val context: Context) {
             JSONObject().put("connected", false).put("state", vpnState).put("message", vpnMessage)
         )
         addLog("[VPN] disconnect")
-        luaRuntime?.onDisconnect()
+        if (!temporary) luaRuntime?.onDisconnect()
         return 200 to jsonOk("ok" to true)
     }
 

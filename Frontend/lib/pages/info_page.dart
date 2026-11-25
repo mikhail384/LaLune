@@ -240,6 +240,10 @@ class _InfoPageState extends ConsumerState<InfoPage> {
                 _kv('LaLune', '@Endlad7373'),
                 _linkRow('Telegram-канал проекта', 't.me/endlad_new', _channelUrl,
                     icon: Icons.telegram),
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 4),
+                  child: Text('И все участники LaLune & ToTS team'),
+                ),
               ]),
               const SizedBox(height: 18),
 

@@ -371,7 +371,7 @@ fn build_tots_args(config: &ConfigItem, settings: &Settings) -> Result<Vec<Strin
     }
     if settings.tots_relay_only { args.push("--relay-only".into()); }
     args.push("--tun-name".into());
-    args.push("tots0".into());
+    args.push(crate::vpn::TOTS_TUN_NAME.into());
     args.push("--tun-default-route".into());
     Ok(args)
 }

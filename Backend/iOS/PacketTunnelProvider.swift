@@ -102,6 +102,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var isCoreStarted = false
     private var activeProtocol = "CSQTT"
 
+    private let measurementLock = NSLock()
+    private var measurementConfigId: Int64 = 0
+    private var temporaryToken: String?
+    private var measurementReady = false
+
     private let completionLock = NSLock()
     private var startCompletion: ((Error?) -> Void)?
 
@@ -170,7 +175,19 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         CoreReadinessState.shared.reset()
 
         let shared = UserDefaults(suiteName: appGroup)
-        let protocolName = shared?.string(forKey: "protocol") ?? "CSQTT"
+        let token = options?["temporaryToken"] as? String
+        // If this is a temporary start, use only its one-shot settings.
+        func setting(_ key: String) -> Any? {
+            if token != nil { return options?[key] }
+            return shared?.object(forKey: key)
+        }
+        measurementLock.lock()
+        temporaryToken = token
+        measurementConfigId = (setting("configId") as? NSNumber)?.int64Value ?? 0
+        measurementReady = false
+        measurementLock.unlock()
+
+        let protocolName = setting("protocol") as? String ?? "CSQTT"
         activeProtocol = protocolName
         let upperProtocol = protocolName.uppercased()
 
@@ -179,18 +196,18 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             return
         }
 
-        let peer = shared?.string(forKey: "peer")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let password = shared?.string(forKey: "password") ?? ""
-        let hashes = shared?.string(forKey: "hashes")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let rawWorkers = shared?.integer(forKey: "workers") ?? 0
+        let peer = (setting("peer") as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let password = (setting("password") as? String) ?? ""
+        let hashes = (setting("hashes") as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let rawWorkers = (setting("workers") as? Int) ?? 0
         let workers = rawWorkers > 0 ? rawWorkers : 9
-        let obfs = shared?.string(forKey: "obfs") ?? "video"
-        let fingerprint = shared?.string(forKey: "fingerprint") ?? "firefox"
-        let clientIds = shared?.string(forKey: "clientIds") ?? "8202606,6287487"
-        let vkAuthMode = shared?.string(forKey: "vkAuthMode") ?? "vkcalls"
-        let captchaMode = shared?.string(forKey: "captchaMode") ?? "auto"
-        let turnTransport = shared?.string(forKey: "turnTransport") ?? "udp"
-        let validateVkHashes = shared?.bool(forKey: "validateVkHashes") ?? false
+        let obfs = (setting("obfs") as? String) ?? "video"
+        let fingerprint = (setting("fingerprint") as? String) ?? "firefox"
+        let clientIds = (setting("clientIds") as? String) ?? "8202606,6287487"
+        let vkAuthMode = (setting("vkAuthMode") as? String) ?? "vkcalls"
+        let captchaMode = (setting("captchaMode") as? String) ?? "auto"
+        let turnTransport = (setting("turnTransport") as? String) ?? "udp"
+        let validateVkHashes = (setting("validateVkHashes") as? Bool) ?? false
 
         guard !peer.isEmpty else {
             finishStart(makeError("No CSQTT peer selected", code: 11)); return
@@ -282,6 +299,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
 
         isCoreStarted = false
+        measurementLock.lock()
+        measurementReady = false
+        measurementLock.unlock()
         CoreReadinessState.shared.markCoreExited(result)
         log("embedded core exited with code \(result)")
         if isRunning {
@@ -328,6 +348,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             switch state {
             case .ready:
                 self.log("UDP packet bridge ready")
+                self.measurementLock.lock()
+                self.measurementReady = true
+                self.measurementLock.unlock()
                 self.finishStart(nil)
                 self.startReadingFromTun()
                 self.startReadingFromUDP()
@@ -378,6 +401,57 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
+    override func handleAppMessage(
+        _ messageData: Data, completionHandler: ((Data?) -> Void)?
+    ) {
+        guard let reply = completionHandler,
+              let command = try? JSONSerialization.jsonObject(with: messageData) as? [String: Any],
+              command["operation"] as? String == "measure",
+              let configId = (command["configId"] as? NSNumber)?.int64Value else {
+            completionHandler?(nil)
+            return
+        }
+        let token = command["temporaryToken"] as? String
+        func replyJSON(_ value: [String: Any]) {
+            reply(try? JSONSerialization.data(withJSONObject: value))
+        }
+        measurementLock.lock()
+        let matches = measurementReady && configId == measurementConfigId && token == temporaryToken
+        measurementLock.unlock()
+        guard matches else {
+            replyJSON(["conflict": true])
+            return
+        }
+
+        // iOS 17-supported API: unlike NEProvider's ordinary socket API, this
+        // explicitly injects the connection into this packet tunnel's utun.
+        // The existing packetFlow <-> core UDP bridge carries the TCP handshake.
+        // Numeric IPv4, no TLS or payload, no default-route fallback.
+        let endpoint = NetworkExtension.NWHostEndpoint(hostname: "1.1.1.1", port: "443")
+        let started = DispatchTime.now()
+        let connection = createTCPConnectionThroughTunnel(
+            to: endpoint, enableTLS: false, tlsParameters: nil, delegate: nil
+        )
+        DispatchQueue.global(qos: .userInitiated).async {
+            defer { connection.cancel() }
+            let terminal = DispatchSemaphore(value: 0)
+            let observation = connection.observe(\.state, options: [.initial, .new]) { conn, _ in
+                switch conn.state {
+                case .connected, .disconnected, .cancelled: terminal.signal()
+                default: break
+                }
+            }
+            defer { observation.invalidate() }
+            guard terminal.wait(timeout: started + 5) == .success,
+                  connection.state == .connected else {
+                replyJSON(["timeout": true])
+                return
+            }
+            let elapsed = (DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
+            replyJSON(["latencyMs": max(1, elapsed)])
+        }
+    }
+
     private func stopCore() {
         if activeProtocol.uppercased().hasPrefix("CSQTTR") {
             _ = csqttr_stop()
@@ -391,6 +465,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         completionHandler: @escaping () -> Void
     ) {
         log("stopTunnel reason=\(reason.rawValue)")
+        measurementLock.lock()
+        measurementReady = false
+        measurementLock.unlock()
         isRunning = false
         udpConnection?.stateUpdateHandler = nil
         udpConnection?.cancel()

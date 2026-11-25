@@ -22,6 +22,10 @@ use std::time::Duration;
 use crate::events::{Event, EventBus};
 
 pub const CORE_LISTEN_PORT: u16 = 1080;
+/// CSQTT/CSQTTR TUN interface created by LaLune itself.
+pub const CSQTT_TUN_NAME: &str = "csqtt0";
+/// ToTS creates and owns its own TUN interface.
+pub const TOTS_TUN_NAME: &str = "tots0";
 pub const TUN_MTU: u16 = 1400;
 pub const DEFAULT_TUN_IP: &str = "10.66.67.12";
 pub const DEFAULT_DNS: &str = "8.8.8.8,8.8.4.4";
@@ -133,6 +137,7 @@ pub struct VpnRuntime {
     /// PID и адрес сервера ядра: нужны macOS, чтобы трафик самого ядра шёл мимо TUN.
     pub core_pid: std::sync::atomic::AtomicU32,
     pub core_peer: Mutex<String>,
+    pub lifecycle: tokio::sync::Mutex<()>,
     pub operation: tokio::sync::Mutex<()>,
     pub watchdog: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
@@ -181,6 +186,7 @@ impl VpnRuntime {
             handle: Mutex::new(None),
             core_pid: std::sync::atomic::AtomicU32::new(0),
             core_peer: Mutex::new(String::new()),
+            lifecycle: tokio::sync::Mutex::new(()),
             operation: tokio::sync::Mutex::new(()),
             watchdog: Mutex::new(None),
         }
@@ -425,6 +431,83 @@ fn remove_windows_bypass(prefix: &str) {
         .output();
 }
 
+/// Bind the interface so a bypass route cannot send the probe out over the
+/// physical network. ToTS owns its interface and lets the OS pick its source.
+pub fn latency_socket(runtime: &VpnRuntime, source: Option<Ipv4Addr>) -> Result<tokio::net::TcpSocket> {
+    let socket = tokio::net::TcpSocket::new_v4()?;
+    #[cfg(target_os = "linux")]
+    {
+        let _ = runtime;
+        use std::os::fd::AsRawFd;
+        let name = if source.is_some() { CSQTT_TUN_NAME } else { TOTS_TUN_NAME };
+        let name = std::ffi::CString::new(name)?.into_bytes_with_nul();
+        let result = unsafe {
+            libc::setsockopt(socket.as_raw_fd(), libc::SOL_SOCKET, libc::SO_BINDTODEVICE,
+                name.as_ptr().cast(), name.len() as libc::socklen_t)
+        };
+        if result != 0 { return Err(std::io::Error::last_os_error().into()); }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::fd::AsRawFd;
+        // CSQTT's interface name comes from the session; ToTS creates its
+        // own adapter, so its well-known name is used instead.
+        let name = if source.is_some() {
+            runtime.handle.lock().as_ref().map(|h| h.interface.clone())
+                .ok_or_else(|| anyhow::anyhow!("no active tunnel interface"))?
+        } else {
+            TOTS_TUN_NAME.to_string()
+        };
+        let name = std::ffi::CString::new(name)?;
+        let index = unsafe { libc::if_nametoindex(name.as_ptr()) };
+        if index == 0 { return Err(std::io::Error::last_os_error().into()); }
+        let result = unsafe {
+            libc::setsockopt(socket.as_raw_fd(), libc::IPPROTO_IP, libc::IP_BOUND_IF,
+                (&index as *const u32).cast(), std::mem::size_of::<u32>() as libc::socklen_t)
+        };
+        if result != 0 { return Err(std::io::Error::last_os_error().into()); }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::io::AsRawSocket;
+        #[link(name = "iphlpapi")]
+        extern "system" {
+            fn ConvertInterfaceAliasToLuid(alias: *const u16, luid: *mut u64) -> u32;
+            fn ConvertInterfaceLuidToIndex(luid: *const u64, index: *mut u32) -> u32;
+        }
+        #[link(name = "ws2_32")]
+        extern "system" {
+            fn setsockopt(socket: usize, level: i32, optname: i32, value: *const u8, len: i32) -> i32;
+            fn WSAGetLastError() -> i32;
+        }
+        let _ = runtime;
+        let alias_name = if source.is_some() {
+            crate::wintun::WINTUN_ADAPTER_NAME
+        } else {
+            TOTS_TUN_NAME
+        };
+        let alias: Vec<u16> = alias_name.encode_utf16().chain([0]).collect();
+        let mut luid = 0;
+        let mut index = 0;
+        let result = unsafe { ConvertInterfaceAliasToLuid(alias.as_ptr(), &mut luid) };
+        if result != 0 { return Err(std::io::Error::from_raw_os_error(result as i32).into()); }
+        let result = unsafe { ConvertInterfaceLuidToIndex(&luid, &mut index) };
+        if result != 0 { return Err(std::io::Error::from_raw_os_error(result as i32).into()); }
+        // IP_UNICAST_IF takes the interface index in network byte order.
+        let index = index.to_be_bytes();
+        if unsafe { setsockopt(socket.as_raw_socket() as usize, 0, 31, index.as_ptr(), 4) } != 0 {
+            return Err(std::io::Error::from_raw_os_error(unsafe { WSAGetLastError() }).into());
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    anyhow::bail!("tunnel-bound latency probes are unavailable");
+
+    if let Some(source) = source {
+        socket.bind(std::net::SocketAddr::new(source.into(), 0))?;
+    }
+    Ok(socket)
+}
+
 pub fn tunnel_ipv4(runtime: &VpnRuntime) -> Result<Ipv4Addr> {
     let conf = runtime.tun_conf.lock().clone()
         .ok_or_else(|| anyhow::anyhow!("tunnel parameters are not ready"))?;
@@ -478,7 +561,7 @@ pub fn ensure_proxy_route(runtime: &VpnRuntime, target: IpAddr, events: &EventBu
         let output = Command::new("ip")
             .args([
                 "-4", "route", "replace", &prefix,
-                "dev", "csqtt0",
+                "dev", CSQTT_TUN_NAME,
                 "src", &source.to_string(),
             ])
             .output()
@@ -827,7 +910,7 @@ fn start_tun_linux(
 ) -> Result<()> {
     let bypass = runtime.bypass_routes.lock().clone();
     let session = crate::linux_tun::Session::start(
-        "csqtt0",
+        CSQTT_TUN_NAME,
         &tun_ip,
         &tun_dns,
         TUN_MTU,

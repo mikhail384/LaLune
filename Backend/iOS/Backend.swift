@@ -67,6 +67,8 @@ public final class Backend {
     private var vpnState = "disconnected"
     private var activeConfigId: Int64 = 0
     private var tunnelManager: NETunnelProviderManager?
+    // Serialize explicit VPN mutations with a measurement's entire lifetime.
+    private let vpnOperation = NSLock()
     private var vpnStatusObserver: NSObjectProtocol?
     private var smarttunnelRunning = false
     private var coreDownloading = false
@@ -150,6 +152,11 @@ public final class Backend {
         vpnConnected = mapped.1
         if vpnState == "disconnected" {
             activeConfigId = 0
+        } else if vpnConnected && activeConfigId == 0 {
+            // Restore the last normal start's ID after the app process relaunches.
+            // The extension independently verifies its actual in-memory ID.
+            let shared = UserDefaults(suiteName: APP_GROUP)
+            activeConfigId = (shared?.object(forKey: "configId") as? NSNumber)?.int64Value ?? 0
         }
         emitEvent(json([
             "type": "status",
@@ -169,15 +176,13 @@ public final class Backend {
             ) { [weak self] note in
                 guard let self = self,
                       let conn = note.object as? NEVPNConnection else { return }
-                if let manager = self.tunnelManager, conn !== manager.connection {
-                    return
-                }
+                guard let manager = self.tunnelManager, conn === manager.connection else { return }
                 self.applyVpnStatus(conn.status)
             }
         }
 
         NETunnelProviderManager.loadAllFromPreferences { [weak self] managers, _ in
-            guard let self = self else { return }
+            guard let self = self, self.tunnelManager == nil else { return }
             guard let manager = managers?.first(where: { manager in
                 guard let proto = manager.protocolConfiguration as? NETunnelProviderProtocol else {
                     return false
@@ -265,9 +270,11 @@ public final class Backend {
                                    "totalMemMb": Int(ProcessInfo.processInfo.physicalMemory / 1024 / 1024)]))
 
             case ("POST", "/vpn/connect"):
-                return vpnConnect(body: body)
+                return withVpnOperation { vpnConnect(body: body) }
             case ("POST", "/vpn/disconnect"):
-                return vpnDisconnect()
+                return withVpnOperation { vpnDisconnect() }
+            case ("POST", "/vpn/measure"):
+                return withVpnOperation { vpnMeasure(body: body) }
             case ("GET", "/vpn/status"):
                 return (200, json([
                     "state": vpnState,
@@ -276,9 +283,14 @@ public final class Backend {
                     "socks5Port": Int(socks5Port),
                 ]))
             case ("POST", "/vpn/reconnect"):
-                _ = vpnDisconnect()
-                Thread.sleep(forTimeInterval: 0.3)
-                return vpnConnect(body: "{}")
+                return withVpnOperation {
+                    _ = vpnDisconnect()
+                    if let connection = tunnelManager?.connection,
+                       !waitForVPN(connection, timeout: 10, until: vpnIsOff) {
+                        return (504, err("VPN did not disconnect"))
+                    }
+                    return vpnConnect(body: "{}")
+                }
             case ("GET", "/vpn/stats"):
                 return (200, json(["rxBytes": 0, "txBytes": 0,
                                    "rxRate": 0, "txRate": 0,
@@ -786,34 +798,171 @@ public final class Backend {
         return (selected, nil)
     }
 
-    private func vpnConnect(body: String) -> (Int, String) {
-        let settings = loadSettings()
-        var protocolName = settings["protocol"] as? String ?? "CSQTT"
-        var peer = settings["peer"] as? String ?? ""
-        var password = settings["password"] as? String ?? ""
-        var cfgHashes = settings["vkHashes"] as? String ?? ""
-        var requestedConfigId: Int64 = 0
+    private func withVpnOperation(_ operation: () -> (Int, String)) -> (Int, String) {
+        guard vpnOperation.try() else { return (409, err("VPN operation in progress")) }
+        defer { vpnOperation.unlock() }
+        return operation()
+    }
 
-        if let data = body.data(using: .utf8),
-           let b = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let number = b["configId"] as? NSNumber,
-           let c = findConfig(id: number.int64Value) {
-            requestedConfigId = number.int64Value
-            protocolName = c["protocol"] as? String ?? protocolName
-            peer = c["peer"] as? String ?? peer
-            password = c["password"] as? String ?? password
-            let h = c["hashes"] as? String ?? ""
-            if !h.isEmpty { cfgHashes = h }
-        } else if let sel = readSelectedConfigJson(),
-                  let data = sel.data(using: .utf8),
-                  let c = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            requestedConfigId = (c["id"] as? NSNumber)?.int64Value ?? 0
-            protocolName = c["protocol"] as? String ?? protocolName
-            peer = c["peer"] as? String ?? peer
-            password = c["password"] as? String ?? password
-            let h = c["hashes"] as? String ?? ""
-            if !h.isEmpty { cfgHashes = h }
+    private func vpnIsOff(_ status: NEVPNStatus) -> Bool {
+        status == .disconnected || status == .invalid
+    }
+
+    private func waitForVPN(
+        _ connection: NEVPNConnection, timeout: TimeInterval,
+        until predicate: (NEVPNStatus) -> Bool
+    ) -> Bool {
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
+        repeat {
+            if predicate(connection.status) { return true }
+            Thread.sleep(forTimeInterval: 0.1)
+        } while ProcessInfo.processInfo.systemUptime < deadline
+        return predicate(connection.status)
+    }
+
+    private struct MeasureRequest: Decodable {
+        let temporary: Bool
+        let configId: Int64?
+        let link: String?
+        let `protocol`: String?
+    }
+
+    private func vpnMeasure(body: String) -> (Int, String) {
+        guard let request = try? JSONDecoder().decode(MeasureRequest.self, from: Data(body.utf8)) else {
+            return (400, err("bad measurement request"))
         }
+        let loaded = loadTunnelManager()
+        guard let manager = loaded.0 else {
+            return (500, err(loaded.1?.localizedDescription ?? "failed to load VPN manager"))
+        }
+        if !request.temporary {
+            guard manager.connection.status == .connected,
+                  let id = request.configId, id > 0, request.link == nil else {
+                return (409, err("requested VPN profile is not connected"))
+            }
+            // The provider validates the ID captured at start, not the current selection.
+            return measureThroughTunnel(manager, configId: id, temporaryToken: nil)
+        }
+        guard vpnIsOff(manager.connection.status) else {
+            return (409, err("VPN is not disconnected"))
+        }
+        let config: [String: Any]
+        let id: Int64
+        switch (request.configId, request.link) {
+        case (let configId?, nil) where configId > 0:
+            guard let saved = findConfig(id: configId) else { return (404, err("profile not found")) }
+            config = saved
+            id = configId
+        case (nil, let rawLink?):
+            let link = rawLink.trimmingCharacters(in: .whitespacesAndNewlines)
+            let lower = link.lowercased()
+            let isCSQTTR = lower.hasPrefix("csqttr://connect?")
+            guard isCSQTTR || lower.hasPrefix("csqtt://connect?") else {
+                return (400, err("unsupported iOS link format"))
+            }
+            let prefix = isCSQTTR ? "csqttr://connect?" : "csqtt://connect?"
+            config = parseLink("csqtt://connect?" + link.dropFirst(prefix.count),
+                               protocol: request.protocol ?? (isCSQTTR ? "CSQTTR" : "CSQTT"))
+            guard let peer = config["peer"] as? String,
+                  let separator = peer.lastIndex(of: ":"), separator != peer.startIndex,
+                  let port = UInt16(peer[peer.index(after: separator)...]), port > 0 else {
+                return (400, err("invalid iOS link peer"))
+            }
+            id = -1
+        default:
+            return (400, err("provide a profile id or link"))
+        }
+
+        let token = UUID().uuidString
+        let start = connectTunnel(manager: manager, settings: loadSettings(), config: config,
+                                  configId: id, temporaryToken: token)
+        guard start.0 == 200 else { return start }
+        // HTTP handling is synchronous on a background queue: closing the client
+        // does not cancel this operation or skip cleanup.
+        let connection = manager.connection
+        var startingObserved = false
+        let settled = waitForVPN(connection, timeout: 55) { status in
+            if status == .connecting || status == .reasserting || status == .disconnecting {
+                startingObserved = true
+            }
+            return status == .connected || status == .invalid
+                || (status == .disconnected && startingObserved)
+        }
+        let result = settled && connection.status == .connected
+            ? measureThroughTunnel(manager, configId: id, temporaryToken: token)
+            : (504, err("temporary VPN did not become ready"))
+        connection.stopVPNTunnel()
+        guard waitForVPN(connection, timeout: 10, until: vpnIsOff) else {
+            return (504, err("temporary VPN did not disconnect"))
+        }
+        applyVpnStatus(connection.status)
+        return result
+    }
+
+    private func measureThroughTunnel(
+        _ manager: NETunnelProviderManager, configId: Int64, temporaryToken: String?
+    ) -> (Int, String) {
+        guard let session = manager.connection as? NETunnelProviderSession,
+              session.status == .connected else { return (409, err("VPN is not connected")) }
+        var command: [String: Any] = ["operation": "measure", "configId": configId]
+        command["temporaryToken"] = temporaryToken
+        guard let message = try? JSONSerialization.data(withJSONObject: command) else {
+            return (500, err("cannot encode tunnel measurement"))
+        }
+        let sem = DispatchSemaphore(value: 0)
+        var response: Data?
+        do {
+            try session.sendProviderMessage(message) { data in
+                response = data
+                sem.signal()
+            }
+        } catch {
+            return (503, err("packet tunnel measurement is unavailable"))
+        }
+        guard sem.wait(timeout: .now() + 7) == .success else {
+            return (504, err("tunnel latency probe timed out"))
+        }
+        guard let response = response,
+              let result = try? JSONSerialization.jsonObject(with: response) as? [String: Any] else {
+            return (503, err("packet tunnel did not answer measurement"))
+        }
+        if session.status != .connected || result["conflict"] as? Bool == true {
+            return (409, err("requested VPN profile is not connected"))
+        }
+        if let latency = result["latencyMs"] as? Int, latency > 0 {
+            return (200, json(["latencyMs": latency]))
+        }
+        return (504, err("tunnel latency probe did not respond"))
+    }
+
+    private func vpnConnect(body: String) -> (Int, String) {
+        let loaded = loadTunnelManager()
+        guard let manager = loaded.0 else {
+            return (500, err(loaded.1?.localizedDescription ?? "failed to load VPN manager"))
+        }
+        var config: [String: Any] = [:]
+        if let b = try? JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any],
+           let number = b["configId"] as? NSNumber,
+           let saved = findConfig(id: number.int64Value) {
+            config = saved
+        } else if let sel = readSelectedConfigJson(),
+                  let selected = try? JSONSerialization.jsonObject(with: Data(sel.utf8)) as? [String: Any] {
+            config = selected
+        }
+        return connectTunnel(manager: manager, settings: loadSettings(), config: config,
+                             configId: (config["id"] as? NSNumber)?.int64Value ?? 0, temporaryToken: nil)
+    }
+
+    private func connectTunnel(
+        manager: NETunnelProviderManager, settings: [String: Any], config: [String: Any],
+        configId: Int64, temporaryToken: String?
+    ) -> (Int, String) {
+        guard vpnIsOff(manager.connection.status) else { return (409, err("VPN is not disconnected")) }
+        let protocolName = config["protocol"] as? String ?? settings["protocol"] as? String ?? "CSQTT"
+        let peer = config["peer"] as? String ?? settings["peer"] as? String ?? ""
+        let password = config["password"] as? String ?? settings["password"] as? String ?? ""
+        let configHashes = config["hashes"] as? String ?? ""
+        let cfgHashes = configHashes.isEmpty ? settings["vkHashes"] as? String ?? "" : configHashes
 
         let upperProtocol = protocolName.uppercased()
         guard upperProtocol.hasPrefix("CSQTT") || upperProtocol.hasPrefix("CSQTTR") else {
@@ -830,77 +979,45 @@ public final class Backend {
             return (400, err("VK hashes are empty"))
         }
 
-        CoreManager.shared.writeSharedSettings(
+        let tunnelSettings = CoreManager.shared.tunnelSettings(
             from: settings, protocol: protocolName, peer: peer,
-            password: password, hashes: hashes
+            password: password, hashes: hashes, configId: configId
         )
-
-        guard CoreManager.shared.corePath(protocol: protocolName) != nil else {
-            return (400, err("unsupported iOS protocol: \(protocolName)"))
+        if temporaryToken == nil || !manager.isEnabled {
+            // A first run may need to install the VPN profile, but never store
+            // the temporary peer or replace an existing VPN server address.
+            let currentAddress = manager.protocolConfiguration?.serverAddress ?? "LaLune"
+            let preferences = configureTunnelManager(manager,
+                serverAddress: temporaryToken == nil ? peer : currentAddress)
+            guard preferences.0 == 200 else { return preferences }
+        }
+        guard vpnIsOff(manager.connection.status),
+              let session = manager.connection as? NETunnelProviderSession else {
+            return (409, err("VPN is not disconnected"))
         }
 
-        if settings["shareVpn"] as? Bool == true {
-            startSocks5()
+        var options: [String: NSObject]?
+        if let token = temporaryToken {
+            // Do not change the persistent settings used by a normal/system restart.
+            options = tunnelSettings
+            options?["temporaryToken"] = token as NSString
+        } else {
+            CoreManager.shared.writeSharedSettings(tunnelSettings)
         }
 
         log("[VPN] starting NETunnelProviderManager protocol=\(protocolName)")
-
-        let loaded = loadTunnelManager()
-        if let error = loaded.1 {
-            log("[VPN] load preferences failed: \(error.localizedDescription)")
-            return (500, err("load VPN preferences failed: \(error.localizedDescription)"))
-        }
-        guard let manager = loaded.0 else {
-            return (500, err("failed to create VPN manager"))
-        }
-
-        let proto = (manager.protocolConfiguration as? NETunnelProviderProtocol)
-            ?? NETunnelProviderProtocol()
-        proto.providerBundleIdentifier = TUNNEL_BUNDLE_ID
-        proto.serverAddress = peer
-        proto.disconnectOnSleep = false
-
-        manager.protocolConfiguration = proto
-        manager.localizedDescription = "LaLune"
-        manager.isEnabled = true
-        tunnelManager = manager
-
-        let saveSem = DispatchSemaphore(value: 0)
-        var saveError: Error?
-        manager.saveToPreferences { error in
-            saveError = error
-            saveSem.signal()
-        }
-        if saveSem.wait(timeout: .now() + 10) == .timedOut {
-            return (500, err("save VPN preferences timed out"))
-        }
-        if let error = saveError {
-            log("[VPN] save failed: \(error.localizedDescription)")
-            return (500, err("save VPN preferences failed: \(error.localizedDescription)"))
-        }
-
-        let reloadSem = DispatchSemaphore(value: 0)
-        var reloadError: Error?
-        manager.loadFromPreferences { error in
-            reloadError = error
-            reloadSem.signal()
-        }
-        if reloadSem.wait(timeout: .now() + 10) == .timedOut {
-            return (500, err("reload VPN preferences timed out"))
-        }
-        if let error = reloadError {
-            log("[VPN] reload failed: \(error.localizedDescription)")
-            return (500, err("reload VPN preferences failed: \(error.localizedDescription)"))
-        }
-
+        activeConfigId = configId
         do {
-            try manager.connection.startVPNTunnel()
+            try session.startTunnel(options: options)
         } catch {
+            activeConfigId = 0
             log("[VPN] start failed: \(error.localizedDescription)")
             return (500, err("start tunnel failed: \(error.localizedDescription)"))
         }
+        if temporaryToken == nil && settings["shareVpn"] as? Bool == true {
+            startSocks5()
+        }
 
-        activeConfigId = requestedConfigId
         vpnState = "connecting"
         vpnConnected = false
         emitEvent(json([
@@ -912,6 +1029,45 @@ public final class Backend {
             "ts": Int(Date().timeIntervalSince1970),
         ]))
         return (200, json(["ok": true, "status": "connecting"]))
+    }
+
+    private func configureTunnelManager(
+        _ manager: NETunnelProviderManager, serverAddress: String
+    ) -> (Int, String) {
+        let proto = (manager.protocolConfiguration as? NETunnelProviderProtocol)
+            ?? NETunnelProviderProtocol()
+        proto.providerBundleIdentifier = TUNNEL_BUNDLE_ID
+        proto.serverAddress = serverAddress
+        proto.disconnectOnSleep = false
+        manager.protocolConfiguration = proto
+        manager.localizedDescription = "LaLune"
+        manager.isEnabled = true
+
+        let saveSem = DispatchSemaphore(value: 0)
+        var saveError: Error?
+        manager.saveToPreferences { error in
+            saveError = error
+            saveSem.signal()
+        }
+        if saveSem.wait(timeout: .now() + 10) == .timedOut {
+            return (504, err("save VPN preferences timed out"))
+        }
+        if let error = saveError {
+            return (500, err("save VPN preferences failed: \(error.localizedDescription)"))
+        }
+        let reloadSem = DispatchSemaphore(value: 0)
+        var reloadError: Error?
+        manager.loadFromPreferences { error in
+            reloadError = error
+            reloadSem.signal()
+        }
+        if reloadSem.wait(timeout: .now() + 10) == .timedOut {
+            return (504, err("reload VPN preferences timed out"))
+        }
+        if let error = reloadError {
+            return (500, err("reload VPN preferences failed: \(error.localizedDescription)"))
+        }
+        return (200, "{}")
     }
 
     private func vpnDisconnect() -> (Int, String) {

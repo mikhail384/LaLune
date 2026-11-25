@@ -35,6 +35,7 @@ pub struct Settings {
 
     // -------- Общие --------
     pub workers: i32,
+    pub auto_workers: bool,
     pub auto_api_workers: i32,
 
 
@@ -70,6 +71,7 @@ impl Default for Settings {
             validate_vk_hashes: false,
 
             workers: DEFAULT_WORKERS,
+            auto_workers: false,
             auto_api_workers: DEFAULT_AUTO_API_WORKERS,
 
 
@@ -127,5 +129,25 @@ impl Settings {
         *self = new_settings;
         self.normalize();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn auto_workers_is_opt_in_and_does_not_overwrite_manual_workers() {
+        let mut settings: Settings = serde_json::from_value(json!({"workers": 37})).unwrap();
+        assert_eq!(settings.get_field("autoWorkers"), Some(json!(false)));
+        settings.merge_from_json(json!({"autoWorkers": true})).unwrap();
+        let serialized = serde_json::to_value(settings).unwrap();
+        assert_eq!(serialized["autoWorkers"], true);
+        assert_eq!(serialized["workers"], 37);
+        let mut reloaded: Settings = serde_json::from_value(serialized).unwrap();
+        reloaded.set_field("autoWorkers", json!(false)).unwrap();
+        assert!(!reloaded.auto_workers);
+        assert_eq!(reloaded.workers, 37);
     }
 }

@@ -15,6 +15,7 @@ class Settings {
   final String vkJsToken;
   final String deviceId;
   final int workers;
+  final bool autoWorkers;
   final int autoApiWorkers;
   final String password;
   final String obfs;
@@ -65,6 +66,7 @@ class Settings {
   final String ipRoutingIps; // one IPv4/IPv6 address or CIDR per line.
   final String androidAppRoutingMode; // blacklist: selected apps bypass VPN; whitelist: only selected apps use VPN.
   final List<String> androidVpnApps;
+  final bool androidAutoSleepTunnel;
 
   Settings({
     this.peer = '',
@@ -72,6 +74,7 @@ class Settings {
     this.vkJsToken = '',
     this.deviceId = 'unknown',
     this.workers = kDefaultWorkers,
+    this.autoWorkers = false,
     this.autoApiWorkers = kDefaultAutoApiWorkers,
     this.password = '',
     this.obfs = 'video',
@@ -115,6 +118,7 @@ class Settings {
     this.ipRoutingIps = '',
     this.androidAppRoutingMode = 'blacklist',
     this.androidVpnApps = const [],
+    this.androidAutoSleepTunnel = true,
   });
 
   factory Settings.fromJson(Map<String, dynamic> j) {
@@ -132,6 +136,7 @@ class Settings {
       vkJsToken: (j['vkJsToken'] ?? '') as String,
       deviceId: (j['deviceId'] ?? 'unknown') as String,
       workers: w,
+      autoWorkers: (j['autoWorkers'] ?? false) as bool,
       autoApiWorkers: aw,
       password: (j['password'] ?? '') as String,
       obfs: (j['obfs'] ?? 'video') as String,
@@ -175,6 +180,7 @@ class Settings {
       ipRoutingIps: (j['ipRoutingIps'] ?? '') as String,
       androidAppRoutingMode: (j['androidAppRoutingMode'] ?? 'blacklist') as String,
       androidVpnApps: ((j['androidVpnApps'] ?? const []) as List).map((v) => v.toString()).toList(),
+      androidAutoSleepTunnel: (j['androidAutoSleepTunnel'] ?? true) as bool,
     );
   }
 
@@ -184,6 +190,7 @@ class Settings {
         'vkJsToken': vkJsToken,
         'deviceId': deviceId,
         'workers': workers,
+        'autoWorkers': autoWorkers,
         'autoApiWorkers': autoApiWorkers,
         'password': password,
         'obfs': obfs,
@@ -227,6 +234,7 @@ class Settings {
         'ipRoutingIps': ipRoutingIps,
         'androidAppRoutingMode': androidAppRoutingMode,
         'androidVpnApps': androidVpnApps,
+        'androidAutoSleepTunnel': androidAutoSleepTunnel,
       };
 
   Settings copyWith({
@@ -235,6 +243,7 @@ class Settings {
     String? vkJsToken,
     String? deviceId,
     int? workers,
+    bool? autoWorkers,
     int? autoApiWorkers,
     String? password,
     String? obfs,
@@ -278,6 +287,7 @@ class Settings {
     String? ipRoutingIps,
     String? androidAppRoutingMode,
     List<String>? androidVpnApps,
+    bool? androidAutoSleepTunnel,
   }) =>
       Settings(
         peer: peer ?? this.peer,
@@ -285,6 +295,7 @@ class Settings {
         vkJsToken: vkJsToken ?? this.vkJsToken,
         deviceId: deviceId ?? this.deviceId,
         workers: workers ?? this.workers,
+        autoWorkers: autoWorkers ?? this.autoWorkers,
         autoApiWorkers: autoApiWorkers ?? this.autoApiWorkers,
         password: password ?? this.password,
         obfs: obfs ?? this.obfs,
@@ -329,5 +340,7 @@ class Settings {
         ipRoutingIps: ipRoutingIps ?? this.ipRoutingIps,
         androidAppRoutingMode: androidAppRoutingMode ?? this.androidAppRoutingMode,
         androidVpnApps: androidVpnApps ?? this.androidVpnApps,
+        androidAutoSleepTunnel:
+            androidAutoSleepTunnel ?? this.androidAutoSleepTunnel,
       );
 }

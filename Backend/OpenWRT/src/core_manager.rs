@@ -358,11 +358,58 @@ fn vk_bootstrap(token: &str) -> String {
     format!("VK_JS_BOOTSTRAP:{}\n", base64::engine::general_purpose::STANDARD.encode(json.to_string()))
 }
 
+pub fn effective_workers(settings: &crate::settings::Settings) -> i32 {
+    select_workers(settings, || {
+        let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
+        available_memory_kib(&meminfo)
+    })
+}
+
+fn available_memory_kib(meminfo: &str) -> Option<u64> {
+    let line = meminfo.lines().find_map(|line| line.strip_prefix("MemAvailable:"))?;
+    let mut fields = line.split_whitespace();
+    let value = fields.next()?.parse().ok()?;
+    // Linux labels these KiB values as kB.
+    (fields.next() == Some("kB")).then_some(value)
+}
+
+fn select_workers(
+    settings: &crate::settings::Settings,
+    available_kib: impl FnOnce() -> Option<u64>,
+) -> i32 {
+    use crate::settings::{MAX_WORKERS, MIN_WORKERS};
+    if !settings.auto_workers {
+        return settings.workers.clamp(MIN_WORKERS, MAX_WORKERS);
+    }
+    let Some(kib) = available_kib() else {
+        log::warn!("[CORE] не удалось определить доступную ОЗУ: используем {MIN_WORKERS} воркер");
+        return MIN_WORKERS;
+    };
+    // Keep the fractional part for the strict >100 and >49 comparisons: KiB / 1024 / 1.9.
+    workers_for_estimate(kib.saturating_mul(10))
+}
+
+const ESTIMATE_DIVISOR: u64 = 1024 * 19;
+
+fn workers_for_estimate(scaled: u64) -> i32 {
+    if scaled > 100 * ESTIMATE_DIVISOR {
+        100
+    } else if scaled >= 70 * ESTIMATE_DIVISOR {
+        70
+    } else if scaled > 49 * ESTIMATE_DIVISOR {
+        50
+    } else {
+        let estimate = (scaled / ESTIMATE_DIVISOR) as i32;
+        ((estimate - 5).div_euclid(10) * 10).max(crate::settings::MIN_WORKERS)
+    }
+}
+
 /// Сборка аргументов ядра CSQTT для OpenWRT.
 pub fn build_args(
     config: &crate::config::ConfigItem,
     settings: &crate::settings::Settings,
     listen_port: u16,
+    workers: i32,
 ) -> Vec<String> {
     use crate::bundled_cores::{available, Core};
     let kind = Core::parse(&config.protocol).unwrap_or(Core::Csqtt);
@@ -397,16 +444,6 @@ pub fn build_args(
     } else {
         settings.vk_auth_mode.as_str()
     };
-
-    let mut workers = settings.workers.clamp(
-        crate::settings::MIN_WORKERS,
-        crate::settings::MAX_WORKERS,
-    );
-    // Роутеры с малой памятью (напр. 64 МБ): много воркеров приводят к OOM и гибели netifd.
-    if low_memory() && workers > LOW_MEMORY_MAX_WORKERS {
-        log::warn!("[CORE] мало ОЗУ: воркеры {workers} -> {LOW_MEMORY_MAX_WORKERS}");
-        workers = LOW_MEMORY_MAX_WORKERS;
-    }
 
     let mut args: Vec<String> = vec![
         "--peer".into(), config.peer.clone(),
@@ -497,6 +534,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn auto_workers_follow_available_memory_tiers() {
+        let settings = crate::settings::Settings { auto_workers: true, ..Default::default() };
+        assert_eq!(workers_for_estimate(49 * ESTIMATE_DIVISOR), 40);
+        for (kib, expected) in [
+            (0, 1),
+            (20 * 1024, 1),
+            (29_184, 10), // estimate = 15
+            (68_095, 20), // just below 35
+            (68_096, 30),
+            (87_552, 40), // estimate = 45
+            (95_334, 40), // just below 49
+            (95_335, 50), // just above 49
+            (97_279, 50),
+            (95 * 1024, 50), // estimate = 50
+            (136_191, 50),
+            (133 * 1024, 70), // estimate = 70
+            (190 * 1024, 70), // estimate = 100
+            (190 * 1024 + 1, 100),
+            (u64::MAX, 100),
+        ] {
+            assert_eq!(select_workers(&settings, || Some(kib)), expected, "{kib} KiB");
+        }
+        assert_eq!(select_workers(&settings, || None), crate::settings::MIN_WORKERS);
+    }
+
+    #[test]
+    fn manual_workers_bypass_ram_detection_and_reach_the_core() {
+        let settings = crate::settings::Settings { workers: 95, ..Default::default() };
+        let workers = select_workers(&settings, || panic!("manual mode must not read memory"));
+        assert_eq!(workers, 95);
+        let args = build_args(&crate::config::ConfigItem::default(), &settings, 52230, workers);
+        assert!(args.windows(2).any(|pair| pair[0] == "-n" && pair[1] == "95"));
+    }
+
+    #[test]
+    fn meminfo_uses_available_kib_not_total_or_free_memory() {
+        assert_eq!(available_memory_kib("MemTotal: 262144 kB\nMemFree: 12000 kB\nMemAvailable: 97280 kB\n"), Some(97280));
+        assert_eq!(available_memory_kib("MemTotal: 262144 kB\nMemFree: 12000 kB\n"), None);
+        assert_eq!(available_memory_kib("MemAvailable: invalid kB\n"), None);
+    }
+
+    #[test]
     fn captcha_bootstrap_and_partial_hash_do_not_reach_history() {
         assert_eq!(hide_control_payloads("CAPTCHA_SOLVE|rjs|https://example.test|credential"),
             "[CAPTCHA] Ядро запросило решение капчи");
@@ -518,7 +597,7 @@ mod tests {
             validate_vk_hashes: true,
             ..Default::default()
         };
-        let args = build_args(&config, &settings, 52230);
+        let args = build_args(&config, &settings, 52230, effective_workers(&settings));
         for omitted in ["--password", "fixture-password", "--token", "--allow-hash-redistribution", "--validate-vk-hashes"] {
             assert!(!args.iter().any(|arg| arg == omitted));
         }
@@ -547,26 +626,10 @@ mod tests {
                 protocol: protocol.into(),
                 ..Default::default()
             };
-            let args = build_args(&config, &settings, 52230);
+            let args = build_args(&config, &settings, 52230, effective_workers(&settings));
             let device = args.windows(2).find(|pair| pair[0] == "--device-id");
             assert_eq!(device.map(|pair| pair[1].as_str()),
                 (protocol == "CSQTT 2.1.9").then_some("fixture-device"));
         }
     }
-}
-
-/// Максимум воркеров на роутере с малой памятью.
-pub const LOW_MEMORY_MAX_WORKERS: i32 = 6;
-
-/// true, если на роутере меньше 192 МБ ОЗУ (по /proc/meminfo).
-pub fn low_memory() -> bool {
-    std::fs::read_to_string("/proc/meminfo")
-        .ok()
-        .and_then(|text| {
-            text.lines()
-                .find(|line| line.starts_with("MemTotal:"))
-                .and_then(|line| line.split_whitespace().nth(1))
-                .and_then(|kb| kb.parse::<u64>().ok())
-        })
-        .is_some_and(|kb| kb < 192 * 1024)
 }

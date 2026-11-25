@@ -109,7 +109,10 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> postJson(
-      String path, Map<String, dynamic> body) async {
+    String path,
+    Map<String, dynamic> body, {
+    Duration timeout = _timeout,
+  }) async {
     try {
       final resp = await _http
           .post(
@@ -117,7 +120,7 @@ class ApiClient {
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode(body),
           )
-          .timeout(_timeout);
+          .timeout(timeout);
       return _decode(resp);
     } on TimeoutException {
       throw ApiException('timeout: $path');

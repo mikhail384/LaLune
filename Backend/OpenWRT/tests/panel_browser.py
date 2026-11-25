@@ -17,7 +17,8 @@ class Router(BaseHTTPRequestHandler):
     selected = None
     connected = False
     token = False
-    settings = {"authMode": "manual", "externalHashesUrl": "", "workers": 9, "autoApiWorkers": 9}
+    settings = {"authMode": "manual", "externalHashesUrl": "", "workers": 9,
+                "autoWorkers": False, "autoApiWorkers": 9}
     writes = []
     profiles = [PROFILE]
 
@@ -166,6 +167,33 @@ def smoke_test(url):
             "authMode": "externalHashes",
             "externalHashesUrl": "https://disk.yandex.ru/d/TestPublicArchive",
         }) in Router.writes
+
+        workers = page.get_by_label("Воркеры", exact=True)
+        automatic = page.get_by_label("Автовыбор воркеров", exact=True)
+        save_settings = page.get_by_role("button", name="Сохранить настройки")
+        expect(automatic).not_to_be_checked()
+        expect(workers).to_be_enabled()
+        workers.fill("37")
+        save_settings.click()
+        expect(page.locator("#settings-message")).to_have_text("Настройки сохранены")
+        assert Router.writes[-1] == ("PATCH", "/settings", {"workers": 37})
+
+        automatic.check()
+        expect(workers).to_be_disabled()
+        save_settings.click()
+        expect(page.locator("#settings-message")).to_have_text("Настройки сохранены")
+        assert Router.writes[-1] == ("PATCH", "/settings", {"autoWorkers": True})
+        page.reload(wait_until="domcontentloaded")
+        expect(automatic).to_be_checked()
+        expect(workers).to_have_value("37")
+        expect(workers).to_be_disabled()
+
+        automatic.uncheck()
+        expect(workers).to_be_enabled()
+        expect(workers).to_have_value("37")
+        save_settings.click()
+        expect(page.locator("#settings-message")).to_have_text("Настройки сохранены")
+        assert Router.writes[-1] == ("PATCH", "/settings", {"autoWorkers": False})
 
         page.get_by_text("Журнал ядра", exact=True).click()
         expect(page.locator("#log-output")).to_have_text("[CORE] <script>")

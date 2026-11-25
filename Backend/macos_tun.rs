@@ -228,6 +228,7 @@ impl Drop for Routes {
 }
 
 pub struct Session {
+    pub interface: String,
     handle: Option<JoinHandle<()>>,
 }
 
@@ -339,7 +340,7 @@ impl Session {
                 events.emit(Event::status(false));
             }
         });
-        Ok(Self { handle: Some(handle) })
+        Ok(Self { interface: name, handle: Some(handle) })
     }
 
     pub async fn stop(mut self) {
