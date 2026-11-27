@@ -215,37 +215,58 @@ jobs:
         working-directory: Frontend
         run: |
           set -euo pipefail
-          # Duplicate every line of the tool output as an ::error:: annotation:
-          # job logs need admin rights on this repository, annotations do not,
-          # so this is the only way a failure here is diagnosable.
+
+          # GitHub caps a job at ten annotations, so a failure is reported as a
+          # single ::error:: carrying the whole tail of the log (newlines are
+          # percent-escaped). This matters here because downloading job logs
+          # requires admin rights on this repository.
+          emit_failure() {
+            local title="$1" log="$2"
+            python3 - "$title" "$log" <<'PY'
+          import pathlib
+          import sys
+
+          title, path = sys.argv[1], sys.argv[2]
+          try:
+              text = pathlib.Path(path).read_text(errors="replace")
+          except FileNotFoundError:
+              text = "<no log file>"
+          lines = text.replace("\r", "").splitlines()
+          tail = "\n".join(lines[-150:]) or "<empty output>"
+          escaped = tail.replace("%", "%25").replace("\n", "%0A")
+          print(f"::error title={title}::{escaped[:60000]}")
+          PY
+          }
+
+          echo "--- environment ---"
+          flutter --version || true
+          pod --version || true
+          ls -la . | head -30
+          echo "--- flutter config ---"
+          flutter config --list || true
 
           run_attempt() {
-            local log="$1"
+            local name="$1"
             shift
+            local log="$name.log"
             if "$@" > "$log" 2>&1; then
+              echo "$name OK"
               return 0
             fi
-            echo "::error::failed: $*"
-            tail -n 60 "$log" | sed 's/\r$//' | while IFS= read -r line; do
-              [ -n "$line" ] && echo "::error::$line"
-            done
+            emit_failure "$name failed" "$log"
             return 1
           }
 
-          if run_attempt build-frameworks-nocodesign.log \
+          if run_attempt flutter-frameworks-nocodesign \
                flutter build ios-framework --output=ios/Flutter --release --no-codesign; then
-            echo "flutter build ios-framework (--no-codesign) OK"
-            cp build-frameworks-nocodesign.log build-frameworks.log
-          elif run_attempt build-frameworks-codesign.log \
+            :
+          elif run_attempt flutter-frameworks-codesign \
                  flutter build ios-framework --output=ios/Flutter --release; then
-            echo "flutter build ios-framework (default codesign) OK"
-            cp build-frameworks-codesign.log build-frameworks.log
+            :
           else
-            echo "::error::flutter build ios-framework failed with both codesign modes"
             exit 1
           fi
 
-          tail -n 20 build-frameworks.log || true
           ls -la ios/Flutter/Release/ || true
           if [ ! -d ios/Flutter/Release/Flutter.xcframework ]; then
             echo "::warning::Flutter.xcframework not found under ios/Flutter/Release"
@@ -341,21 +362,35 @@ jobs:
             DEVELOPMENT_TEAM=""
           )
 
+          emit_failure() {
+            local title="$1" log="$2"
+            python3 - "$title" "$log" <<'PY'
+          import pathlib
+          import sys
+
+          title, path = sys.argv[1], sys.argv[2]
+          try:
+              text = pathlib.Path(path).read_text(errors="replace")
+          except FileNotFoundError:
+              text = "<no log file>"
+          lines = text.replace("\r", "").splitlines()
+          tail = "\n".join(lines[-150:]) or "<empty output>"
+          escaped = tail.replace("%", "%25").replace("\n", "%0A")
+          print(f"::error title={title}::{escaped[:60000]}")
+          PY
+          }
+
           attempt() {
             local label="$1"
             shift
             echo "::group::xcodebuild $label"
-            if xcodebuild "$@" 2>&1 | tee "xcodebuild-$label.log"; then
+            if xcodebuild "$@" > "xcodebuild-$label.log" 2>&1; then
               echo "::endgroup::"
               echo "LALUNE_IOS_ARTIFACT=$label" >> "$GITHUB_ENV"
               return 0
             fi
             echo "::endgroup::"
-            # Job logs require admin rights here, so duplicate the tail of the
-            # failure as annotations to keep it diagnosable.
-            tail -n 40 "xcodebuild-$label.log" | while IFS= read -r line; do
-              [ -n "$line" ] && echo "::error::[$label] $line"
-            done
+            emit_failure "xcodebuild $label failed" "xcodebuild-$label.log"
             return 1
           }
 
