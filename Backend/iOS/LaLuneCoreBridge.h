@@ -1,5 +1,14 @@
-#ifndef LALUNE_TUNNEL_BRIDGING_H
-#define LALUNE_TUNNEL_BRIDGING_H
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//
+// C API ядра CSQTT/CSQTTR для iOS.
+//
+// Ядро линкуется статически в основное приложение (libcsqtt_ios_core.a и
+// libcsqttr_ios_core.a) и запускается в процессе приложения: без
+// NetworkExtension и без системного TUN. Обмен пакетами идёт по UDP на
+// 127.0.0.1:52230, дальше их разбирает userspace-стек LaLune.
+
+#ifndef LALUNE_CORE_BRIDGE_H
+#define LALUNE_CORE_BRIDGE_H
 
 #include <stdint.h>
 #include <stdbool.h>

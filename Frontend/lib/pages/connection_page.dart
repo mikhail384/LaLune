@@ -20,6 +20,7 @@ import '../utils/config_input.dart';
 import '../utils/open_url.dart';
 import '../utils/profile_ping.dart';
 import '../widgets/config_selector.dart';
+import '../widgets/ios_socks_notice.dart';
 import '../widgets/moon_button.dart';
 import '../widgets/qr_scanner_dialog.dart';
 import '../widgets/toast.dart';
@@ -645,8 +646,13 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               if (!kIsWeb &&
-                  defaultTargetPlatform == TargetPlatform.android) ...[
+                  (defaultTargetPlatform == TargetPlatform.android ||
+                      defaultTargetPlatform == TargetPlatform.iOS)) ...[
                 _QrButton(onTap: _showQrScanner),
+                const SizedBox(width: 10),
+              ],
+              if (isIosPlatform) ...[
+                const IosSocksNoticeButton(),
                 const SizedBox(width: 10),
               ],
               _AddButton(onTap: _showAddDialog),

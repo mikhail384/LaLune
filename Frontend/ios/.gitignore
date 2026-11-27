@@ -27,6 +27,13 @@ Flutter/flutter_export_environment.sh
 ServiceDefinitions.json
 Runner/GeneratedPluginRegistrant.*
 
+# Исходники бэкенда генерируются `sh Frontend/ios/sync-backend.sh` из
+# Backend/iOS (канон). В git живут только Runner-специфичные файлы.
+Runner/*.swift
+!Runner/AppDelegate.swift
+!Runner/SceneDelegate.swift
+Runner/LaLuneCoreBridge.h
+
 # Exceptions to above rules.
 !default.mode1v3
 !default.mode2v3

@@ -1,138 +1,73 @@
-# iOS Backend (Swift) — обновлённая версия
+# iOS Backend (Swift) — SOCKS5 + incy
 
-`Backend.swift` — точка входа. HTTP-сервер на `127.0.0.1:1062`,
-управляет `NETunnelProviderManager`, ядром CSQTT, VK-авторизацией.
+`Backend.swift` — точка входа. HTTP-сервер на `127.0.0.1:1062`, ядро CSQTT в
+процессе приложения, userspace-стек (TCP/UDP/DNS) и локальный SOCKS5.
 
-## Требования
+## Как это работает
 
-- iOS 17.0+
-- App Group `group.com.lalune`
-- Network Extension entitlement
-- `SceneDelegate` (см. `SceneDelegate.swift`)
+У проекта нет Apple Developer, поэтому NetworkExtension (системный туннель)
+недоступен. Схема такая:
+
+1. `TunnelSession` запускает ядро CSQTT/CSQTTR **внутри приложения**; ядро
+   отдаёт сырые IPv4-пакеты по UDP на `127.0.0.1:52230`.
+2. `PacketPump` читает эти пакеты, `TcpStack` и `UdpNat` реализуют userspace
+   TCP/UDP поверх них, `TunnelResolver` делает DNS через туннель.
+3. `TunnelSocks5Server` поднимает локальный SOCKS5 (по умолчанию `127.0.0.1:1080`).
+4. `IncyConfig` собирает deeplink `incy://add?...` и открывает приложение incy,
+   которое поднимает системный VPN и забирает трафик в наш прокси. В deeplink
+   передаются исключения: локальные сети, сервисы VK/MAX/CDN/обновлений
+   (`Ipv4Routing`) — они идут напрямую.
+5. `CallKeepAlive` включает локальный «режим звонка»: аудиосессия
+   `.playAndRecord` + `.voiceChat`, вход открыт (микрофон) и сразу
+   выбрасывается, а в выход играет локально сгенерированный почти беззвучный
+   сигнал «собеседника» (громкость 0). Именно активный звонок не даёт iOS
+   приостановить приложение через ~30 секунд после ухода в фон. Если микрофон
+   запрещён, режим откатывается в `.playback` (фоновое аудио).
+
+Требуется установленный incy и хотя бы один ручной запуск incy, иначе оно не
+примет конфиг.
 
 ## Файлы
 
-| Файл ↕▾ | Назначение ↕▾ |
+| Файл | Назначение |
 |---|---|
-| −`Backend.swift` | HTTP-сервер + все роуты |
-| −`HttpServer.swift` | Сервер на Network.framework |
-| −`SceneDelegate.swift` | Создаёт окно + FlutterViewController, запускает Backend |
-| −`AppDelegate.swift` | Минимальный — только уведомления и background task |
-| −`PacketTunnelProvider.swift` | Network Extension: csqtt_run + UDP-мост |
-| −`CoreManager.swift` | Скачивание ядра + парсинг логов |
-| −`VkWebViewController.swift` | WKWebView для OAuth ВК |
-⚙
-
-## Запуск
-
-```
-// AppDelegate.didFinishLaunchingWithOptions:
-//   НЕ вызывай Backend.shared.run() здесь! Окно ещё не создано.
-
-// SceneDelegate.scene(_:willConnectTo:options:):
-let flutterVC = FlutterViewController(project: nil, nibName: nil, bundle: nil)
-GeneratedPluginRegistrant.register(with: flutterVC)
-let window = UIWindow(windowScene: windowScene)
-window.rootViewController = flutterVC
-window.makeKeyAndVisible()
-Backend.shared.attach(window: window)
-try Backend.shared.run()   // теперь throws
-```
-
-## Почему не в AppDelegate
-
-При использовании `SceneDelegate` (а он нужен для iOS 17+ с
-`UIApplicationSceneManifest`) `AppDelegate.window` **не устанавливается
-автоматически**. Если вызвать `Backend.shared.run()` в
-`didFinishLaunchingWithOptions`, окно будет `nil`, а любое исключение
-уронит приложение молча → чёрный экран.
-
-## Backend.run() теперь throws
-
-```
-public func run() throws {
-    guard !running else { return }
-    if !isPortAvailable(port: PORT) {
-        throw BackendError.portBusy(PORT)
-    }
-    // ... HttpServer.start() тоже throws
-}
-```
-
-`SceneDelegate` ловит исключение в `do/catch` и показывает баннер
-«Backend offline» вместо краша.
-
-## Замер задержки VPN
-
-`POST /vpn/measure` принимает `{"temporary":false,"configId":123}` для уже
-активного профиля без его отключения. Когда VPN выключен, используйте
-`{"temporary":true,"configId":123}` или `{"temporary":true,"link":"…","protocol":"CSQTT"}`.
-Временный туннель закрывается перед ответом; выбор профиля и его настройки не
-меняются. Ссылки используют незашифрованный формат iOS `csqtt://connect?...`
-(также `csqttr://connect?...`); зашифрованные ссылки сборка iOS не декодирует.
-
-Успешный ответ: `{"latencyMs":123}`. Замер — TCP-рукопожатие с `1.1.1.1:443`
-через интерфейс Packet Tunnel, без DNS и без перехода на обычное соединение.
-`409` означает конфликт профиля или состояния VPN; `504` — таймаут подключения,
-замера либо отключения.
-
-## VK-авторизация
-
-`POST /vk/token/login` — Backend сам открывает **свой `WKWebView`**
-(`VkWebViewController`), ждёт токен, сохраняет в `token.json`.
-
-**Цикл** (как в Desktop PlaywrightTokenFetcher и Android VkWebViewFetcher):
-
-- **Pass 1:** если VK вернул `#payload=...` (silent_token), WebView **не закрывается**.
-Показывается оверлей «Получаем токен, подождите...», `webView.load("https://vk.com/")`,
-через 2 секунды — `webView.load(AUTH_URL)` в **том же** WKWebView.
-- **Pass 2:** VK видит cookies активной сессии (`WKWebsiteDataStore.default()`)
-→ показывает «Продолжить как Имя» → возвращает `access_token`.
-- Если и на Pass 2 пришёл silent_token — сдаёмся с ошибкой.
-
-Flutter просто поллит `GET /vk/token/state`.
+| `Backend.swift` | HTTP-сервер + все роуты |
+| `TunnelSession.swift` | Жизненный цикл: ядро, мост, SOCKS5, incy, измерения |
+| `TunnelTypes.swift` | Общие типы и протоколы стека |
+| `PacketCodec.swift` | Разбор/сборка IPv4, TCP, UDP |
+| `TcpStack.swift` | Userspace TCP-клиент |
+| `UdpNat.swift` | UDP-флоу поверх туннеля |
+| `DnsMessage.swift` / `TunnelResolver.swift` | DNS через туннель |
+| `PacketPump.swift` | UDP-мост к ядру (`127.0.0.1:52230`) |
+| `TunnelSocks5Server.swift` | Локальный SOCKS5 для incy |
+| `Ipv4Routing.swift` | Правила «напрямую vs через туннель» |
+| `IncyConfig.swift` | Deeplink-схема incy |
+| `CallKeepAlive.swift` | Локальный «режим звонка» (тихий сгенерированный звук) |
+| `LaLuneCoreBridge.h` | C API ядра (`csqtt_run`, `csqttr_run_extended`, ...) |
+| `HttpServer.swift` | HTTP-сервер на Network.framework |
+| `SceneDelegate.swift` | Окно + FlutterViewController, запуск Backend |
+| `AppDelegate.swift` | Уведомления и background task |
+| `CoreManager.swift` | Скачивание ядра и разбор логов |
+| `VkWebViewController.swift` | WKWebView для OAuth ВК |
 
 ## Entitlements
 
-**Основное приложение** (`.entitlements`):
+Только App Group (общий каталог для настроек/логов):
 
 ```
 <key>com.apple.security.application-groups</key>
 <array><string>group.com.lalune</string></array>
 ```
 
-**Tunnel Extension**:
+Network Extension entitlement больше не нужен.
 
-```
-<key>com.apple.developer.networking.networkextension</key>
-<array><string>packet-tunnel-provider</string></array>
-<key>com.apple.security.application-groups</key>
-<array><string>group.com.lalune</string></array>
-```
+## Background modes
 
-## Troubleshooting
+`fetch`, `processing`, `network-authentication` и `audio` (Info.plist).
 
-### Чёрный экран
+## Ограничения
 
-См. `FIX-BlackScreen.md`. Кратко:
-
-1. `Backend.run()` не в `AppDelegate`, а в `SceneDelegate` — после `makeKeyAndVisible()`.
-2. `rootViewController` — `FlutterViewController`, а не пустой `UIViewController`.
-3. `GeneratedPluginRegistrant.register(with:)` вызван.
-4. `Info.plist` → `UISceneDelegateClassName = $(PRODUCT_MODULE_NAME).SceneDelegate`.
-
-### Backend offline баннер
-
-`Backend.run()` бросил исключение. Смотри Console.app:
-
-```
-[LaLune] Backend.run() failed: Порт 1062 занят
-```
-
-Скорее всего приложение уже запущено, или порт занят другим процессом.
-
-### Уведомления не приходят
-
-Проверь `UNUserNotificationCenter.current().getNotificationSettings()` —
-если `.authorizationStatus == .denied`, пользователь отклонил.
-Веди его в Settings → LaLune → Уведомления.
+- Системный VPN поднимает только incy; если incy не установлен, LaLune
+  покажет подсказку и предложит импортировать SOCKS5 вручную.
+- Ядро iOS понимает только незашифрованные `csqtt://connect?...` ссылки.
+- Замер задержки идёт TCP-рукопожатием до `1.1.1.1:443` через туннель.

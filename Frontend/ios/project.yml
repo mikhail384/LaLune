@@ -30,8 +30,11 @@ targets:
     sources:
       # ВАЖНО: sources: Runner целиком — xcodegen рекурсивно подхватит
       # все .swift / .h / .m / .plist / .storyboard / .xcassets внутри.
-      # Файлы, лежащие в Backend/iOS/, НЕ попадают в сборку — они там
-      # только для справки/чтения.
+      #
+      # Канонические исходники бэкенда лежат в Backend/iOS/ и копируются сюда
+      # через `sh Frontend/ios/sync-backend.sh` (тот же скрипт вызывает
+      # build-ios.yml). В git из Runner-исходников хранятся только
+      # AppDelegate.swift и SceneDelegate.swift.
       - path: Runner
         excludes:
           - "Info.plist"
@@ -52,6 +55,13 @@ targets:
           - "$(PROJECT_DIR)/Flutter/Release/App.xcframework/ios-arm64"
           - "$(PROJECT_DIR)/Flutter/Release/shared_preferences_foundation.xcframework/ios-arm64"
 
+        # Ядро CSQTT/CSQTTR линкуется прямо в приложение: системного туннеля
+        # (NetworkExtension) больше нет, системный VPN поднимает incy, а мы
+        # отдаём ему локальный SOCKS5.
+        LIBRARY_SEARCH_PATHS:
+          - "$(inherited)"
+          - "$(PROJECT_DIR)/Core"
+
         OTHER_LDFLAGS:
           - "$(inherited)"
           - "-framework"
@@ -61,11 +71,15 @@ targets:
           - "-framework"
           - "shared_preferences_foundation"
           - "-framework"
-          - "NetworkExtension"
-          - "-framework"
           - "WebKit"
           - "-framework"
           - "AuthenticationServices"
+          - "-framework"
+          - "AVFoundation"
+          - "-framework"
+          - "AudioToolbox"
+          - "-lcsqtt_ios_core"
+          - "-lcsqttr_ios_core"
 
         LD_RUNPATH_SEARCH_PATHS:
           - "$(inherited)"
@@ -114,50 +128,14 @@ targets:
             fi
           fi
 
-    dependencies:
-      - target: LaLuneTunnel
-        embed: true
-        codeSign: true
-
-  # ──────────────────────────────────────────────────────────
-  #  Network Extension (Packet Tunnel)
-  # ──────────────────────────────────────────────────────────
-  LaLuneTunnel:
-    type: app-extension
-    platform: iOS
-    sources:
-      - path: Tunnel
-        excludes:
-          - "Info.plist"
-      - path: Entitlements
-        buildPhase: none
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.lalune.lalune.tunnel
-        PRODUCT_NAME: LaLuneTunnel
-        INFOPLIST_FILE: Tunnel/Info.plist
-        CODE_SIGN_STYLE: Automatic
-        CODE_SIGN_ENTITLEMENTS: Entitlements/LaLuneTunnel.entitlements
-        SWIFT_OBJC_BRIDGING_HEADER: Tunnel/LaLune-Bridging-Header.h
-        LIBRARY_SEARCH_PATHS:
-          - "$(inherited)"
-          - "$(PROJECT_DIR)/Core"
-        OTHER_LDFLAGS:
-          - "$(inherited)"
-          - "-lcsqtt_ios_core"
-          - "-lcsqttr_ios_core"
-        LD_RUNPATH_SEARCH_PATHS:
-          - "$(inherited)"
-          - "@executable_path/Frameworks"
-          - "@executable_path/../../Frameworks"
-        SKIP_INSTALL: YES
+    # NetworkExtension-расширение больше не используется: системный VPN
+    # поднимает incy, LaLune работает как локальный SOCKS5-прокси.
 
 schemes:
   Runner:
     build:
       targets:
         Runner: all
-        LaLuneTunnel: all
     run:
       config: Debug
     archive:

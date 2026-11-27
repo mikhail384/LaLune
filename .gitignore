@@ -16,6 +16,12 @@ target/
 *.rs.bk
 Cargo.lock.bak
 
+# ---------- Локальные инструменты проверки iOS ----------
+# Swift-тулчейн, кеши компилятора и скретч-каталоги для офлайн-проверок.
+.swift-tools/
+.scratch/
+Frontend/.dart_tool-sdk/
+
 # ---------- Flutter / Dart ----------
 Frontend/.dart_tool/
 Frontend/.flutter-plugins
@@ -106,3 +112,6 @@ la-lune/
 # Вложения ассистента
 .codex-attachments/
 Installer/launcher/Backend-Windows.zip
+
+# Артефакты офлайн-тестов iOS-транспорта.
+Backend/iOS/Tests/.build-transport/

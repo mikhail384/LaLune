@@ -164,20 +164,24 @@ jobs:
       - name: Copy iOS backend sources
         run: |
           set -e
-          mkdir -p Frontend/ios/Runner Frontend/ios/Tunnel
+          mkdir -p Frontend/ios/Runner
 
-          cp Backend/iOS/Backend.swift              Frontend/ios/Runner/
-          cp Backend/iOS/HttpServer.swift           Frontend/ios/Runner/
-          cp Backend/iOS/CoreManager.swift          Frontend/ios/Runner/
-          cp Backend/iOS/VkWebViewController.swift  Frontend/ios/Runner/
-          cp Backend/iOS/Socks5Server.swift         Frontend/ios/Runner/
+          # Единственный список исходников живёт в Frontend/ios/sync-backend.sh:
+          # AppDelegate.swift и SceneDelegate.swift в Runner — авторитетные,
+          # остальное копируется из Backend/iOS.
+          sh Frontend/ios/sync-backend.sh
 
-          cp Backend/iOS/PacketTunnelProvider.swift Frontend/ios/Tunnel/
+          for required in TunnelSession.swift TunnelSocks5Server.swift TcpStack.swift \
+                          UdpNat.swift PacketPump.swift IncyConfig.swift \
+                          CallKeepAlive.swift LaLuneCoreBridge.h; do
+            if [ ! -f "Frontend/ios/Runner/$required" ]; then
+              echo "::error::$required missing"
+              exit 1
+            fi
+          done
 
-          if [ ! -f Frontend/ios/Runner/Socks5Server.swift ]; then
-            echo "::error::Socks5Server.swift missing"
-            exit 1
-          fi
+          # NetworkExtension больше не используется: системный VPN — incy.
+          rm -rf Frontend/ios/Tunnel
 
       - name: Copy assets
         run: |
@@ -236,7 +240,12 @@ jobs:
           if grep -q 'objectVersion = 77;' "$PBX"; then
             sed -i '' 's/objectVersion = 77;/objectVersion = 56;/g' "$PBX"
           fi
-          grep -q 'Socks5Server.swift' "$PBX" || { echo "::error::Socks5Server.swift NOT in project"; exit 1; }
+          grep -q 'TunnelSession.swift' "$PBX" || { echo "::error::TunnelSession.swift NOT in project"; exit 1; }
+          grep -q 'TunnelSocks5Server.swift' "$PBX" || { echo "::error::TunnelSocks5Server.swift NOT in project"; exit 1; }
+          if grep -q 'PacketTunnelProvider.swift' "$PBX"; then
+            echo "::error::NetworkExtension tunnel must not be in the project"
+            exit 1
+          fi
 
       - name: Archive (unsigned)
         working-directory: Frontend/ios

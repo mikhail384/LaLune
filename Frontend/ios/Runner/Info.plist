@@ -25,12 +25,14 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 
-	<!-- Background modes: нам нужен network + fetch для watchdog. -->
+	<!-- Background modes: fetch/processing для watchdog, audio — чтобы ядро
+	     и локальный SOCKS5 жили в фоне (системный туннель поднимает incy). -->
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>fetch</string>
 		<string>network-authentication</string>
 		<string>processing</string>
+		<string>audio</string>
 	</array>
 
 	<!-- BGTaskScheduler identifier (должен совпадать с AppDelegate). -->
@@ -40,6 +42,10 @@
 	</array>
 
 	<!-- Разрешения на сеть, локальный сервер, ATS -->
+	<!-- «Режим звонка» открывает вход аудиосессии, чтобы iOS не усыпляла
+	     процесс. Запись не сохраняется и никуда не отправляется. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>LaLune использует микрофон только для того, чтобы iOS не приостанавливала VPN в фоне (режим звонка). Запись не сохраняется и не передаётся.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>LaLune использует локальный API для связи UI с VPN-ядром.</string>
 	<key>NSAppTransportSecurity</key>
@@ -78,6 +84,15 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+
+	<!-- Схемы, которые мы проверяем через canOpenURL: incy принимает наш
+	     SOCKS5-конфиг, vk — возврат после OAuth. -->
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>incy</string>
+		<string>vk</string>
+		<string>tg</string>
+	</array>
 
 	<!-- URL-схема для OAuth ВК и deep links -->
 	<key>CFBundleURLTypes</key>

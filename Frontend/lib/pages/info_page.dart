@@ -12,6 +12,7 @@ import '../models/update_info.dart';
 import '../state/providers.dart';
 import '../theme/assets.dart';
 import '../widgets/glass_card.dart';
+import '../widgets/ios_socks_notice.dart';
 import '../widgets/toast.dart';
 
 class InfoPage extends ConsumerStatefulWidget {
@@ -262,20 +263,28 @@ class _InfoPageState extends ConsumerState<InfoPage> {
                   ),
                 ),
                 const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: _showMaxQrDialog,
-                    icon: const Icon(Icons.qr_code_2, size: 16),
-                    label: const Text('Показать QR для канала MAX'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: Colors.white,
-                      side: BorderSide(color: Colors.white.withOpacity(0.2)),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _showMaxQrDialog,
+                        icon: const Icon(Icons.qr_code_2, size: 16),
+                        label: const Text('Показать QR для канала MAX'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.white,
+                          side: BorderSide(
+                              color: Colors.white.withOpacity(0.2)),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10)),
+                        ),
+                      ),
                     ),
-                  ),
+                    if (isIosPlatform) ...[
+                      const SizedBox(width: 8),
+                      const IosSocksNoticeIcon(),
+                    ],
+                  ],
                 ),
               ]),
             ],

@@ -2,20 +2,25 @@
 
 ## Требования
 
-- Xcode 15+
-- iOS 17.0+ target
+- Xcode 15+, iOS 17.0+
 - App Group `group.com.lalune`
-- Entitlements: Network Extension
+- Статические библиотеки ядра: `libcsqtt_ios_core.a`, `libcsqttr_ios_core.a`
+  (кладутся в `Frontend/ios/Core/` шагом CI)
+
+Network Extension entitlement и таргет-расширение **не нужны**: системный VPN
+поднимает приложение incy, LaLune работает как локальный SOCKS5-прокси.
 
 ## Интеграция
 
-1. Добавить `Backend.swift` и `HttpServer.swift` в основной target.
-2. Вызвать `Backend.shared.run()` в `AppDelegate.application(_:didFinishLaunchingWithOptions:)`.
-3. В `PacketTunnelProvider` использовать `group.com.lalune` для обмена настройками.
+1. Скопировать все `Backend/iOS/*.swift` и `LaLuneCoreBridge.h` в target
+   `Runner` (это делает шаг «Copy iOS backend sources» в `build-ios.yml`).
+2. `Runner-Bridging-Header.h` должен импортировать `LaLuneCoreBridge.h` —
+   иначе Swift не увидит `csqtt_run`/`csqttr_run_extended`.
+3. `Backend.shared.attach(window:)` и `Backend.shared.run()` вызывать из
+   `SceneDelegate`, после `makeKeyAndVisible()`.
+4. Линковать `-lcsqtt_ios_core -lcsqttr_ios_core` и `AVFoundation`.
 
-## Entitlements
-
-**Основное приложение:**
+## Entitlements (Runner)
 
 ```
 <key>com.apple.security.application-groups</key>
@@ -24,27 +29,20 @@
 </array>
 ```
 
-**Tunnel Extension:**
+## Info.plist (Runner)
+
+- `UIBackgroundModes`: `fetch`, `processing`, `network-authentication`, `audio`
+- `NSMicrophoneUsageDescription` — «режим звонка» (запись не сохраняется)
+- `LSApplicationQueriesSchemes`: `incy`, `vk`, `tg` — иначе `canOpenURL`
+  для deeplink в incy всегда возвращает `false`
+- `NSLocalNetworkUsageDescription` — локальный API на 127.0.0.1:1062
+
+## Проверка перед сборкой
 
 ```
-<key>com.apple.developer.networking.networkextension</key>
-<array>
-    <string>packet-tunnel-provider</string>
-</array>
-<key>com.apple.security.application-groups</key>
-<array>
-    <string>group.com.lalune</string>
-</array>
+# чистая компиляция всех файлов без iOS SDK (только парсинг/типы Foundation-части)
+Backend/iOS/Tests/run-tests.sh
 ```
 
-## Info.plist (Tunnel)
-
-```
-<key>NSExtension</key>
-<dict>
-    <key>NSExtensionPointIdentifier</key>
-    <string>com.apple.networkextension.packet-tunnel</string>
-    <key>NSExtensionPrincipalClass</key>
-    <string>$(PRODUCT_MODULE_NAME).PacketTunnelProvider</string>
-</dict>
-```
+Скрипты тестов используют Swift из репозитория (`.swift-tools/`) и пишут кеш
+внутрь репозитория, потому что системный кеш может быть read-only.

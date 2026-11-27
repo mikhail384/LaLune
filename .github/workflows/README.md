@@ -115,7 +115,7 @@ macos-14
 ├── Xcode 15.4
 ├── flutter 3.29.0
 ├── xcodegen
-├── copy Backend/iOS/*.swift → Frontend/ios/Runner/ + Tunnel/
+├── sh Frontend/ios/sync-backend.sh → Runner/ (без Tunnel/)
 ├── copy Assets/ → Frontend/assets/
 ├── flutter pub get
 ├── download libcsqtt_ios_core.a → Frontend/ios/Core/
@@ -144,18 +144,20 @@ Frontend/ios/
 │   └── Tunnel.entitlements
 ├── Runner/
 │   ├── AppDelegate.swift        ← наш
+│   ├── SceneDelegate.swift      ← копируется workflow'ом
 │   ├── Backend.swift            ← копируется workflow'ом
-│   ├── HttpServer.swift         ← копируется workflow'ом
-│   ├── CoreManager.swift        ← копируется workflow'ом
-│   ├── VkWebViewController.swift← копируется workflow'ом
+│   ├── TunnelSession.swift      ← копируется workflow'ом
+│   ├── TcpStack.swift / UdpNat.swift / PacketPump.swift
+│   ├── TunnelSocks5Server.swift / IncyConfig.swift
 │   ├── Info.plist               ← наш
 │   └── Assets.xcassets/
-├── Tunnel/
-│   ├── PacketTunnelProvider.swift ← копируется workflow'ом
-│   └── Info.plist
 └── Core/
-    └── libcsqtt_ios_core.a      ← скачивается workflow'ом
+    ├── libcsqtt_ios_core.a      ← скачивается workflow'ом
+    └── libcsqttr_ios_core.a
 ```
+
+Расширения `Tunnel/` больше нет: системный VPN поднимает incy, LaLune
+запускает ядро в процессе приложения и отдаёт наружу локальный SOCKS5.
 
 ## Локальная проверка
 

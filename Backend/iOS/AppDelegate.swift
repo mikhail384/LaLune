@@ -8,7 +8,6 @@
 
 import Flutter
 import UIKit
-import NetworkExtension
 import BackgroundTasks
 import UserNotifications
 

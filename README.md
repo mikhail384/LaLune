@@ -21,7 +21,7 @@ VK Calls, TURN используется для обхода NAT, WRAP — для
 | Linux | ✅ | Flutter + Rust (axum) + TUN | `client-linux-x86_64` |
 | macOS | 🧪 | Flutter + Rust (axum) + utun + DMG installer | `client-macos-x86_64` |
 | Android | ✅ | Flutter + Kotlin + VpnService | `libclient-android-*.so` |
-| iOS 17+ | ✅ | Flutter + Swift + NetworkExtension | `csqtt-core` (static lib) |
+| iOS 17+ | ✅ | Flutter + Swift + userspace SOCKS5 (incy) | `csqtt-core` (static lib) |
 | OpenWRT | ✅ | Rust (axum) + `lalune0` + policy routing | встроенные CSQTT / CSQTTR / CSQTT 2.1.9 |
 | KeeneticOS | ✅ | Rust (axum) + Entware (OPKG) + `lalune0` | встроенные CSQTT / CSQTTR / CSQTT 2.1.9 |
 
@@ -93,8 +93,19 @@ curl -fsSL https://raw.githubusercontent.com/mikhail384/LaLune/feature/keenetic-
 ### iOS
 
 Скачай `.ipa` из [Releases](https://github.com/Endlad2/LaLune/releases) и
-поставь через AltStore / Scarlet / Sideloadly.
-Требуется iOS 17.0+.
+поставь через AltStore / Scarlet / Sideloadly. Требуется iOS 17.0+.
+
+Системного туннеля в приложении нет (для него нужен Apple Developer): LaLune
+запускает ядро CSQTT внутри себя, поднимает локальный SOCKS5 и регистрирует
+его в приложении **incy**, которое и поднимает VPN. Нужен установленный incy
+и хотя бы один его ручной запуск — подробности в приложении по кнопке «!»
+рядом со сканером QR.
+
+Чтобы iOS не приостанавливала процесс в фоне, приложение включает «режим
+звонка»: аудиосессия `.playAndRecord`/`.voiceChat` с открытым входом и
+локально сгенерированным почти беззвучным сигналом «собеседника» (громкость
+0). Микрофон используется только для того, чтобы система считала сессию
+звонком; запись не сохраняется и никуда не отправляется.
 
 ## Архитектура
 
@@ -103,7 +114,7 @@ LaLune/
 ├── Backend/                 — платформенные HTTP-демоны
 │   ├── Desktop/             — Rust (axum + tun) для Windows/Linux
 │   ├── Android/             — Kotlin (ServerSocket + VpnService)
-│   ├── iOS/                 — Swift (Network.framework + NETunnelProvider)
+│   ├── iOS/                 — Swift (ядро в процессе + userspace SOCKS5 для incy)
 │   └── OpenWRT/             — Rust (axum + tun), bind 0.0.0.0:1062
 ├── Core/                    — вспомогательное
 │   ├── DeployManager/       — SSH-деплой ядер (Rust)

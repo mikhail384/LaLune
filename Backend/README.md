@@ -6,7 +6,7 @@
 |---|---|---|---|
 | −Linux / Windows | Rust | axum + tokio + tun | `tun` crate |
 | −Android | Kotlin | Ktor / NanoHTTPD + VpnService | VpnService |
-| −iOS | Swift | Network.framework + NEPacketTunnelProvider | NEPacketTunnelProvider |
+| −iOS | Swift | Network.framework + userspace TCP/UDP + SOCKS5 (incy) | статические `libcsqtt_ios_core.a` |
 ⚙
 
 ## Общий контракт
@@ -53,14 +53,24 @@ Backend(this).run()   // запускает HTTP-сервер + VpnService
 ### iOS (Swift)
 
 ```
-Backend.shared.run()  // запускает HTTP-сервер на 127.0.0.1:1062
+Backend.shared.run()  // HTTP-сервер на 127.0.0.1:1062 + ядро в процессе
 ```
+
+Ядро CSQTT/CSQTTR линкуется в приложение и запускается в нём. Пакеты ядра
+(UDP `127.0.0.1:52230`) разбирает userspace-стек (`TcpStack`, `UdpNat`,
+`TunnelResolver`), наружу выставляется локальный SOCKS5, а системный VPN
+поднимает приложение incy по deeplink `incy://add?...`. NetworkExtension не
+используется: у проекта нет Apple Developer.
+
+Фоновую живучесть даёт локальный «режим звонка» (`CallKeepAlive`): сессия
+`.playAndRecord` + `.voiceChat`, открытый вход и почти беззвучный локально
+сгенерированный сигнал в выход. Никаких запросов к VK API для этого не нужно.
 
 ## Статус реализации
 
 - ✅ Desktop — полная реализация
 - ✅ Android — полная реализация
-- ✅ iOS — полная реализация
+- ✅ iOS — полная реализация (SOCKS5 + incy, без NetworkExtension)
 - ⏸ DeployManager — заглушка (методы возвращают `{stub: true}`)
 ## macOS (без проверки на реальном Mac)
 
