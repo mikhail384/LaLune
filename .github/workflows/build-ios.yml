@@ -300,9 +300,21 @@ jobs:
           fi
 
           ls -la ios/Flutter/Release/ || true
-          if [ ! -d ios/Flutter/Release/Flutter.xcframework ]; then
-            echo "::warning::Flutter.xcframework not found under ios/Flutter/Release"
+
+          # Every iOS plugin must have produced an xcframework: project.yml
+          # links them by name, and GeneratedPluginRegistrant.m imports their
+          # modules. A missing one fails later with a confusing
+          # "Module '<plugin>' not found", so check here instead.
+          MISSING=0
+          for fw in Flutter App mobile_scanner share_plus shared_preferences_foundation; do
+            if [ ! -d "ios/Flutter/Release/${fw}.xcframework" ]; then
+              echo "::error::ios/Flutter/Release/${fw}.xcframework is missing"
+              MISSING=1
+            fi
+          done
+          if [ "$MISSING" -ne 0 ]; then
             find ios/Flutter -maxdepth 3 -name '*.xcframework' -print 2>/dev/null || true
+            exit 1
           fi
 
       - name: Download CSQTT iOS core

@@ -61,10 +61,17 @@ targets:
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
         SUPPORTS_MACCATALYST: NO
 
+        # Каждый плагин с нативным кодом обязан быть и в путях поиска, и в
+        # OTHER_LDFLAGS, и в Embed-скрипте: GeneratedPluginRegistrant.m делает
+        # `@import <plugin>;`, и пропущенный плагин валит сборку ошибкой
+        # «Module '<plugin>' not found». Список совпадает с
+        # .flutter-plugins-dependencies → plugins.ios.
         FRAMEWORK_SEARCH_PATHS:
           - "$(inherited)"
           - "$(PROJECT_DIR)/Flutter/Release/Flutter.xcframework/ios-arm64"
           - "$(PROJECT_DIR)/Flutter/Release/App.xcframework/ios-arm64"
+          - "$(PROJECT_DIR)/Flutter/Release/mobile_scanner.xcframework/ios-arm64"
+          - "$(PROJECT_DIR)/Flutter/Release/share_plus.xcframework/ios-arm64"
           - "$(PROJECT_DIR)/Flutter/Release/shared_preferences_foundation.xcframework/ios-arm64"
 
         # Ядро CSQTT/CSQTTR линкуется прямо в приложение: системного туннеля
@@ -80,6 +87,10 @@ targets:
           - "Flutter"
           - "-framework"
           - "App"
+          - "-framework"
+          - "mobile_scanner"
+          - "-framework"
+          - "share_plus"
           - "-framework"
           - "shared_preferences_foundation"
           - "-framework"
@@ -106,7 +117,7 @@ targets:
           FW_DST="${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}"
           mkdir -p "$FW_DST"
 
-          for fw in Flutter App shared_preferences_foundation; do
+          for fw in Flutter App mobile_scanner share_plus shared_preferences_foundation; do
             SRC="${SRCROOT}/Flutter/Release/${fw}.xcframework/ios-arm64/${fw}.framework"
             if [ -d "$SRC" ]; then
               rm -rf "$FW_DST/${fw}.framework"
