@@ -236,6 +236,7 @@ jobs:
             local title="$1" log="$2"
             python3 - "$title" "$log" <<'PY'
           import pathlib
+          import re
           import sys
 
           title, path = sys.argv[1], sys.argv[2]
@@ -244,8 +245,23 @@ jobs:
           except FileNotFoundError:
               text = "<no log file>"
           lines = text.replace("\r", "").splitlines()
-          tail = "\n".join(lines[-150:]) or "<empty output>"
-          escaped = tail.replace("%", "%25").replace("\n", "%0A")
+
+          # A failed xcodebuild log is tens of thousands of lines of build
+          # commands; only the diagnostics matter. Keep every line that looks
+          # like a compiler/linker error, plus the tail for context.
+          pattern = re.compile(
+              r"(?i)(\berror\b|\bfatal\b|undefined symbol|"
+              r"ld: |clang: |swiftc: |could not|not found|"
+              r"\*\* BUILD FAILED|The following build commands failed)"
+          )
+          hits = [line for line in lines if pattern.search(line)][:120]
+          tail = lines[-40:]
+          parts = []
+          if hits:
+              parts.append("\n".join(hits))
+          parts.append("--- tail ---\n" + "\n".join(tail))
+          report = "\n".join(parts) or "<empty output>"
+          escaped = report.replace("%", "%25").replace("\n", "%0A")
           print(f"::error title={title}::{escaped[:60000]}")
           PY
           }
@@ -382,6 +398,7 @@ jobs:
             local title="$1" log="$2"
             python3 - "$title" "$log" <<'PY'
           import pathlib
+          import re
           import sys
 
           title, path = sys.argv[1], sys.argv[2]
@@ -390,8 +407,23 @@ jobs:
           except FileNotFoundError:
               text = "<no log file>"
           lines = text.replace("\r", "").splitlines()
-          tail = "\n".join(lines[-150:]) or "<empty output>"
-          escaped = tail.replace("%", "%25").replace("\n", "%0A")
+
+          # A failed xcodebuild log is tens of thousands of lines of build
+          # commands; only the diagnostics matter. Keep every line that looks
+          # like a compiler/linker error, plus the tail for context.
+          pattern = re.compile(
+              r"(?i)(\berror\b|\bfatal\b|undefined symbol|"
+              r"ld: |clang: |swiftc: |could not|not found|"
+              r"\*\* BUILD FAILED|The following build commands failed)"
+          )
+          hits = [line for line in lines if pattern.search(line)][:120]
+          tail = lines[-40:]
+          parts = []
+          if hits:
+              parts.append("\n".join(hits))
+          parts.append("--- tail ---\n" + "\n".join(tail))
+          report = "\n".join(parts) or "<empty output>"
+          escaped = report.replace("%", "%25").replace("\n", "%0A")
           print(f"::error title={title}::{escaped[:60000]}")
           PY
           }
