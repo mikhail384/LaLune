@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 #
 # Builds the LaLune VK token fetcher for Linux and Windows and stores the
 # gzip-compressed binaries in Backend/Desktop/assets/, where the desktop
@@ -10,10 +10,14 @@
 #
 # Usage:
 #   ./build.sh
+#   sh build.sh          # POSIX shell is enough
 #   GO_BIN=/path/to/go ./build.sh
-set -euo pipefail
+#
+# The script is deliberately POSIX-compatible: CI runs it as `sh build.sh`,
+# where bash-only options such as `pipefail` would abort immediately.
+set -eu
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 ASSETS_DIR="${REPO_ROOT}/Backend/Desktop/assets"
 GO_BIN="${GO_BIN:-go}"

@@ -247,22 +247,39 @@ jobs:
             exit 1
           fi
 
+      - name: Show destinations (diagnostics)
+        working-directory: Frontend/ios
+        continue-on-error: true
+        run: |
+          set -x
+          xcodebuild -version
+          xcodebuild -project Runner.xcodeproj -list
+          xcodebuild -project Runner.xcodeproj -scheme Runner -showdestinations || true
+          xcodebuild -project Runner.xcodeproj -scheme Runner -showBuildSettings \
+            -sdk iphoneos 2>/dev/null \
+            | grep -E 'SUPPORTED_PLATFORMS|SDKROOT|PLATFORM_NAME|SUPPORTS_MAC_DESIGNED' || true
+
       - name: Build app (unsigned, iphoneos SDK)
         working-directory: Frontend/ios
         run: |
           set -e
-          # No `-destination`: on Apple-silicon runners xcodebuild otherwise
-          # resolves the host Mac as the destination ("macos-14-arm64-us-default")
-          # and fails with "The configuration ... is not supported" because an
-          # iOS-only project cannot build for macOS. `-sdk iphoneos` pins the
-          # platform without any destination lookup.
+          # An iOS app on an Apple-silicon runner is also a valid
+          # "Designed for iPad" macOS destination. Without an explicit
+          # destination xcodebuild picks the host Mac and fails with
+          # "The configuration 'macos-14-arm64-us-default' is not supported".
+          # `-destination 'generic/platform=iOS'` pins the iOS device platform,
+          # and SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD=NO removes the Mac
+          # candidate entirely.
           xcodebuild build \
             -project Runner.xcodeproj \
             -scheme Runner \
             -configuration Release \
             -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
             -derivedDataPath build/DerivedData \
             SUPPORTED_PLATFORMS=iphoneos \
+            SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD=NO \
+            SUPPORTS_MACCATALYST=NO \
             ARCHS=arm64 ONLY_ACTIVE_ARCH=NO \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM=""

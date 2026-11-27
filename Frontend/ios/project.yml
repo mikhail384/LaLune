@@ -18,11 +18,14 @@ settings:
     MARKETING_VERSION: "0.9.18"
     CURRENT_PROJECT_VERSION: "9018"
     TARGETED_DEVICE_FAMILY: "1,2"
-    # Явно только iPhone/iPad: иначе на Apple-silicon раннерах xcodebuild
-    # может выбрать host-Mac как destination и упасть на «configuration ... is
-    # not supported» при сборке IPA.
+    # Явно только iPhone/iPad. Без этого iOS-приложение на Apple-silicon
+    # раннере считается «Designed for iPad» и xcodebuild выбирает host-Mac
+    # как destination, падая на «The configuration 'macos-14-arm64-us-default'
+    # is not supported».
     SDKROOT: iphoneos
     SUPPORTED_PLATFORMS: "iphoneos"
+    SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+    SUPPORTS_MACCATALYST: NO
 
 targets:
 
@@ -53,6 +56,10 @@ targets:
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_ENTITLEMENTS: Entitlements/Runner.entitlements
         SWIFT_OBJC_BRIDGING_HEADER: Runner/Runner-Bridging-Header.h
+        # Только iOS: Mac-вариант («Designed for iPad») даёт xcodebuild
+        # destination host-Mac и ошибку про неподдерживаемую конфигурацию.
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+        SUPPORTS_MACCATALYST: NO
 
         FRAMEWORK_SEARCH_PATHS:
           - "$(inherited)"

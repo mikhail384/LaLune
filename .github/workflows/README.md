@@ -123,7 +123,7 @@ macos-14
 ├── download libcsqtt_ios_core.a → Frontend/ios/Core/
 ├── xcodegen generate (Runner.xcodeproj)
 ├── patch objectVersion 77 → 56
-├── xcodebuild archive (unsigned)
+├── xcodebuild build -sdk iphoneos -destination generic/platform=iOS (unsigned)
 └── package Payload/ → LaLune.ipa
 ```
 
