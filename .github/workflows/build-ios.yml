@@ -218,21 +218,30 @@ jobs:
           # Duplicate every line of the tool output as an ::error:: annotation:
           # job logs need admin rights on this repository, annotations do not,
           # so this is the only way a failure here is diagnosable.
-          report() {
-            tail -n 60 build-frameworks.log | sed 's/\r$//' | while IFS= read -r line; do
+
+          run_attempt() {
+            local log="$1"
+            shift
+            if "$@" > "$log" 2>&1; then
+              return 0
+            fi
+            echo "::error::failed: $*"
+            tail -n 60 "$log" | sed 's/\r$//' | while IFS= read -r line; do
               [ -n "$line" ] && echo "::error::$line"
             done
+            return 1
           }
 
-          if flutter build ios-framework --output=ios/Flutter --release --no-codesign \
-               > build-frameworks.log 2>&1; then
+          if run_attempt build-frameworks-nocodesign.log \
+               flutter build ios-framework --output=ios/Flutter --release --no-codesign; then
             echo "flutter build ios-framework (--no-codesign) OK"
-          elif flutter build ios-framework --output=ios/Flutter --release \
-                 > build-frameworks.log 2>&1; then
+            cp build-frameworks-nocodesign.log build-frameworks.log
+          elif run_attempt build-frameworks-codesign.log \
+                 flutter build ios-framework --output=ios/Flutter --release; then
             echo "flutter build ios-framework (default codesign) OK"
+            cp build-frameworks-codesign.log build-frameworks.log
           else
-            echo "::error::flutter build ios-framework failed"
-            report
+            echo "::error::flutter build ios-framework failed with both codesign modes"
             exit 1
           fi
 
