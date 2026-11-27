@@ -115,3 +115,6 @@ Installer/launcher/Backend-Windows.zip
 
 # Артефакты офлайн-тестов iOS-транспорта.
 Backend/iOS/Tests/.build-transport/
+
+# Встраиваемый VK token fetcher (генерируется Core/TokenFetcher/build.sh).
+Backend/Desktop/assets/*.gz

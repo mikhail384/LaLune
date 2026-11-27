@@ -90,7 +90,9 @@ CI удаляет любой JKS, пришедший из checkout, и восс�
 ### `build-token-fetcher`
 
 **Без изменений** — matrix Windows + Linux, `dotnet publish` через
-`build_token_grabber.py`, упаковка в `LaLuneTokenFetcher_<OS>.zip`.
+`build_token_grabber.py` → `Core/TokenFetcher/build.sh` (Go). Бинарники
+упаковываются в gzip в `Backend/Desktop/assets/` и встраиваются в desktop-бэкенды,
+а для обратной совместимости публикуются и `LaLuneTokenFetcher_<OS>.zip`.
 
 ### `create-release`
 

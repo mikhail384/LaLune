@@ -18,6 +18,11 @@ settings:
     MARKETING_VERSION: "0.9.18"
     CURRENT_PROJECT_VERSION: "9018"
     TARGETED_DEVICE_FAMILY: "1,2"
+    # Явно только iPhone/iPad: иначе на Apple-silicon раннерах xcodebuild
+    # может выбрать host-Mac как destination и упасть на «configuration ... is
+    # not supported» при сборке IPA.
+    SDKROOT: iphoneos
+    SUPPORTED_PLATFORMS: "iphoneos"
 
 targets:
 

@@ -19,6 +19,7 @@ import '../state/vpn_notifier.dart';
 import '../utils/config_input.dart';
 import '../utils/open_url.dart';
 import '../utils/profile_ping.dart';
+import '../utils/vpn_label.dart';
 import '../widgets/config_selector.dart';
 import '../widgets/ios_socks_notice.dart';
 import '../widgets/moon_button.dart';
@@ -488,11 +489,11 @@ class _ConnectionPageState extends ConsumerState<ConnectionPage> {
                           Text(
                             visuallyConnected
                                 // Android auto-sleep keeps the core alive with
-                                // the TUN detached; report that state instead
-                                // of a misleading "Подключено".
-                                ? (vpn.message == 'Туннель спит'
-                                    ? 'Туннель спит'
-                                    : 'Подключено')
+                                // the TUN detached and reports it through
+                                // `message` ("Туннель спит", "Возвращаю
+                                // туннель"); show whatever the backend says
+                                // instead of a misleading "Подключено".
+                                ? vpnConnectedLabel(vpn.message)
                                 : (vpn.state == 'checking'
                                     ? 'Проверка...'
                                     : (vpn.state == 'connecting'

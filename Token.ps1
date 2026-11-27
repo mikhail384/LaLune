@@ -5,7 +5,7 @@
 
 .DESCRIPTION
     Sets PLAYWRIGHT_BROWSERS_PATH, downloads the latest LaLuneTokenFetcher_Windows.zip
-    from GitHub releases, extracts it to a temp folder, runs LaLuneTokenFetcher.exe
+    from GitHub releases, extracts it to a temp folder, runs token-fetcher.exe
     and waits until it exits before cleaning up.
 
 .NOTES
@@ -16,7 +16,7 @@
 param(
     [string]$BrowsersPath = "$env:APPDATA\.la-lune\vk-token-fetcher\browsers",
     [string]$ZipUrl       = "https://github.com/Endlad2/LaLune/releases/latest/download/LaLuneTokenFetcher_Windows.zip",
-    [string]$ExeName      = "LaLuneTokenFetcher.exe"
+    [string]$ExeName      = "token-fetcher.exe"
 )
 
 $ErrorActionPreference = 'Stop'

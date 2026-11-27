@@ -1898,7 +1898,7 @@ async fn vk_state(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 async fn vk_login(State(state): State<Arc<AppState>>) -> axum::response::Response {
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     {
-        match vk::launch_token_fetcher(state.events.clone()).await {
+        match vk::launch_token_fetcher(&state.app_dir, state.events.clone()).await {
             Ok(_) => Json(json!({"ok": true, "needsUi": false})).into_response(),
             Err(e) => err(500, e.to_string()),
         }

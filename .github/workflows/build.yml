@@ -95,12 +95,18 @@ jobs:
   # ============================================================
   build-desktop-linux:
     name: Desktop Linux
-    needs: prepare-version
+    needs: [prepare-version, build-token-fetcher]
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.prepare-version.outputs.build_ref }}
+
+      - name: Fetch embedded VK token fetcher
+        uses: actions/download-artifact@v4
+        with:
+          name: TokenFetcher-Assets
+          path: Backend/Desktop/assets
 
       - uses: actions/setup-python@v5
         with:
@@ -211,12 +217,18 @@ jobs:
   # ============================================================
   build-desktop-windows:
     name: Desktop Windows
-    needs: prepare-version
+    needs: [prepare-version, build-token-fetcher]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.prepare-version.outputs.build_ref }}
+
+      - name: Fetch embedded VK token fetcher
+        uses: actions/download-artifact@v4
+        with:
+          name: TokenFetcher-Assets
+          path: Backend/Desktop/assets
 
       - uses: actions/setup-python@v5
         with:
@@ -812,76 +824,78 @@ jobs:
           rm -f Assets/apk-key/my-release-key.jks
 
   # ============================================================
-  #  LaLuneTokenFetcher
+  #  LaLuneTokenFetcher (Go + playwright-go)
+  #
+  #  Собирает один бинарник на Linux и один на Windows, упаковывает их gzip
+  #  и отдаёт артефактом TokenFetcher-Assets. Desktop-бэкенды скачивают этот
+  #  артефакт в Backend/Desktop/assets/ и встраивают бинарник внутрь себя
+  #  (см. Backend/Desktop/build.rs), так что отдельная поставка не нужна.
   # ============================================================
   build-token-fetcher:
-    name: "Token Fetcher - ${{ matrix.platform }}"
+    name: "Token Fetcher (Go)"
     needs: prepare-version
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: Windows
-            runner: windows-latest
-          - platform: Linux
-            runner: ubuntu-22.04
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.prepare-version.outputs.build_ref }}
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-go@v5
         with:
-          python-version: "3.12"
+          go-version: "1.22"
+          cache-dependency-path: Core/TokenFetcher/go.sum
 
-      - name: Setup .NET SDK
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
-
-      - name: Show dotnet version
-        run: dotnet --info
-
-      - name: Sanity check
-        shell: bash
-        run: ls -la Core/LaLuneTokenFetcher
-
-      - name: Build fetcher
-        run: python build_token_grabber.py --platform ${{ matrix.platform }}
-
-      - name: Package into LaLuneTokenFetcher_<OS>.zip
-        shell: bash
+      - name: Go vet and tests
+        working-directory: Core/TokenFetcher
         run: |
-          set -e
-          OUTPUT_BIN="Core/LaLuneTokenFetcher/output/LaLuneTokenFetcher"
-          ZIP_PATH="Core/LaLuneTokenFetcher/LaLuneTokenFetcher_${{ matrix.platform }}.zip"
-          if [ ! -d "$OUTPUT_BIN" ]; then
-            find Core/LaLuneTokenFetcher/output -maxdepth 2 -type d || true
-            exit 1
-          fi
-          STAGING_DIR="Core/LaLuneTokenFetcher/output/_staging"
-          rm -rf "$STAGING_DIR"
-          mkdir -p "$STAGING_DIR/vk-token-fetcher"
-          cp -r "$OUTPUT_BIN/." "$STAGING_DIR/vk-token-fetcher/"
-          if [ "${{ matrix.platform }}" = "Linux" ]; then
-            chmod +x "$STAGING_DIR/vk-token-fetcher/LaLuneTokenFetcher" || true
-          fi
-          rm -f "$ZIP_PATH"
-          pushd "$STAGING_DIR" >/dev/null
-          if [ "${{ matrix.platform }}" = "Windows" ]; then
-            popd >/dev/null
-            powershell -Command "Compress-Archive -Path 'Core/LaLuneTokenFetcher/output/_staging/vk-token-fetcher' -DestinationPath '$ZIP_PATH' -Force"
-          else
-            zip -r "../../LaLuneTokenFetcher_${{ matrix.platform }}.zip" "vk-token-fetcher"
-            popd >/dev/null
-          fi
-          ls -la "$ZIP_PATH"
+          set -euo pipefail
+          go vet ./...
+          go test ./...
+
+      - name: Build fetcher binaries
+        working-directory: Core/TokenFetcher
+        run: |
+          set -euo pipefail
+          sh build.sh
+
+      - name: Verify embedded assets
+        run: |
+          set -euo pipefail
+          for asset in \
+            Backend/Desktop/assets/token-fetcher-linux-amd64.gz \
+            Backend/Desktop/assets/token-fetcher-windows-amd64.exe.gz; do
+            [ -s "$asset" ] || { echo "::error::$asset missing"; exit 1; }
+            ls -la "$asset"
+          done
+
+      - name: Package release zips (legacy standalone fetcher)
+        run: |
+          set -euo pipefail
+          STAGE=Core/TokenFetcher/output/_staging
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE/vk-token-fetcher"
+          gunzip -c Backend/Desktop/assets/token-fetcher-linux-amd64.gz \
+            > "$STAGE/vk-token-fetcher/token-fetcher"
+          chmod +x "$STAGE/vk-token-fetcher/token-fetcher"
+          ( cd "$STAGE" && zip -qry "$GITHUB_WORKSPACE/Core/TokenFetcher/LaLuneTokenFetcher_Linux.zip" vk-token-fetcher )
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE/vk-token-fetcher"
+          gunzip -c Backend/Desktop/assets/token-fetcher-windows-amd64.exe.gz \
+            > "$STAGE/vk-token-fetcher/token-fetcher.exe"
+          ( cd "$STAGE" && zip -qry "$GITHUB_WORKSPACE/Core/TokenFetcher/LaLuneTokenFetcher_Windows.zip" vk-token-fetcher )
+          rm -rf "$STAGE"
+          ls -la Core/TokenFetcher/*.zip
 
       - uses: actions/upload-artifact@v4
         with:
-          name: LaLuneTokenFetcher-${{ matrix.platform }}
-          path: Core/LaLuneTokenFetcher/LaLuneTokenFetcher_${{ matrix.platform }}.zip
+          name: TokenFetcher-Assets
+          path: Backend/Desktop/assets/*.gz
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LaLuneTokenFetcher-Zips
+          path: Core/TokenFetcher/LaLuneTokenFetcher_*.zip
           if-no-files-found: error
 
   # ============================================================
@@ -947,15 +961,12 @@ jobs:
           merge-multiple: true
           path: release/openwrt-multi
 
+      # Standalone zips are now built from the same Go binaries that are
+      # embedded into the desktop backends.
       - uses: actions/download-artifact@v4
         with:
-          name: LaLuneTokenFetcher-Windows
-          path: release/token-fetcher-windows
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: LaLuneTokenFetcher-Linux
-          path: release/token-fetcher-linux
+          name: LaLuneTokenFetcher-Zips
+          path: release/token-fetcher
 
       - name: Assemble and verify release files
         shell: bash
@@ -983,8 +994,8 @@ jobs:
           cp release/android/LaLune-Android.apk release/assets/
           if [ -f release/macos/LaLune-macOS.zip ]; then cp release/macos/LaLune-macOS.zip release/assets/; fi
           if [ -f release/macos/LaLune-macOS.dmg ]; then cp release/macos/LaLune-macOS.dmg release/assets/; fi
-          cp release/token-fetcher-windows/LaLuneTokenFetcher_Windows.zip release/assets/
-          cp release/token-fetcher-linux/LaLuneTokenFetcher_Linux.zip release/assets/
+          cp release/token-fetcher/LaLuneTokenFetcher_Windows.zip release/assets/
+          cp release/token-fetcher/LaLuneTokenFetcher_Linux.zip release/assets/
 
           python - <<'PY'
           import hashlib, zipfile

@@ -84,6 +84,14 @@ class LaLuneVpnService : VpnService() {
         /** Периодичность обновления уведомления (2 сек). */
         private const val NOTIFICATION_TICK_MS = 2_000L
 
+        /**
+         * Сообщения состояния. UI на ConnectionPage показывает «Туннель спит»
+         * по точному совпадению, поэтому строки живут здесь.
+         */
+        const val MESSAGE_CONNECTED = "Подключено"
+        const val MESSAGE_SLEEPING = "Туннель спит"
+        const val MESSAGE_REATTACHING = "Возвращаю туннель"
+
         const val ACTION_STATUS = "com.lalune.lalune.VPN_STATUS"
         const val ACTION_SETTINGS_CHANGED = "com.lalune.lalune.SETTINGS_CHANGED"
         const val SETTING_AUTO_SLEEP = "androidAutoSleepTunnel"
@@ -170,6 +178,8 @@ class LaLuneVpnService : VpnService() {
         }
     }
     private var stopping = false
+    /** Последнее прочитанное значение Auto-sleep; нужно тикеру для самопроверки. */
+    @Volatile private var autoSleepEnabled = true
     private lateinit var coreManager: CoreManager
     private val latencyProbe = TunnelLatencyProbe()
     private var tunAddress: String? = null
@@ -181,6 +191,7 @@ class LaLuneVpnService : VpnService() {
         super.onCreate()
         coreManager = CoreManager(this)
         activeService = this
+        autoSleepEnabled = readRoutingSettings().optBoolean(SETTING_AUTO_SLEEP, true)
         startForegroundCompat()
         ContextCompat.registerReceiver(this, sleepReceiver, IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_OFF)
@@ -200,6 +211,7 @@ class LaLuneVpnService : VpnService() {
             "START" -> if (!isRunning && !stopping) {
                 notifyLog(this, "[VPN] START received; configId=$snapshotConfigId")
                 isRunning = true
+                snapshotTunnelSleeping = false
                 publishState("connecting", false, "Подключение")
                 startFlow()
             }
@@ -254,10 +266,20 @@ class LaLuneVpnService : VpnService() {
         notificationTickerJob = scope.launch {
             while (isActive && isRunning) {
                 delay(NOTIFICATION_TICK_MS)
+                // ACTION_SCREEN_ON/OFF can be lost (Doze, OEM background
+                // limits, receiver registration races). Comparing the real
+                // power state with what we published makes the tunnel recover
+                // on its own instead of staying "asleep" with the screen on.
+                val shouldSleep = autoSleepEnabled && !isDeviceInteractive()
+                if (shouldSleep != snapshotTunnelSleeping) tunnelUpdates.trySend(Unit)
                 updateNotification()
             }
         }
     }
+
+    /** Screen on (or interactive) according to the system. */
+    private fun isDeviceInteractive(): Boolean =
+        getSystemService(PowerManager::class.java)?.isInteractive ?: true
 
     private suspend fun watchLogsAndManageTunnel(logsFile: File) = withContext(Dispatchers.IO) {
         var lastOffset = 0L
@@ -374,26 +396,48 @@ class LaLuneVpnService : VpnService() {
     private suspend fun reconcileTunnel(): Boolean = tunnelMutex.withLock {
         if (!isRunning || !coreReady) return@withLock true
         val routing = readRoutingSettings()
-        val interactive = getSystemService(PowerManager::class.java)?.isInteractive ?: true
-        if (!interactive && routing.optBoolean(SETTING_AUTO_SLEEP, true)) {
+        val autoSleep = routing.optBoolean(SETTING_AUTO_SLEEP, true)
+        autoSleepEnabled = autoSleep
+        val interactive = isDeviceInteractive()
+
+        if (autoSleep && !interactive) {
             if (!snapshotTunnelSleeping) {
                 snapshotTunnelSleeping = true
                 teardownTunnelOnlyLocked("screen off")
-                if (isRunning) publishState("connected", true, "Туннель спит")
+                if (isRunning) publishState("connected", true, MESSAGE_SLEEPING)
             }
             return@withLock true
         }
-        if (tunEstablished) return@withLock true
+
+        // Screen is on (or auto-sleep is off): the tunnel must not stay in the
+        // sleep state, even when an earlier reattach attempt failed.
+        if (snapshotTunnelSleeping) {
+            snapshotTunnelSleeping = false
+            if (isRunning) publishState("connected", true, MESSAGE_REATTACHING)
+        }
+
+        if (tunEstablished) {
+            if (connectionMessage.isNotEmpty() && connectionMessage != MESSAGE_CONNECTED) {
+                publishState("connected", true, MESSAGE_CONNECTED)
+            }
+            return@withLock true
+        }
+
         if (!establishTunLocked(routing)) {
             if (isRunning && totsRuntime != null && !snapshotConnected) {
                 publishState("error", false, "Не удалось создать TUN для ToTS")
                 scope.launch(Dispatchers.Main) { stopFlow() }
                 return@withLock true
             }
+            // Keep retrying, but never report the tunnel as asleep while the
+            // screen is on: the label must reflect that we are reattaching.
+            if (isRunning && connectionMessage != MESSAGE_REATTACHING) {
+                publishState("connected", true, MESSAGE_REATTACHING)
+            }
             return@withLock false
         }
         snapshotTunnelSleeping = false
-        if (isRunning) publishState("connected", true, "Подключено")
+        if (isRunning) publishState("connected", true, MESSAGE_CONNECTED)
         true
     }
 
@@ -842,7 +886,7 @@ class LaLuneVpnService : VpnService() {
 
         val text = when (connectionState) {
             "checking" -> "Проверка"
-            "connected" -> if (snapshotTunnelSleeping) "Туннель спит"
+            "connected" -> if (snapshotTunnelSleeping) MESSAGE_SLEEPING
                            else "Активных: $activeSessions | Трафик: $trafficMB МБ"
             else -> "Подключение"
         }

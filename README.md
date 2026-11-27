@@ -118,7 +118,7 @@ LaLune/
 │   └── OpenWRT/             — Rust (axum + tun), bind 0.0.0.0:1062
 ├── Core/                    — вспомогательное
 │   ├── DeployManager/       — SSH-деплой ядер (Rust)
-│   ├── LaLuneTokenFetcher/  — Playwright-геттер VK-токена (.NET)
+│   ├── TokenFetcher/        — геттер VK-токена (Go + playwright-go)
 │   └── LaLuneTokenFetcherAndroid.java
 ├── Frontend/                — Flutter UI (общий для всех платформ)
 │   └── lib/
@@ -280,7 +280,7 @@ GitHub Actions workflow `.github/workflows/build.yml` собирает:
 | −`build-desktop-windows` | `python build.py --ci --target windows` |
 | −`build-desktop-openwrt` | `Backend/OpenWRT/build.sh` через OpenWRT SDK |
 | −`build-android` | `flutter build apk --debug` |
-| −`build-token-fetcher` | `build_token_grabber.py` для Win/Linux |
+| −`build-token-fetcher` | `build_token_grabber.py` → Go-фетчер (встраивается в desktop-бэкенды) |
 | −`create-release` | Собирает артефакты и публикует Release |
 ⚙
 

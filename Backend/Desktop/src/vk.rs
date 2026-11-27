@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //
-// VK: получение токена (через Token.ps1/Token.sh), валидация, auto-calls.
+// VK: получение токена (встроенный Go-фетчер), валидация, auto-calls.
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::process::Command;
@@ -19,6 +20,8 @@ pub const VK_CLIENT_ID: &str = "7793118";
 pub const VK_SCOPE: &str = "1073737727";
 pub const VK_REDIRECT_URI: &str = "https://oauth.vk.ru/blank.html";
 
+/// Legacy fallback scripts, used only when the embedded fetcher is missing
+/// (a `cargo build` in a checkout that never ran `Core/TokenFetcher/build.sh`).
 pub const TOKEN_PS1_URL: &str =
     "https://raw.githubusercontent.com/Endlad2/LaLune/refs/heads/main/Token.ps1";
 pub const TOKEN_SH_URL: &str =
@@ -121,12 +124,110 @@ pub fn token_state(app_dir: &PathBuf) -> VkTokenState {
     }
 }
 
-/// Запускает Token.ps1 (Windows) или Token.sh (Linux) в отдельном процессе.
-pub async fn launch_token_fetcher(
-    events: EventBus,
-) -> Result<()> {
-    #[cfg(target_os = "windows")]
+/// Embedded Go token fetcher (gzip-compressed), linked by `build.rs`.
+///
+/// The backend ships the fetcher inside its own binary: on login it is
+/// unpacked into `<appDir>/token-fetcher/` and executed. It installs the
+/// Playwright Chromium itself when the machine does not have one yet.
+#[cfg(all(has_embedded_token_fetcher, target_os = "windows"))]
+const EMBEDDED_TOKEN_FETCHER: &[u8] =
+    include_bytes!("../assets/token-fetcher-windows-amd64.exe.gz");
+#[cfg(all(has_embedded_token_fetcher, target_os = "linux"))]
+const EMBEDDED_TOKEN_FETCHER: &[u8] = include_bytes!("../assets/token-fetcher-linux-amd64.gz");
+
+/// Directory (relative to appDir) where the unpacked fetcher lives.
+const FETCHER_DIR: &str = "token-fetcher";
+
+fn fetcher_file_name() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "token-fetcher.exe"
+    } else {
+        "token-fetcher"
+    }
+}
+
+/// Writes the embedded fetcher next to the token file and returns its path.
+///
+/// The file is rewritten on every login: it is small, and a stale binary from
+/// an older app version must never be executed.
+#[cfg(all(has_embedded_token_fetcher, any(target_os = "windows", target_os = "linux")))]
+fn extract_embedded_fetcher(app_dir: &Path) -> Result<PathBuf> {
+    let dir = app_dir.join(FETCHER_DIR);
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("cannot create {}", dir.display()))?;
+    let path = dir.join(fetcher_file_name());
+
+    let mut decoder = flate2::read::GzDecoder::new(EMBEDDED_TOKEN_FETCHER);
+    let mut binary = Vec::new();
+    decoder
+        .read_to_end(&mut binary)
+        .context("embedded token fetcher is corrupted")?;
+    if binary.len() < 1024 {
+        return Err(anyhow!("embedded token fetcher is truncated"));
+    }
+
+    // Write through a temporary file so a half-written binary is never run.
+    let staging = dir.join(format!("{}.tmp", fetcher_file_name()));
+    std::fs::write(&staging, &binary)
+        .with_context(|| format!("cannot write {}", staging.display()))?;
+    #[cfg(unix)]
     {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&staging)?.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&staging, perms)?;
+    }
+    std::fs::rename(&staging, &path)
+        .with_context(|| format!("cannot install {}", path.display()))?;
+    Ok(path)
+}
+
+/// Launches the token fetcher in a detached process.
+///
+/// The fetcher opens a browser window and may take minutes, so this returns as
+/// soon as the process is spawned; the UI polls `/vk/token/state`.
+pub async fn launch_token_fetcher(app_dir: &PathBuf, events: EventBus) -> Result<()> {
+    let token_path = app_dir.join("token.json");
+
+    #[cfg(all(has_embedded_token_fetcher, any(target_os = "windows", target_os = "linux")))]
+    {
+        let binary = extract_embedded_fetcher(app_dir)?;
+        let log_path = app_dir.join("token-fetcher.log");
+        let stdout = std::fs::File::create(&log_path)
+            .with_context(|| format!("cannot create {}", log_path.display()))?;
+        let stderr = stdout.try_clone()?;
+
+        let mut command = Command::new(&binary);
+        command
+            .arg("--token-path")
+            .arg(&token_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(stderr));
+
+        #[cfg(target_os = "windows")]
+        {
+            // DETACHED_PROCESS: the fetcher owns its browser window, and we do
+            // not want a console attached to the backend's process.
+            // `tokio::process::Command::creation_flags` is inherent on Windows.
+            const DETACHED_PROCESS: u32 = 0x0000_0008;
+            command.creation_flags(DETACHED_PROCESS);
+        }
+
+        let child = command
+            .spawn()
+            .with_context(|| format!("cannot start {}", binary.display()))?;
+        events.emit(Event::log(format!(
+            "[VK] token fetcher started (pid {}), log: {}",
+            child.id().unwrap_or(0),
+            log_path.display()
+        )));
+        return Ok(());
+    }
+
+    #[cfg(all(not(has_embedded_token_fetcher), target_os = "windows"))]
+    {
+        let _ = &token_path;
         let inner = format!(
             "$ErrorActionPreference='Continue'; \
              try {{ irm {} | iex }} \
@@ -151,33 +252,35 @@ pub async fn launch_token_fetcher(
             .stderr(Stdio::null())
             .status()
             .await?;
-
         if !status.success() {
             return Err(anyhow!("failed to start PowerShell (exit {:?})", status.code()));
         }
-        events.emit(Event::log("[VK] Token.ps1 launched in a separate window"));
+        events.emit(Event::log(
+            "[VK] token fetcher is not embedded; launched the legacy Token.ps1",
+        ));
         Ok(())
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(not(has_embedded_token_fetcher), target_os = "linux"))]
     {
+        let _ = &token_path;
         let cmd_line = format!("curl -fsSL {} | bash", TOKEN_SH_URL);
-        let status = Command::new("bash")
+        let child = Command::new("bash")
             .args(["-c", &cmd_line])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()?;
         events.emit(Event::log(format!(
-            "[VK] Token.sh launched (pid {})",
-            status.id().unwrap_or(0)
+            "[VK] token fetcher is not embedded; launched the legacy Token.sh (pid {})",
+            child.id().unwrap_or(0)
         )));
         Ok(())
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     {
-        let _ = events;
+        let _ = (app_dir, events);
         Err(anyhow!("unsupported platform for token fetcher"))
     }
 }
@@ -352,4 +455,54 @@ pub async fn validate_token(token: &str) -> Result<bool> {
     let client = VkApiClient::new(token.to_string());
     let j = client.call("users.get", &[]).await?;
     Ok(j.get("error").is_none())
+}
+
+#[cfg(all(test, has_embedded_token_fetcher, any(target_os = "windows", target_os = "linux")))]
+mod embedded_fetcher_tests {
+    use super::*;
+
+    /// The embedded blob must be a real, runnable executable for this target:
+    /// a corrupted or truncated gzip would otherwise only fail at login time.
+    #[test]
+    fn embedded_fetcher_is_a_valid_executable() {
+        let mut decoder = flate2::read::GzDecoder::new(EMBEDDED_TOKEN_FETCHER);
+        let mut binary = Vec::new();
+        decoder.read_to_end(&mut binary).expect("embedded gzip must decode");
+        assert!(binary.len() > 1024, "embedded binary is truncated");
+
+        if cfg!(target_os = "windows") {
+            assert_eq!(&binary[..2], b"MZ", "embedded fetcher is not a PE executable");
+        } else {
+            assert_eq!(&binary[..4], b"\x7fELF", "embedded fetcher is not an ELF binary");
+        }
+    }
+
+    #[test]
+    fn extraction_writes_an_executable_and_never_leaves_a_partial_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "lalune-fetcher-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let path = extract_embedded_fetcher(&dir).expect("extract");
+        assert!(path.exists());
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        assert_eq!(name, fetcher_file_name());
+        assert!(!dir.join(format!("{}.tmp", name)).exists(), "staging file left behind");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o111, 0o111, "fetcher is not executable");
+        }
+
+        // A second extraction overwrites the previous binary.
+        let again = extract_embedded_fetcher(&dir).expect("re-extract");
+        assert_eq!(again, path);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
