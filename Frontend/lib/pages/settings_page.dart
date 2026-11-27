@@ -72,6 +72,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   final _totsMailDocsDataCtl = TextEditingController();
   final _totsCupsDataCtl = TextEditingController();
 
+  // WDTToR
+  final _wdttWorkersCtl = TextEditingController();
+  final _wdttLocalPortCtl = TextEditingController();
+  final _wdttDeviceIdCtl = TextEditingController();
+
   final _ipRoutingIpsCtl = TextEditingController();
   String _ipRoutingMode = 'blacklist';
   String _androidAppRoutingMode = 'blacklist';
@@ -91,6 +96,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   bool _desktopSocks5Mode = false;
 
   bool get _isTots => _selectedConfig?.isTots == true;
+  bool get _isWdtt => _selectedConfig?.isWdtt == true;
   bool get _isCsqtt219 => _selectedConfig?.isCsqtt219 == true;
 
   @override
@@ -122,6 +128,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     _totsYaDocsDataCtl.dispose();
     _totsMailDocsDataCtl.dispose();
     _totsCupsDataCtl.dispose();
+    _wdttWorkersCtl.dispose();
+    _wdttLocalPortCtl.dispose();
+    _wdttDeviceIdCtl.dispose();
     _ipRoutingIpsCtl.dispose();
     super.dispose();
   }
@@ -183,6 +192,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     _totsYaDocsDataCtl.text = s.totsYaDocsData;
     _totsMailDocsDataCtl.text = s.totsMailDocsData;
     _totsCupsDataCtl.text = s.totsCupsData;
+
+    _wdttWorkersCtl.text = s.wdttWorkers.toString();
+    _wdttLocalPortCtl.text = s.wdttLocalPort.toString();
+    _wdttDeviceIdCtl.text = s.wdttDeviceId;
     if (_isTots) {
       // A provider cannot be visually enabled when there is no data to put into
       // ToTS provider_data. This also makes the switch state match launch behavior.
@@ -291,6 +304,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       totsYaDocsData: _totsYaDocsDataCtl.text.trim(),
       totsMailDocsData: _totsMailDocsDataCtl.text.trim(),
       totsCupsData: _totsCupsDataCtl.text.trim(),
+      wdttWorkers: _normalizedWdttWorkers(),
+      wdttLocalPort:
+          (int.tryParse(_wdttLocalPortCtl.text.trim()) ?? 9000).clamp(1024, 65535).toInt(),
+      wdttDeviceId: _wdttDeviceIdCtl.text.trim(),
     );
 
     setState(() => _busy = true);
@@ -436,10 +453,15 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       (_) => _sectionTitle('Маршрутизация VPN'),
       (_) => GlassCard(child: _buildRoutingBlock()),
       (_) => const SizedBox(height: 18),
-      (_) => _sectionTitle(_isTots ? 'Настройки ToTS' : 'Продвинутые настройки'),
+      (_) => _sectionTitle(
+          _isTots
+              ? 'Настройки ToTS'
+              : (_isWdtt ? 'Настройки WDTToR' : 'Продвинутые настройки')),
       (_) => _isTots
           ? GlassCard(child: _buildTotsBlock(vk))
-          : GlassCard(child: _buildCsqttAdvancedBlock()),
+          : (_isWdtt
+              ? GlassCard(child: _buildWdttBlock(vk))
+              : GlassCard(child: _buildCsqttAdvancedBlock())),
       (_) => const SizedBox(height: 18),
       if (_isAndroid && routerState.activeRouter == null) ...[
         (_) => _sectionTitle('Продвинутые настройки Android'),
@@ -972,6 +994,96 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           onPercent: (v) => setState(() => _s = _s.copyWith(totsCupsPercent: v)),
           children: [_totsJsonField('Cups provider data', _totsCupsDataCtl,
               '{"room_id":"..."}')],
+        ),
+      ],
+    );
+  }
+
+  /// WDTToR: воркеры кратны 9 (одна группа), как в оригинальном WDTT.
+  int _normalizedWdttWorkers() {
+    final raw = int.tryParse(_wdttWorkersCtl.text.trim()) ?? 9;
+    final clamped = raw.clamp(9, 108);
+    return (clamped ~/ 9) * 9;
+  }
+
+  Widget _buildWdttBlock(VkTokenState vk) {
+    final autoApi = _s.wdttVkAuthMode == 'autoApi';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        InputRow(
+          label: 'Workers',
+          controller: _wdttWorkersCtl,
+          onChanged: (_) => _markDirty(),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(left: 4, bottom: 8),
+          child: Text(
+            'Кратно 9: одна группа = 9 сессий, максимум 108.',
+            style: TextStyle(fontSize: 11.5, height: 1.4, color: Colors.white.withOpacity(0.55)),
+          ),
+        ),
+        _rowDropdown('Обфускация', _s.wdttObfs, const ['audio', 'video'], (v) {
+          setState(() => _s = _s.copyWith(wdttObfs: v));
+          _markDirty();
+        }),
+        _rowDropdown('Режим VK', autoApi ? 'АвтоAPI' : 'Ручное', const ['Ручное', 'АвтоAPI'], (v) {
+          if (v == 'АвтоAPI' && !vk.hasToken) {
+            Toast.show(context, 'Для АвтоAPI требуется авторизация ВК', isError: true);
+            return;
+          }
+          setState(() => _s = _s.copyWith(wdttVkAuthMode: v == 'АвтоAPI' ? 'autoApi' : 'manual'));
+          _markDirty();
+        }),
+        if (autoApi) ...[
+          InputRow(
+            label: 'Воркеров на хеш',
+            controller: _autoApiWorkersCtl,
+            onChanged: (_) => _markDirty(),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(left: 4, bottom: 8),
+            child: Text(
+              'Бэкенд создаст VK-звонки через API и подставит их хеши автоматически.',
+              style: TextStyle(fontSize: 11.5, height: 1.4, color: Colors.white.withOpacity(0.55)),
+            ),
+          ),
+        ] else
+          Padding(
+            padding: const EdgeInsets.only(left: 4, bottom: 8),
+            child: Text(
+              'Хеши берутся из ссылки wdtt:// конфига.',
+              style: TextStyle(fontSize: 11.5, height: 1.4, color: Colors.white.withOpacity(0.55)),
+            ),
+          ),
+        const SizedBox(height: 4),
+        if (!vk.hasToken)
+          _buildLoginButton(vk)
+        else
+          _buildTokenActiveBadge(),
+        const SizedBox(height: 8),
+        InputRow(
+          label: 'Локальный порт',
+          controller: _wdttLocalPortCtl,
+          onChanged: (_) => _markDirty(),
+        ),
+        InputRow(
+          label: 'Device ID',
+          controller: _wdttDeviceIdCtl,
+          onChanged: (_) => _markDirty(),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(left: 4, bottom: 4),
+          child: Text(
+            'Device ID привязывается к паролю на сервере WDTT: оставьте пустым, '
+            'чтобы использовать значение по умолчанию.',
+            style: TextStyle(fontSize: 11.5, height: 1.4, color: Colors.white.withOpacity(0.55)),
+          ),
+        ),
+        const SizedBox(height: 10),
+        Text(
+          'Пароль подключения и адрес сервера задаются в ссылке wdtt:// самого конфига.',
+          style: TextStyle(fontSize: 11.5, height: 1.4, color: Colors.white.withOpacity(0.55)),
         ),
       ],
     );

@@ -58,10 +58,11 @@ String normalizeSubProtocol(String raw) {
       return 'CSQTTR';
     case 'TOTS':
       return 'ToTS';
-    case 'WDTToR':
-    case 'WDTT':
-    case 'WDTToR (WDTT)':
+    // Сравнение идёт по upper-case строке: «WDTToR» → «WDTTOR».
+    case 'WDTTOR':
+    case 'WDTTOR (WDTT)':
     case 'WDTTO':
+    case 'WDTT':
       return 'WDTToR';
   }
   return s;
