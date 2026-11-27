@@ -20,7 +20,7 @@ final class PacketPump {
     private let queue = DispatchQueue(label: "lalune.packet.pump")
     private let lock = NSLock()
 
-    /// Предельный размер IPv4-датаграммы, которую примет receiveMessage.
+    /// Предельный размер IPv4-датаграммы, которую примет receive.
     private static let maxDatagram = 65535
     /// Сколько ждём .ready в start(). Ядро поднимается за миллисекунды, но на
     /// холодном старте может потребоваться чуть больше времени.
@@ -161,8 +161,10 @@ final class PacketPump {
     }
 
     private func receiveLoop(_ connection: NWConnection) {
-        connection.receiveMessage(minimumIncompleteLength: 1,
-                                  maximumLength: Self.maxDatagram) { [weak self] data, _, _, error in
+        // `receiveMessage` has only the `completion:` form; the
+        // minimumIncompleteLength/maximumLength variant is `receive`.
+        connection.receive(minimumIncompleteLength: 1,
+                           maximumLength: Self.maxDatagram) { [weak self] data, _, _, error in
             guard let self = self else { return }
 
             if let data = data, !data.isEmpty {

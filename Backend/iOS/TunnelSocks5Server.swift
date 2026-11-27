@@ -833,7 +833,9 @@ final class TunnelSocks5Server {
         }
 
         private func receive(on connection: NWConnection) {
-            connection.receiveMessage(minimumIncompleteLength: 1, maximumLength: 65535) {
+            // `receiveMessage` has only the `completion:` form; the
+            // minimumIncompleteLength/maximumLength variant is `receive`.
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 65535) {
                 [weak self] data, _, _, error in
                 guard let self = self, !self.closed else { return }
                 if let data = data, !data.isEmpty {
