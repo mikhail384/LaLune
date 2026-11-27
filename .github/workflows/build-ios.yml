@@ -514,8 +514,32 @@ jobs:
           retention-days: 30
 
       - name: Attach IPA to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: Frontend/ios/build/LaLune.ipa
-          fail_on_unmatched_files: true
+        if: always() && hashFiles('Frontend/ios/build/LaLune.ipa') != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "Release tag: $TAG"
+          if [ -z "$TAG" ]; then
+            echo "::warning::no version output; leaving the IPA as a workflow artifact"
+            exit 0
+          fi
+
+          # The release itself is created by build.yml (create-release), which
+          # runs in parallel and can finish after this workflow. Wait for it
+          # instead of only attaching on tag pushes: otherwise a normal push
+          # publishes a release without the IPA even though the build succeeded.
+          for attempt in $(seq 1 40); do
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              gh release upload "$TAG" Frontend/ios/build/LaLune.ipa --clobber
+              echo "Uploaded LaLune.ipa to $TAG"
+              gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx 'LaLune.ipa'
+              exit 0
+            fi
+            echo "release $TAG not found yet (attempt $attempt/40); waiting 30s"
+            sleep 30
+          done
+
+          echo "::warning::release $TAG never appeared; the IPA stays available as the LaLune-iOS-unsigned artifact"
