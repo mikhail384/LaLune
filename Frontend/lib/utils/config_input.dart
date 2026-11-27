@@ -31,7 +31,7 @@ DetectedConfigInput? detectConfigInput(String raw) {
   }
 
   final lower = input.toLowerCase();
-  const schemes = <String>['csqttr://', 'csqtt://', 'tots://'];
+  const schemes = <String>['csqttr://', 'csqtt://', 'tots://', 'wdtt://'];
   int? schemeIndex;
   String? scheme;
   for (final candidate in schemes) {
@@ -67,11 +67,18 @@ DetectedConfigInput? detectConfigInput(String raw) {
     case 'tots':
       protocol = 'ToTS';
       break;
+    case 'wdttor':
+    case 'wdttor (wdtt)':
+    case 'wdtt':
+      protocol = 'WDTToR';
+      break;
     default:
       if (scheme == 'csqttr://') {
         protocol = 'CSQTTR';
       } else if (scheme == 'tots://') {
         protocol = 'ToTS';
+      } else if (scheme == 'wdtt://') {
+        protocol = 'WDTToR';
       } else {
         // A plain connect?... link is the legacy 2.1.9 format. Opaque csqtt
         // payloads are handled by the 2.5.1 parser/core in the backends.

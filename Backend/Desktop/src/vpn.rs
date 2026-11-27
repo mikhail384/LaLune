@@ -1053,6 +1053,74 @@ pub fn parse_stats(line: &str) -> Option<(i32, f64)> {
     Some((active, traffic))
 }
 
+/// Признак готовности ядра WDTToR: событие `__WDTT_EVENT__|READY|` либо
+/// строка лога «туннель готов».
+///
+/// Ядро поднимает WireGuard и TUN само, поэтому ждать «Активных: N» бессмысленно:
+/// этот счётчик у WDTToR относится к сессиям, а не к трафику.
+pub fn is_wdtt_ready(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.starts_with("__WDTT_EVENT__|READY|")
+        || trimmed.contains("[READY] туннель готов")
+        || trimmed.contains("туннель работает")
+}
+
+/// Разбирает статистику из событий WDTToR.
+///
+/// Ядро печатает `__WDTT_EVENT__|STATS|{"active":9,"bytes_up":...,"bytes_down":...}`
+/// и лог `[СТАТИСТИКА] активных: N | отправлено: X МБ | получено: Y МБ`.
+pub fn parse_wdtt_stats(line: &str) -> Option<(i32, u64, u64)> {
+    if let Some(rest) = line.trim().strip_prefix("__WDTT_EVENT__|STATS|") {
+        let value: serde_json::Value = serde_json::from_str(rest).ok()?;
+        let active = value.get("active")?.as_i64()? as i32;
+        let up = value.get("bytes_up").and_then(|v| v.as_u64()).unwrap_or(0);
+        let down = value.get("bytes_down").and_then(|v| v.as_u64()).unwrap_or(0);
+        return Some((active, up, down));
+    }
+
+    if !line.contains("активных:") {
+        return None;
+    }
+    let idx = line.find("активных:")?;
+    let after = line[idx + "активных:".len()..].trim_start();
+    let end = after
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(after.len());
+    if end == 0 {
+        return None;
+    }
+    let active: i32 = after[..end].parse().ok()?;
+
+    let mb = |label: &str| -> u64 {
+        line.find(label)
+            .and_then(|i| {
+                let tail = line[i + label.len()..].trim_start();
+                let end = tail
+                    .find(|c: char| !c.is_ascii_digit() && c != '.')
+                    .unwrap_or(tail.len());
+                tail[..end].parse::<f64>().ok()
+            })
+            .map(|v| (v * 1024.0 * 1024.0) as u64)
+            .unwrap_or(0)
+    };
+    Some((active, mb("отправлено:"), mb("получено:")))
+}
+
+/// Готовит метрики WDTToR для UI: воркеры = число активных сессий.
+pub fn wdtt_metrics(active: i32, up: u64, down: u64) -> TotsMetrics {
+    TotsMetrics {
+        rx_bytes: down,
+        tx_bytes: up,
+        workers: active.max(0) as u64,
+        workers_target: active.max(0) as u64,
+        workers_vk: active.max(0) as u64,
+        workers_jazz: 0,
+        workers_ya_docs: 0,
+        workers_mail_docs: 0,
+        workers_cups: 0,
+    }
+}
+
 fn tracing_field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
     line.split_whitespace().find_map(|part| {
         let part = part.trim_matches(|c: char| c == ',' || c == ';');
@@ -1244,5 +1312,45 @@ mod tots_log_tests {
         let line = "ToTS Windows full-tunnel connected workers=10 workers_target=10";
         assert!(is_tots_tun_connected(line));
         assert_eq!(parse_tots_worker_status(line), Some((10, 10)));
+    }
+}
+
+#[cfg(test)]
+mod wdtt_log_tests {
+    use super::*;
+
+    #[test]
+    fn recognizes_wdtt_ready_event() {
+        assert!(is_wdtt_ready("__WDTT_EVENT__|READY|"));
+        assert!(is_wdtt_ready("[2026-11-27T19:36:18Z INFO  wdtt_rslib::session] [ВОРКЕР #1] [READY] туннель готов"));
+        assert!(!is_wdtt_ready("__WDTT_EVENT__|STARTED|{\"workers\":9}"));
+        assert!(!is_wdtt_ready("[СЕССИЯ #1] TURN 90.156.236.71:19302"));
+    }
+
+    #[test]
+    fn parses_wdtt_stats_event() {
+        let line = r#"__WDTT_EVENT__|STATS|{"active":9,"bytes_up":1234,"bytes_down":5678}"#;
+        assert_eq!(parse_wdtt_stats(line), Some((9, 1234, 5678)));
+        // A malformed payload must not panic or produce bogus numbers.
+        assert_eq!(parse_wdtt_stats("__WDTT_EVENT__|STATS|not json"), None);
+        assert_eq!(parse_wdtt_stats("__WDTT_EVENT__|STATS|{}"), None);
+    }
+
+    #[test]
+    fn parses_wdtt_stats_log_line() {
+        let line = "[СТАТИСТИКА] активных: 9 | отправлено: 1.50 МБ | получено: 2.25 МБ";
+        let (active, up, down) = parse_wdtt_stats(line).expect("stats");
+        assert_eq!(active, 9);
+        assert_eq!(up, (1.5 * 1024.0 * 1024.0) as u64);
+        assert_eq!(down, (2.25 * 1024.0 * 1024.0) as u64);
+    }
+
+    #[test]
+    fn wdtt_metrics_report_active_workers() {
+        let metrics = wdtt_metrics(9, 1000, 2000);
+        assert_eq!(metrics.workers, 9);
+        assert_eq!(metrics.workers_target, 9);
+        assert_eq!(metrics.tx_bytes, 1000);
+        assert_eq!(metrics.rx_bytes, 2000);
     }
 }

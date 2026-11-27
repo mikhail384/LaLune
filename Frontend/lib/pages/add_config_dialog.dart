@@ -21,6 +21,7 @@ const _protocols = <String>[
   'CSQTT 2.5.1',
   'CSQTTR',
   'ToTS',
+  'WDTToR',
   'LaLuneSUB',
 ];
 
@@ -30,6 +31,8 @@ String _placeholderFor(String protocol) {
       return 'http(s)://… или data:application/json;base64,…';
     case 'ToTS':
       return 'tots://eyJ2ZXJzaW9uIjoxLC4uLn0';
+    case 'WDTToR':
+      return 'wdtt://host:56000:56001:9000:пароль:хеш1,хеш2';
     default:
       return 'csqtt://connect?v=2&host=...&peer=...&password=...&hashes=h1+h2';
   }

@@ -55,6 +55,13 @@ class Settings {
   final String totsCupsData;
 
 
+  // WDTToR (WDTT)
+  final int wdttWorkers;
+  final String wdttObfs;
+  final String wdttVkAuthMode;
+  final int wdttLocalPort;
+  final String wdttDeviceId;
+
   // Экспериментальное
   final bool enableSmartTunnel;
   final bool showCoreLogs;
@@ -110,6 +117,11 @@ class Settings {
     this.totsYaDocsData = '',
     this.totsMailDocsData = '',
     this.totsCupsData = '',
+    this.wdttWorkers = 9,
+    this.wdttObfs = 'audio',
+    this.wdttVkAuthMode = 'manual',
+    this.wdttLocalPort = 9000,
+    this.wdttDeviceId = '',
     this.enableSmartTunnel = false,
     this.showCoreLogs = false,
     this.shareVpn = false,
@@ -226,6 +238,11 @@ class Settings {
         'totsYaDocsData': totsYaDocsData,
         'totsMailDocsData': totsMailDocsData,
         'totsCupsData': totsCupsData,
+      'wdttWorkers': wdttWorkers,
+      'wdttObfs': wdttObfs,
+      'wdttVkAuthMode': wdttVkAuthMode,
+      'wdttLocalPort': wdttLocalPort,
+      'wdttDeviceId': wdttDeviceId,
         'enableSmartTunnel': enableSmartTunnel,
         'showCoreLogs': showCoreLogs,
         'shareVpn': shareVpn,
@@ -279,6 +296,11 @@ class Settings {
     String? totsYaDocsData,
     String? totsMailDocsData,
     String? totsCupsData,
+    int? wdttWorkers,
+    String? wdttObfs,
+    String? wdttVkAuthMode,
+    int? wdttLocalPort,
+    String? wdttDeviceId,
     bool? enableSmartTunnel,
     bool? showCoreLogs,
     bool? shareVpn,
@@ -332,6 +354,11 @@ class Settings {
         totsYaDocsData: totsYaDocsData ?? this.totsYaDocsData,
         totsMailDocsData: totsMailDocsData ?? this.totsMailDocsData,
         totsCupsData: totsCupsData ?? this.totsCupsData,
+        wdttWorkers: wdttWorkers ?? this.wdttWorkers,
+        wdttObfs: wdttObfs ?? this.wdttObfs,
+        wdttVkAuthMode: wdttVkAuthMode ?? this.wdttVkAuthMode,
+        wdttLocalPort: wdttLocalPort ?? this.wdttLocalPort,
+        wdttDeviceId: wdttDeviceId ?? this.wdttDeviceId,
         enableSmartTunnel: enableSmartTunnel ?? this.enableSmartTunnel,
         showCoreLogs: showCoreLogs ?? this.showCoreLogs,
         shareVpn: shareVpn ?? this.shareVpn,

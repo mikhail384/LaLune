@@ -674,6 +674,23 @@ fn update_tots_metrics_from_line(state: &AppState, line: &str) {
     }
 }
 
+/// Обновляет метрики WDTToR из строк лога ядра.
+fn update_wdtt_metrics_from_line(state: &AppState, line: &str) {
+    if let Some((active, up, down)) = vpn::parse_wdtt_stats(line) {
+        let metrics = vpn::wdtt_metrics(active, up, down);
+        state.vpn.update_tots_metrics(metrics);
+        state.events.emit(Event::named(
+            "wdtt_stats",
+            json!({
+                "rxBytes": metrics.rx_bytes,
+                "txBytes": metrics.tx_bytes,
+                "workers": metrics.workers,
+                "workersTarget": metrics.workers_target,
+            }),
+        ));
+    }
+}
+
 async fn vpn_connect(
     State(state): State<Arc<AppState>>,
     Json(body): Json<ConnectBody>,
@@ -771,6 +788,11 @@ async fn connect_profile(state: &Arc<AppState>, mut config: ConfigItem, _tempora
             ProtocolKind::Tots => {
                 if let Err(e) = core_manager::download_tots(&client, &core_path, &state.events).await {
                     return err(500, format!("download ToTS failed: {}", e));
+                }
+            }
+            ProtocolKind::Wdtt => {
+                if let Err(e) = core_manager::download_wdtt(&client, &core_path, &state.events).await {
+                    return err(500, format!("download WDTToR failed: {}", e));
                 }
             }
         }
@@ -961,6 +983,8 @@ async fn connect_profile(state: &Arc<AppState>, mut config: ConfigItem, _tempora
         let mut tun_started = false;
         let mut previous_logs_cleared = false;
         let mut tots_ready = false;
+        // WDTToR signals readiness through a __WDTT_EVENT__|READY| line.
+        let mut wdtt_ready = false;
         let mut core_exited_before_ready = false;
 
         while tokio::time::Instant::now() < deadline && !tun_started {
@@ -986,6 +1010,12 @@ async fn connect_profile(state: &Arc<AppState>, mut config: ConfigItem, _tempora
                                     tots_ready = true;
                                 }
                                 update_tots_metrics_from_line(&state2, line);
+                            }
+                            if kind_for_watchdog == ProtocolKind::Wdtt {
+                                if vpn::is_wdtt_ready(line) {
+                                    wdtt_ready = true;
+                                }
+                                update_wdtt_metrics_from_line(&state2, line);
                             }
                             if let Some((ip, dns)) = vpn::parse_tunconf(line) {
                                 tun_ip = Some(ip);
@@ -1042,16 +1072,22 @@ async fn connect_profile(state: &Arc<AppState>, mut config: ConfigItem, _tempora
             let ready = match kind_for_watchdog {
                 ProtocolKind::Csqtt | ProtocolKind::Csqttr => consecutive_active_ticks >= 3,
                 ProtocolKind::Tots => tots_ready,
+                // WDTToR поднимает WireGuard и TUN сам; готовность приходит
+                // событием READY от ядра либо первым активным воркером.
+                ProtocolKind::Wdtt => wdtt_ready || consecutive_active_ticks >= 3,
             };
 
             if ready && !core_stopped(&state2) {
-                if kind_for_watchdog == ProtocolKind::Tots {
+                if matches!(kind_for_watchdog, ProtocolKind::Tots | ProtocolKind::Wdtt) {
                     state2.vpn.running.store(true, std::sync::atomic::Ordering::Release);
                     *state2.vpn.started_at.lock() = Some(std::time::Instant::now());
                     *state2.vpn.session_id.lock() = uuid::Uuid::new_v4().to_string();
                     state2.vpn.set_phase("connected", "Подключено");
                     state2.events.emit(Event::status_detail(true, "connected", "Подключено"));
-                    state2.log("[VPN] connected (ToTS owns the desktop TUN)");
+                    state2.log(format!(
+                        "[VPN] connected ({} owns the desktop TUN)",
+                        kind_for_watchdog.id()
+                    ));
                     tun_started = true;
                     continue;
                 }
@@ -1516,6 +1552,7 @@ fn latest_file_for(state: &AppState, protocol: &str) -> std::path::PathBuf {
             ProtocolKind::Csqtt => "LATEST.Csqtt",
             ProtocolKind::Csqttr => "LATEST.Csqttr",
             ProtocolKind::Tots => "LATEST.ToTS",
+            ProtocolKind::Wdtt => "LATEST.WDTToR",
         })
     }
 }
@@ -1553,6 +1590,7 @@ async fn core_latest_p(
                 core_manager::fetch_latest_csqttr(&client, &state.events).await
             }
             ProtocolKind::Tots => Some("latest".to_string()),
+            ProtocolKind::Wdtt => Some("latest".to_string()),
         }
     };
     match v {
@@ -1581,6 +1619,7 @@ async fn core_check_p(
                 .await
                 .unwrap_or_default(),
             ProtocolKind::Tots => "latest".to_string(),
+            ProtocolKind::Wdtt => "latest".to_string(),
         }
     };
     let latest_file = latest_file_for(&state, &proto);
@@ -1619,6 +1658,7 @@ async fn core_download_async_p(
                 ProtocolKind::Csqtt => state2.app_dir.join("LATEST.Csqtt"),
                 ProtocolKind::Csqttr => state2.app_dir.join("LATEST.Csqttr"),
                 ProtocolKind::Tots => state2.app_dir.join("LATEST.ToTS"),
+                ProtocolKind::Wdtt => state2.app_dir.join("LATEST.WDTToR"),
             }
         };
 
@@ -1683,6 +1723,20 @@ async fn core_download_async_p(
                     }
                     Err(e) => {
                         state2.log(format!("[CORE] ToTS download failed: {}", e));
+                        state2.events.emit(Event::error(e.to_string()));
+                    }
+                }
+            }
+            ProtocolKind::Wdtt => {
+                state2.events.emit(Event::progress("core_download", 20));
+                match core_manager::download_wdtt(&client, &dest, &state2.events).await {
+                    Ok(_) => {
+                        let _ = tokio::fs::write(&latest_file, "latest").await;
+                        state2.events.emit(Event::progress("core_download", 100));
+                        state2.log("[CORE] WDTToR updated".to_string());
+                    }
+                    Err(e) => {
+                        state2.log(format!("[CORE] WDTToR download failed: {}", e));
                         state2.events.emit(Event::error(e.to_string()));
                     }
                 }
@@ -1753,6 +1807,15 @@ async fn core_download_sync_p(
         }
         ProtocolKind::Tots => {
             match core_manager::download_tots(&client, &dest, &state.events).await {
+                Ok(_) => {
+                    let _ = tokio::fs::write(&latest_file, "latest").await;
+                    Ok("latest".to_string())
+                }
+                Err(e) => Err(e),
+            }
+        }
+        ProtocolKind::Wdtt => {
+            match core_manager::download_wdtt(&client, &dest, &state.events).await {
                 Ok(_) => {
                     let _ = tokio::fs::write(&latest_file, "latest").await;
                     Ok("latest".to_string())

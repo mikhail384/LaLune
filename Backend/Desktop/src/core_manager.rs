@@ -98,6 +98,40 @@ pub fn tots_local_filename() -> &'static str {
     { "tots-client" }
 }
 
+// ============================================================
+//  WDTToR: ядро wdtt-rslib (WireGuard поверх TURN/DTLS)
+// ============================================================
+
+/// Ядро публикуется в релизах Endlad2/wdtt-rslib под фиксированными именами.
+pub const WDTT_URL_TEMPLATE: &str =
+    "https://github.com/Endlad2/wdtt-rslib/releases/latest/download/{FILE}";
+
+pub fn wdtt_asset_name() -> &'static str {
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    { "wdtt-core-windows-x86_64.exe" }
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    { "wdtt-core-linux-x86_64" }
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    { "wdtt-openwrt-aarch64" }
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    { "wdtt-core-macos-universal" }
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    { "wdtt-core-macos-universal" }
+    #[cfg(any(
+        all(target_os = "windows", not(target_arch = "x86_64")),
+        all(target_os = "linux", not(any(target_arch = "x86_64", target_arch = "aarch64"))),
+        not(any(target_os = "windows", target_os = "linux", target_os = "macos"))
+    ))]
+    { "wdtt-core-unsupported" }
+}
+
+pub fn wdtt_local_filename() -> &'static str {
+    #[cfg(target_os = "windows")]
+    { "wdtt-core.exe" }
+    #[cfg(not(target_os = "windows"))]
+    { "wdtt-core" }
+}
+
 /// Список поддерживаемых протоколов (делегируем в protocol.rs).
 pub fn supported_protocols() -> Vec<serde_json::Value> {
     crate::protocol::supported_protocols()
@@ -283,6 +317,66 @@ pub async fn download_tots(
         return Ok(());
     }
     Err(anyhow!("failed to download ToTS archive"))
+}
+
+/// Скачивает ядро WDTToR (один бинарник, без архива).
+pub async fn download_wdtt(
+    client: &reqwest::Client,
+    dest: &Path,
+    events: &EventBus,
+) -> Result<()> {
+    let asset = wdtt_asset_name();
+    if asset == "wdtt-core-unsupported" {
+        return Err(anyhow!(
+            "WDTToR desktop binary is not published for this platform/architecture"
+        ));
+    }
+    let url = WDTT_URL_TEMPLATE.replace("{FILE}", asset);
+    let urls = [
+        url.clone(),
+        format!("{}{}", PROXY_URL, urlencode(&url)),
+        format!("{}{}", PROXY_URL, urlencode(&url)),
+    ];
+    for (i, candidate) in urls.iter().enumerate() {
+        let level = i + 1;
+        let ua = if level == 3 { USER_AGENT_CURL } else { USER_AGENT_BROWSER };
+        events.emit(Event::log(format!(
+            "[DOWNLOAD][WDTToR][LEVEL {}] {}",
+            level,
+            truncate(candidate, 120)
+        )));
+        let resp = match client.get(candidate).header("User-Agent", ua).send().await {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if resp.status().as_u16() != 200 {
+            continue;
+        }
+        let bytes = match resp.bytes().await {
+            Ok(v) if v.len() > 1024 => v,
+            _ => continue,
+        };
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        let staging = dest.with_extension("tmp");
+        std::fs::write(&staging, bytes.as_ref())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&staging)?.permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&staging, perms)?;
+        }
+        std::fs::rename(&staging, dest)?;
+        events.emit(Event::log(format!(
+            "[DOWNLOAD][WDTToR] saved {} ({} bytes)",
+            dest.display(),
+            bytes.len()
+        )));
+        return Ok(());
+    }
+    Err(anyhow!("could not download the WDTToR core from any mirror"))
 }
 
 async fn download_binary(

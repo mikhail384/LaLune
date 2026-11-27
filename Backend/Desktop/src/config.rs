@@ -206,10 +206,65 @@ pub fn parse_link_for_protocol(link: &str, protocol: &str) -> Result<ConfigItem>
         parse_generic(link, "OLCRTC", "olcrtc://")
     } else if lower.starts_with("tots://") {
         parse_tots(link)
+    } else if lower.starts_with("wdtt://") {
+        parse_wdtt(link)
     } else {
         log::warn!("[PARSE] unsupported scheme: {:?}", &link.chars().take(20).collect::<String>());
         Err(anyhow!("unsupported scheme"))
     }
+}
+
+/// Разбирает ссылку WDTToR: `wdtt://host:dtls:wg:local:password:hashes`.
+///
+/// Пароль и хеши хранятся в конфиге отдельно (чтобы UI мог их показать и чтобы
+/// АвтоAPI мог заменить хеши), а `raw_link` сохраняется целиком — ядро умеет
+/// разбирать его само.
+fn parse_wdtt(link: &str) -> Result<ConfigItem> {
+    let body = link
+        .trim()
+        .strip_prefix("wdtt://")
+        .or_else(|| link.trim().strip_prefix("WDTToR://"))
+        .ok_or_else(|| anyhow!("invalid wdtt:// link"))?;
+
+    // host:dtls:wg:local:password:hashes — пароль не содержит ':', хеши
+    // разделены запятыми, поэтому splitn(6) безопасен.
+    let parts: Vec<&str> = body.splitn(6, ':').collect();
+    if parts.len() < 5 {
+        return Err(anyhow!(
+            "wdtt:// link needs host:dtls:wg:local:password:hashes, got {} field(s)",
+            parts.len()
+        ));
+    }
+
+    let host = parts[0].trim();
+    if host.is_empty() {
+        return Err(anyhow!("wdtt:// link has no server address"));
+    }
+    let dtls_port = parts[1].trim();
+    let password = parts[4].trim().to_string();
+    if password.is_empty() {
+        return Err(anyhow!("wdtt:// link has no connection password"));
+    }
+    let hashes = parts.get(5).map(|h| h.trim().to_string()).unwrap_or_default();
+
+    let mut config = ConfigItem {
+        id: 0,
+        protocol: "WDTToR".into(),
+        peer: if dtls_port.is_empty() {
+            host.to_string()
+        } else {
+            format!("{host}:{dtls_port}")
+        },
+        password,
+        hashes,
+        name: String::new(),
+        raw_link: link.trim().to_string(),
+    };
+    if config.name.is_empty() {
+        config.name = format!("WDTToR {}", host);
+    }
+    log::info!("[PARSE][WDTToR] parsed link for {host}");
+    Ok(config)
 }
 
 /// Парсит csqtt:// ссылку.

@@ -58,6 +58,11 @@ String normalizeSubProtocol(String raw) {
       return 'CSQTTR';
     case 'TOTS':
       return 'ToTS';
+    case 'WDTToR':
+    case 'WDTT':
+    case 'WDTToR (WDTT)':
+    case 'WDTTO':
+      return 'WDTToR';
   }
   return s;
 }
@@ -560,6 +565,7 @@ SubConfig? _parseSubConfigValue(Object? raw, {required String fallbackName}) {
 String _protocolFromLink(String link) {
   final lower = link.trimLeft().toLowerCase();
   if (lower.startsWith('tots://')) return 'ToTS';
+  if (lower.startsWith('wdtt://')) return 'WDTToR';
   if (lower.startsWith('csqttr://')) return 'CSQTTR';
   if (lower.startsWith('csqtt://')) return 'CSQTT';
   return 'CSQTT';

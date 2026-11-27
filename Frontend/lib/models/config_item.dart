@@ -20,6 +20,15 @@ class ConfigItem {
   });
 
   bool get isTots => protocol.toLowerCase() == 'tots';
+
+  /// WDTToR — обратно совместимый с WDTT клиент (WireGuard поверх TURN/DTLS).
+  bool get isWdtt => protocol.toLowerCase() == 'wdtto' ||
+      protocol.toLowerCase() == 'wdttor' ||
+      protocol.toLowerCase() == 'wdtt' ||
+      protocol.toLowerCase().startsWith('wdttor');
+
+  /// Подпись протокола для UI: у WDTToR она отличается от id.
+  String get protocolLabel => isWdtt ? 'WDTToR (WDTT)' : protocol;
   bool get isCsqtt219 => protocol.toUpperCase() == 'CSQTT 2.1.9';
   bool get isCsqtt251 =>
       protocol.toUpperCase() == 'CSQTT 2.5.1' ||

@@ -60,6 +60,18 @@ pub struct Settings {
     pub tots_mail_docs_data: String,
     pub tots_cups_data: String,
 
+    // -------- WDTToR (WDTT) --------
+    /// Число сессий-воркеров (кратно 9).
+    pub wdtt_workers: i32,
+    /// Режим обфускации: audio или video.
+    pub wdtt_obfs: String,
+    /// Как получать TURN-креды: manual (хеши из конфига) или autoApi (VK API).
+    pub wdtt_vk_auth_mode: String,
+    /// Локальный порт WireGuard-эндпоинта.
+    pub wdtt_local_port: i32,
+    /// Переопределение device id (пусто — из окружения/по умолчанию).
+    pub wdtt_device_id: String,
+
 
     // -------- Экспериментальное --------
     pub enable_smart_tunnel: bool,
@@ -121,6 +133,11 @@ impl Default for Settings {
             tots_ya_docs_data: String::new(),
             tots_mail_docs_data: String::new(),
             tots_cups_data: String::new(),
+            wdtt_workers: 9,
+            wdtt_obfs: "audio".into(),
+            wdtt_vk_auth_mode: "manual".into(),
+            wdtt_local_port: 9000,
+            wdtt_device_id: String::new(),
 
 
             enable_smart_tunnel: false,
@@ -148,6 +165,16 @@ impl Settings {
         self.tots_mail_docs_percent = self.tots_mail_docs_percent.clamp(0, 100);
         self.tots_cups_percent = self.tots_cups_percent.clamp(0, 100);
         if self.tots_vk_auth_mode != "autoApi" { self.tots_vk_auth_mode = "manual".into(); }
+
+        // WDTToR: воркеры кратны 9 (одна группа), обфускация — audio/video,
+        // режим кредов — manual (хеши из конфига) или autoApi (VK API).
+        self.wdtt_workers = self.wdtt_workers.clamp(9, 108);
+        self.wdtt_workers = (self.wdtt_workers / 9) * 9;
+        if self.wdtt_workers < 9 { self.wdtt_workers = 9; }
+        if !matches!(self.wdtt_obfs.as_str(), "audio" | "video") { self.wdtt_obfs = "audio".into(); }
+        if self.wdtt_vk_auth_mode != "autoApi" { self.wdtt_vk_auth_mode = "manual".into(); }
+        self.wdtt_local_port = self.wdtt_local_port.clamp(1024, 65535);
+        self.wdtt_device_id = self.wdtt_device_id.trim().to_string();
 
         if !matches!(self.auth_mode.as_str(), "manual" | "autoApi" | "autoVk" | "externalHashes") { self.auth_mode = "manual".into(); }
         self.external_hashes_url = self.external_hashes_url.trim().to_string();

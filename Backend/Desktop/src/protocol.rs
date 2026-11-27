@@ -19,6 +19,8 @@ pub enum ProtocolKind {
     Csqtt,
     Csqttr,
     Tots,
+    /// WDTToR — Rust-клиент WDTT (WireGuard поверх TURN/DTLS).
+    Wdtt,
 }
 
 impl ProtocolKind {
@@ -27,6 +29,8 @@ impl ProtocolKind {
             "CSQTT" | "CSQTT 2.1.9" | "CSQTT 2.5.1" => Some(Self::Csqtt),
             "CSQTTR" | "CSQTTR 2.5.2" => Some(Self::Csqttr),
             "TOTS" => Some(Self::Tots),
+            // Сравнение идёт по upper-case строке: "WDTToR" → "WDTTOR".
+            "WDTTOR" | "WDTTOR (WDTT)" | "WDTTO" | "WDTT" => Some(Self::Wdtt),
             _ => None,
         }
     }
@@ -36,6 +40,7 @@ impl ProtocolKind {
             Self::Csqtt => "CSQTT",
             Self::Csqttr => "CSQTTR",
             Self::Tots => "ToTS",
+            Self::Wdtt => "WDTToR",
         }
     }
 
@@ -44,6 +49,7 @@ impl ProtocolKind {
             Self::Csqtt => "CSQTT (VK Calls)",
             Self::Csqttr => "CSQTTR",
             Self::Tots => "ToTS",
+            Self::Wdtt => "WDTToR (WDTT)",
         }
     }
 
@@ -52,6 +58,7 @@ impl ProtocolKind {
             Self::Csqtt => "Endlad2/csqtt-core",
             Self::Csqttr => "Endlad2/csqttr-core",
             Self::Tots => "Endlad2/ToTS",
+            Self::Wdtt => "Endlad2/wdtt-rslib",
         }
     }
 
@@ -60,6 +67,7 @@ impl ProtocolKind {
             Self::Csqtt => "Оригинальный протокол на базе VK Calls, TURN и WRAP.",
             Self::Csqttr => "CSQTTR 2.5.2.",
             Self::Tots => "ToTS: multi-provider transport (VK, Jazz, Ya Docs, Mail Docs, Cups).",
+            Self::Wdtt => "WDTToR: WireGuard поверх TURN/DTLS, совместим с сервером WDTT.",
         }
     }
 
@@ -68,6 +76,7 @@ impl ProtocolKind {
             Self::Csqtt => crate::core_manager::csqtt_asset_name(),
             Self::Csqttr => crate::core_manager::csqttr_asset_name(),
             Self::Tots => crate::core_manager::tots_asset_name(),
+            Self::Wdtt => crate::core_manager::wdtt_asset_name(),
         }
     }
 
@@ -76,6 +85,7 @@ impl ProtocolKind {
             Self::Csqtt => crate::core_manager::csqtt_local_filename(),
             Self::Csqttr => crate::core_manager::csqttr_local_filename(),
             Self::Tots => crate::core_manager::tots_local_filename(),
+            Self::Wdtt => crate::core_manager::wdtt_local_filename(),
         }
     }
 }
@@ -114,6 +124,14 @@ pub fn supported_protocols() -> Vec<serde_json::Value> {
             "description": "Multi-provider ToTS tunnel.",
             "coreAsset": crate::core_manager::tots_asset_name(),
         }),
+        serde_json::json!({
+            "id": "WDTToR",
+            "displayName": "WDTToR (WDTT)",
+            "repo": "Endlad2/wdtt-rslib",
+            "realtime": true,
+            "description": "WireGuard поверх TURN/DTLS, совместим с сервером WDTT.",
+            "coreAsset": crate::core_manager::wdtt_asset_name(),
+        }),
     ]
 }
 
@@ -146,6 +164,11 @@ pub fn settings_keys_for(kind: ProtocolKind) -> Vec<&'static str> {
             "totsJazzData", "totsYaDocsData", "totsMailDocsData", "totsCupsData",
             "showCoreLogs", "ipRoutingMode", "ipRoutingIps",
         ],
+        ProtocolKind::Wdtt => vec![
+            "wdttWorkers", "wdttObfs", "wdttVkAuthMode", "wdttLocalPort",
+            "wdttDeviceId", "autoApiWorkers",
+            "showCoreLogs", "ipRoutingMode", "ipRoutingIps",
+        ],
     }
 }
 
@@ -160,7 +183,67 @@ pub fn build_args(
     Ok(match kind {
         ProtocolKind::Csqtt | ProtocolKind::Csqttr => build_csqtt_args(config, settings, listen_port),
         ProtocolKind::Tots => build_tots_args(config, settings)?,
+        ProtocolKind::Wdtt => build_wdtt_args(config, settings)?,
     })
+}
+
+/// Аргументы ядра WDTToR (`wdtt-rslib`).
+///
+/// Ядро само поднимает WireGuard (boringtun) и TUN, поэтому LaLune не создаёт
+/// интерфейс: достаточно передать ссылку и параметры сессий. Хеши VK берутся из
+/// конфига в ручном режиме и из `settings.vkHashes` в режиме АвтоAPI (бэкенд
+/// подставляет их перед запуском).
+fn build_wdtt_args(config: &ConfigItem, settings: &Settings) -> Result<Vec<String>> {
+    let raw = config.raw_link.trim();
+    let mut args: Vec<String> = Vec::new();
+
+    if raw.to_ascii_lowercase().starts_with("wdtt://") {
+        // Ссылка уже содержит пароль и хеши: ядро разбирает её само.
+        args.push("--link".into());
+        args.push(raw.to_string());
+    } else {
+        if config.peer.trim().is_empty() {
+            anyhow::bail!("WDTToR: пустой peer в конфиге");
+        }
+        if config.password.trim().is_empty() {
+            anyhow::bail!("WDTToR: пустой пароль подключения в конфиге");
+        }
+        let hashes = if config.hashes.trim().is_empty() {
+            settings.vk_hashes.clone()
+        } else {
+            config.hashes.clone()
+        };
+        if hashes.trim().is_empty() {
+            anyhow::bail!("WDTToR: нет ни одного хеша VK-звонка");
+        }
+        args.push("--peer".into());
+        args.push(config.peer.trim().to_string());
+        args.push("--password".into());
+        args.push(config.password.clone());
+        args.push("--vk".into());
+        args.push(hashes);
+    }
+
+    args.push("--workers".into());
+    args.push(settings.wdtt_workers.max(9).to_string());
+    args.push("--obfs".into());
+    args.push(settings.wdtt_obfs.clone());
+    args.push("--vk-auth-mode".into());
+    args.push(settings.vk_auth_mode.clone());
+    args.push("--listen".into());
+    args.push(format!("127.0.0.1:{}", settings.wdtt_local_port));
+
+    if !settings.wdtt_device_id.trim().is_empty() {
+        args.push("--device-id".into());
+        args.push(settings.wdtt_device_id.trim().to_string());
+    }
+
+    // События в stdout нужны, чтобы UI видел готовность и статистику.
+    args.push("--events".into());
+    args.push("--log-level".into());
+    args.push("info".into());
+
+    Ok(args)
 }
 
 
@@ -483,6 +566,7 @@ pub fn link_placeholder(kind: ProtocolKind) -> &'static str {
             "csqtt://connect?v=2&host=...&peer=...&password=...&hashes=h1+h2"
         }
         ProtocolKind::Tots => "tots://<base64url-json>",
+        ProtocolKind::Wdtt => "wdtt://host:56000:56001:9000:пароль:хеш1,хеш2",
     }
 }
 
@@ -520,5 +604,141 @@ mod jazz_pool_validation_tests {
         });
         let error = validate_jazz_worker_capacity(&data, 1).unwrap_err().to_string();
         assert!(error.contains("does not match worker_rooms"));
+    }
+}
+
+#[cfg(test)]
+mod wdtt_tests {
+    use super::*;
+    use crate::config::ConfigItem;
+
+    const REAL_LINK: &str = "wdtt://82.40.38.237:56005:56006:9000:uVCF2Nf6dZK8hEKe:sBvxpZXkz_CAoAstXFslhAZmukJ8rI54l8sJDEbQOO4,BRtpXEy74qSrZ-6A6QS5THpi9qoQx7-4JzBRWU4f9Q0,Yb_jusGtRZxh3MFVSmbOqVb6cZm5McRKzrH4YPWE_xM";
+
+    fn config_with_link(link: &str) -> ConfigItem {
+        ConfigItem {
+            id: 0,
+            protocol: "WDTToR".into(),
+            peer: String::new(),
+            password: String::new(),
+            hashes: String::new(),
+            name: "test".into(),
+            raw_link: link.into(),
+        }
+    }
+
+    #[test]
+    fn recognizes_wdtt_ids() {
+        for id in ["WDTToR", "wdtto", "WDTT", "WDTToR (WDTT)"] {
+            assert_eq!(ProtocolKind::from_id(id), Some(ProtocolKind::Wdtt), "{id}");
+        }
+        assert_eq!(ProtocolKind::Wdtt.id(), "WDTToR");
+        assert_eq!(ProtocolKind::Wdtt.display_name(), "WDTToR (WDTT)");
+        assert_eq!(ProtocolKind::Wdtt.local_filename(), "wdtt-core");
+    }
+
+    #[test]
+    fn link_is_passed_through_verbatim() {
+        let settings = Settings::default();
+        let args = build_wdtt_args(&config_with_link(REAL_LINK), &settings).unwrap();
+        let idx = args.iter().position(|a| a == "--link").expect("--link");
+        assert_eq!(args[idx + 1], REAL_LINK);
+        // The password must not be duplicated on the command line.
+        assert!(!args.iter().any(|a| a == "--password"));
+        // Events are always on so the UI sees readiness.
+        assert!(args.iter().any(|a| a == "--events"));
+    }
+
+    #[test]
+    fn manual_mode_uses_config_hashes() {
+        let mut settings = Settings::default();
+        settings.wdtt_workers = 18;
+        settings.wdtt_obfs = "video".into();
+        settings.wdtt_local_port = 9100;
+        let config = ConfigItem {
+            peer: "1.2.3.4:56005".into(),
+            password: "secret".into(),
+            hashes: "hashone1,hashtwo2".into(),
+            ..config_with_link("")
+        };
+        let args = build_wdtt_args(&config, &settings).unwrap();
+        let value = |flag: &str| -> String {
+            let i = args.iter().position(|a| a == flag).expect(flag);
+            args[i + 1].clone()
+        };
+        assert_eq!(value("--peer"), "1.2.3.4:56005");
+        assert_eq!(value("--password"), "secret");
+        assert_eq!(value("--vk"), "hashone1,hashtwo2");
+        assert_eq!(value("--workers"), "18");
+        assert_eq!(value("--obfs"), "video");
+        assert_eq!(value("--listen"), "127.0.0.1:9100");
+    }
+
+    #[test]
+    fn auto_api_mode_falls_back_to_settings_hashes() {
+        let mut settings = Settings::default();
+        settings.wdtt_vk_auth_mode = "autoApi".into();
+        settings.vk_hashes = "fromApi123,fromApi456".into();
+        let config = ConfigItem {
+            peer: "1.2.3.4:56005".into(),
+            password: "secret".into(),
+            hashes: String::new(),
+            ..config_with_link("")
+        };
+        let args = build_wdtt_args(&config, &settings).unwrap();
+        let i = args.iter().position(|a| a == "--vk").expect("--vk");
+        assert_eq!(args[i + 1], "fromApi123,fromApi456");
+    }
+
+    #[test]
+    fn missing_credentials_are_rejected() {
+        let settings = Settings::default();
+        let no_peer = ConfigItem {
+            password: "secret".into(),
+            hashes: "h1".into(),
+            ..config_with_link("")
+        };
+        assert!(build_wdtt_args(&no_peer, &settings).is_err());
+
+        let no_password = ConfigItem {
+            peer: "1.2.3.4:56005".into(),
+            hashes: "h1".into(),
+            ..config_with_link("")
+        };
+        assert!(build_wdtt_args(&no_password, &settings).is_err());
+
+        let no_hashes = ConfigItem {
+            peer: "1.2.3.4:56005".into(),
+            password: "secret".into(),
+            ..config_with_link("")
+        };
+        assert!(build_wdtt_args(&no_hashes, &settings).is_err());
+    }
+
+    #[test]
+    fn worker_count_is_normalized() {
+        let mut settings = Settings::default();
+        settings.wdtt_workers = 0;
+        settings.normalize();
+        assert_eq!(settings.wdtt_workers, 9);
+
+        settings.wdtt_workers = 20;
+        settings.normalize();
+        assert_eq!(settings.wdtt_workers, 18, "must round down to a multiple of 9");
+
+        settings.wdtt_workers = 500;
+        settings.normalize();
+        assert_eq!(settings.wdtt_workers, 108);
+    }
+
+    #[test]
+    fn settings_normalize_sanitizes_wdtt_fields() {
+        let mut settings = Settings::default();
+        settings.wdtt_obfs = "nonsense".into();
+        settings.wdtt_vk_auth_mode = "weird".into();
+        settings.wdtt_local_port = 1;
+        settings.normalize();
+        assert_eq!(settings.wdtt_obfs, "audio");
+        assert_eq!(settings.wdtt_vk_auth_mode, "manual");
+        assert_eq!(settings.wdtt_local_port, 1024);
     }
 }
