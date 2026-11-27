@@ -39,3 +39,7 @@ Runner/LaLuneCoreBridge.h
 !default.mode2v3
 !default.pbxuser
 !default.perspectivev3
+
+# CocoaPods artefacts from `flutter build ios-framework` (see ios/Podfile).
+Pods/
+Podfile.lock

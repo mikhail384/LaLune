@@ -203,6 +203,18 @@ jobs:
         working-directory: Frontend
         run: flutter pub get
 
+      - name: Prepare CocoaPods for the frameworks build
+        working-directory: Frontend/ios
+        run: |
+          set -euo pipefail
+          # `flutter build ios-framework` always shells out to `pod install`
+          # (forceCocoaPodsOnly) to build the plugin frameworks. Without a
+          # Podfile it fails, and without an explicit platform it fails with
+          # "required a higher minimum deployment target".
+          test -f Podfile || { echo "::error::ios/Podfile is missing"; exit 1; }
+          grep -q "platform :ios" Podfile || { echo "::error::ios/Podfile has no platform line"; exit 1; }
+          cat Podfile | head -20
+
       - name: Check flutter build subcommands
         working-directory: Frontend
         continue-on-error: true
@@ -257,11 +269,15 @@ jobs:
             return 1
           }
 
+          # --debug/--profile default to true, so they must be switched off
+          # explicitly; project.yml only links Flutter/Release.
+          FRAMEWORK_FLAGS=(--output=ios/Flutter --no-debug --no-profile --release)
+
           if run_attempt flutter-frameworks-nocodesign \
-               flutter build ios-framework --output=ios/Flutter --release --no-codesign; then
+               flutter build ios-framework "${FRAMEWORK_FLAGS[@]}" --no-codesign; then
             :
           elif run_attempt flutter-frameworks-codesign \
-                 flutter build ios-framework --output=ios/Flutter --release; then
+                 flutter build ios-framework "${FRAMEWORK_FLAGS[@]}"; then
             :
           else
             exit 1
