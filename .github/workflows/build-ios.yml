@@ -20,12 +20,18 @@ on:
 permissions:
   contents: write
 
+# No `cancel-in-progress`: every observed iOS run was cancelled ~10 seconds in,
+# while the macOS job was still queued with no runner assigned. Cancelling an
+# in-flight IPA build on the next push only produces red runs and no artifact.
 concurrency:
   group: ios-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
-  FLUTTER_VERSION: "3.29.0"
+  # Keep a single Flutter version across all workflows: the app code and
+  # pubspec are shared, and a mismatch produces different Dart SDKs for the
+  # same source tree.
+  FLUTTER_VERSION: "3.47.5"
   XCODE_APP: /Applications/Xcode_15.4.app
   CSQTT_IOS_CORE_URL: https://github.com/Endlad2/csqtt-core/releases/latest/download/libcsqtt_ios_core.a
   CSQTTR_IOS_CORE_URL: https://github.com/Endlad2/csqttr-core/releases/latest/download/libcsqttr_ios_core.a
@@ -92,8 +98,12 @@ jobs:
   build-ios:
     name: Build unsigned IPA
     needs: prepare-version
-    runs-on: macos-14
-    timeout-minutes: 60
+    # `macos-latest` is the label GitHub always keeps provisioned; the pinned
+    # `macos-14` label can stay queued (or get cancelled) on accounts without
+    # that image. The "Select Xcode" step picks Xcode 15.4 when present and
+    # warns instead of failing when only a newer Xcode is installed.
+    runs-on: macos-latest
+    timeout-minutes: 90
 
     steps:
       - name: Checkout
@@ -140,14 +150,15 @@ jobs:
 
       - name: Select Xcode
         run: |
-          set -e
-          if [ ! -d "$XCODE_APP" ]; then
-            echo "::warning::$XCODE_APP not found"
-            ls -1 /Applications | grep -i '^Xcode' || true
-          else
+          set -euo pipefail
+          if [ -d "$XCODE_APP" ]; then
             sudo xcode-select -s "$XCODE_APP"
+          else
+            echo "::warning::$XCODE_APP not found; keeping the image default"
+            ls -1 /Applications | grep -i '^Xcode' || true
           fi
           xcodebuild -version
+          xcodebuild -showsdks | grep -i iphoneos || true
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -195,9 +206,13 @@ jobs:
       - name: Build Flutter iOS frameworks
         working-directory: Frontend
         run: |
-          set -e
-          flutter build ios-framework --output=ios/Flutter --release
+          set -euo pipefail
+          flutter build ios-framework --output=ios/Flutter --release --no-codesign
+          # The project.yml search paths point at ios-arm64 only; a universal
+          # framework would add ios-arm64_x86_64-simulator and ios-arm64_x86_64
+          # directories that this app never links against.
           ls -la ios/Flutter/Release/
+          test -d ios/Flutter/Release/Flutter.xcframework
 
       - name: Download CSQTT iOS core
         run: |
@@ -248,6 +263,7 @@ jobs:
           fi
 
       - name: Show destinations (diagnostics)
+        shell: bash
         working-directory: Frontend/ios
         continue-on-error: true
         run: |
@@ -260,21 +276,21 @@ jobs:
             | grep -E 'SUPPORTED_PLATFORMS|SDKROOT|PLATFORM_NAME|SUPPORTS_MAC_DESIGNED' || true
 
       - name: Build app (unsigned, iphoneos SDK)
+        shell: bash
         working-directory: Frontend/ios
         run: |
           set -euo pipefail
+
           # An iOS app on an Apple-silicon runner is also a valid
-          # "Designed for iPad" macOS destination. Without an explicit
-          # destination xcodebuild picks the host Mac and fails with
-          # "The configuration 'macos-14-arm64-us-default' is not supported".
-          # `-destination 'generic/platform=iOS'` pins the iOS device platform,
-          # and SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD=NO removes the Mac
-          # candidate entirely.
+          # "Designed for iPad" macOS destination. Whenever xcodebuild resolves
+          # the host Mac it fails with
+          #   The configuration 'macos-14-arm64-us-default' is not supported
+          # so every attempt below pins the iOS platform and disables the Mac
+          # candidates.
           COMMON=(
             -project Runner.xcodeproj
             -scheme Runner
             -configuration Release
-            -destination 'generic/platform=iOS'
             -derivedDataPath build/DerivedData
             SUPPORTED_PLATFORMS=iphoneos
             SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD=NO
@@ -287,21 +303,36 @@ jobs:
             DEVELOPMENT_TEAM=""
           )
 
-          # `build` is the cheapest path to a device .app. `archive` is kept as
-          # a fallback: it produces the same bundle in an xcarchive and has a
-          # slightly different destination resolution.
-          if xcodebuild build "${COMMON[@]}" -sdk iphoneos; then
-            echo "LALUNE_IOS_ARTIFACT=build" >> "$GITHUB_ENV"
-          else
-            echo "::warning::xcodebuild build failed; retrying with archive"
-            xcodebuild archive "${COMMON[@]}" -archivePath build/LaLune.xcarchive
-            echo "LALUNE_IOS_ARTIFACT=archive" >> "$GITHUB_ENV"
-          fi
+          attempt() {
+            local label="$1"
+            shift
+            echo "::group::xcodebuild $label"
+            if xcodebuild "$@"; then
+              echo "::endgroup::"
+              echo "LALUNE_IOS_ARTIFACT=$label" >> "$GITHUB_ENV"
+              return 0
+            fi
+            echo "::endgroup::"
+            echo "::warning::xcodebuild $label failed"
+            return 1
+          }
 
-      - name: Package unsigned IPA
+          # Try the cheapest device build first, then the same build without a
+          # destination, then archive. Only the last failure is fatal.
+          attempt build-destination \
+            build "${COMMON[@]}" -sdk iphoneos -destination 'generic/platform=iOS' \
+            || attempt build-sdk \
+              build "${COMMON[@]}" -sdk iphoneos \
+            || attempt archive \
+              archive "${COMMON[@]}" -sdk iphoneos \
+                -destination 'generic/platform=iOS' \
+                -archivePath build/LaLune.xcarchive \
+            || { echo "::error::every xcodebuild attempt failed"; exit 1; }
+
+      - name: Verify the built bundle
         working-directory: Frontend/ios
         run: |
-          set -e
+          set -euo pipefail
           APP=""
           for candidate in \
             build/DerivedData/Build/Products/Release-iphoneos/LaLune.app \
@@ -312,10 +343,25 @@ jobs:
           done
           if [ -z "$APP" ]; then
             echo "::error::built .app not found; listing products:"
-            find build/DerivedData/Build/Products -maxdepth 3 -name '*.app' -print 2>/dev/null || true
+            find build -maxdepth 6 -name '*.app' -print 2>/dev/null || true
             exit 1
           fi
+          echo "LALUNE_IOS_APP=$APP" >> "$GITHUB_ENV"
           echo "Using $APP"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist"
+          file "$APP/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")"
+          if [ -d "$APP/Contents" ]; then
+            echo "::error::$APP is a macOS bundle, not an iOS one"
+            exit 1
+          fi
+
+      - name: Package unsigned IPA
+        shell: bash
+        working-directory: Frontend/ios
+        run: |
+          set -euo pipefail
+          APP="${LALUNE_IOS_APP:?LALUNE_IOS_APP is not set; did the build step run?}"
+          [ -d "$APP" ] || { echo "::error::$APP missing"; exit 1; }
           rm -rf build/Payload build/LaLune.ipa
           mkdir -p build/Payload
           cp -R "$APP" build/Payload/LaLune.app
