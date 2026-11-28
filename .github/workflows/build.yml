@@ -173,8 +173,24 @@ jobs:
         working-directory: Backend/Desktop
         run: |
           set -euo pipefail
-          cargo build --release --target x86_64-apple-darwin
-          cargo build --release --target aarch64-apple-darwin
+          # Job logs require admin rights on this repository, so surface the
+          # compiler/linker errors as an annotation instead of "exit code 101".
+          surface() {
+            python3 - "$1" "$2" <<'PY'
+          import pathlib, sys
+          target, path = sys.argv[1], sys.argv[2]
+          text = pathlib.Path(path).read_text(errors="replace")
+          lines = [l for l in text.splitlines() if "error" in l.lower()][:40] or text.splitlines()[-40:]
+          print(f"::error title=build {target} failed::" + "\n".join(lines).replace("%", "%25").replace("\n", "%0A")[:60000])
+          PY
+          }
+          for target in x86_64-apple-darwin aarch64-apple-darwin; do
+            if ! cargo build --release --target "$target" 2>&1 | tee "build-$target.log"; then
+              surface "$target" "build-$target.log"
+              exit 1
+            fi
+            grep -q "^error" "build-$target.log" && { surface "$target" "build-$target.log"; exit 1; }
+          done
           mkdir -p ../../dist-macos
           lipo -create -output ../../dist-macos/lalune-backend \
             target/x86_64-apple-darwin/release/lalune-backend \
