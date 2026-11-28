@@ -733,7 +733,9 @@ async fn connect_profile(state: &Arc<AppState>, mut config: ConfigItem, _tempora
         let filename = match kind {
             ProtocolKind::Csqtt => Some("csqtt-macos-arm64"),
             ProtocolKind::Csqttr => Some("csqttr-macos-arm64"),
-            ProtocolKind::Tots => None,
+            // WDTToR и ToTS создают интерфейс сами и качаются как отдельные
+            // ядра, поэтому рядом с исполняемым файлом их не ищем.
+            ProtocolKind::Tots | ProtocolKind::Wdtt => None,
         };
         filename
             .and_then(|name| std::env::current_exe().ok()?.parent().map(|p| p.join(name)))

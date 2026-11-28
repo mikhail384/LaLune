@@ -344,8 +344,18 @@ jobs:
       - name: Build OpenWRT backend + bundled cores
         working-directory: Backend/OpenWRT
         run: |
+          set -o pipefail
           chmod +x build.sh
-          ./build.sh
+          if ! ./build.sh 2>&1 | tee build-aarch64.log; then
+            python3 - aarch64 build-aarch64.log <<'PY'
+          import pathlib, sys
+          target, path = sys.argv[1], sys.argv[2]
+          text = pathlib.Path(path).read_text(errors="replace")
+          lines = [l for l in text.splitlines() if any(k in l.lower() for k in ("error", "failed", "cannot", "unexpected", "not found"))][:40] or text.splitlines()[-40:]
+          print(f"::error title=openwrt {target} failed::" + "\n".join(lines).replace("%", "%25").replace("\n", "%0A")[:60000])
+          PY
+            exit 1
+          fi
       - name: Verify binary and bundled protocols under QEMU
         working-directory: Backend/OpenWRT
         run: |
@@ -509,7 +519,20 @@ jobs:
 
       - name: Build ${{ matrix.abi }} backend and bundled cores (+ smoke test)
         working-directory: Backend/OpenWRT
-        run: bash build-multiarch.sh ${{ matrix.abi }}
+        run: |
+          set -o pipefail
+          # Логи job требуют прав администратора, поэтому хвост вывода попадает
+          # в аннотацию: иначе видно только «exit code 1».
+          if ! bash build-multiarch.sh ${{ matrix.abi }} 2>&1 | tee build-${{ matrix.abi }}.log; then
+            python3 - "${{ matrix.abi }}" "build-${{ matrix.abi }}.log" <<'PY'
+          import pathlib, sys
+          abi, path = sys.argv[1], sys.argv[2]
+          text = pathlib.Path(path).read_text(errors="replace")
+          lines = [l for l in text.splitlines() if any(k in l.lower() for k in ("error", "failed", "cannot", "unexpected"))][:40] or text.splitlines()[-40:]
+          print(f"::error title=openwrt {abi} failed::" + "\n".join(lines).replace("%", "%25").replace("\n", "%0A")[:60000])
+          PY
+            exit 1
+          fi
 
       - uses: actions/upload-artifact@v4
         with:

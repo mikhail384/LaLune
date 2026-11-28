@@ -127,7 +127,13 @@ fetch_wdtt_core() {
     for level in 1 2 3; do
         if curl -fL --retry 2 --retry-delay 2 -o "$work/wdtt-core" "$url"; then
             chmod 755 "$work/wdtt-core"
-            verify_elf "$work/wdtt-core"
+            # verify_elf определён только в build-multiarch.sh, поэтому здесь
+            # проверяем то же самое напрямую: это ELF без интерпретатора.
+            if ! readelf -h "$work/wdtt-core" | grep -q 'ELF' ||
+               readelf -l "$work/wdtt-core" | grep -q 'INTERP'; then
+                printf 'WDTToR core is not a static ELF: %s\n' "$work/wdtt-core" >&2
+                exit 1
+            fi
             log "WDTToR core OK ($(wc -c < "$work/wdtt-core") bytes)"
             WDTT_BUNDLED=1
             return 0
