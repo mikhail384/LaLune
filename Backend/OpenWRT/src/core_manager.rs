@@ -428,7 +428,10 @@ pub fn build_args(
     use crate::bundled_cores::{available, Core};
     let kind = Core::parse(&config.protocol).unwrap_or(Core::Csqtt);
 
-    // WDTToR: ядро само поднимает WireGuard и TUN, поэтому аргументы свои.
+    // ToTS и WDTToR — самостоятельные ядра со своим набором флагов.
+    if kind == Core::Tots {
+        return build_tots_args(config, settings);
+    }
     if kind == Core::Wdtt {
         return build_wdtt_args(config, settings);
     }
@@ -570,6 +573,118 @@ fn build_wdtt_args(
     if !settings.wdtt_device_id.trim().is_empty() {
         args.push("--device-id".into());
         args.push(settings.wdtt_device_id.trim().into());
+    }
+    args
+}
+
+/// Аргументы ядра ToTS для OpenWRT.
+///
+/// Ядро получает те же флаги, что и на десктопе: разобранный `tots://` URI
+/// раскладывается на явные параметры, а `provider_data` собирается из конфига
+/// с учётом включённых провайдеров и ручных данных.
+fn build_tots_args(
+    config: &crate::config::ConfigItem,
+    settings: &crate::settings::Settings,
+) -> Vec<String> {
+    let parsed = match crate::tots::parse_uri(&config.raw_link) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            log::error!("[ToTS] не удалось разобрать ссылку: {error:#}");
+            return Vec::new();
+        }
+    };
+
+    let mut provider_data = parsed.provider_data.clone();
+    for (name, enabled) in [
+        ("vk", settings.tots_vk_enabled),
+        ("jazz", settings.tots_jazz_enabled),
+        ("ya-docs", settings.tots_ya_docs_enabled),
+        ("mail-docs", settings.tots_mail_docs_enabled),
+        ("cups", settings.tots_cups_enabled),
+    ] {
+        if !enabled {
+            provider_data.remove(name);
+        }
+    }
+
+    if settings.tots_vk_enabled && !settings.tots_vk_call_links.trim().is_empty() {
+        let links = crate::tots::vk_call_links(&settings.tots_vk_call_links);
+        if !links.is_empty() {
+            let mut vk = provider_data
+                .get("vk")
+                .and_then(serde_json::Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            vk.insert("vk_call_links".into(), serde_json::json!(links));
+            provider_data.insert("vk".into(), serde_json::Value::Object(vk));
+        }
+    }
+
+    for (name, raw, enabled) in [
+        ("jazz", settings.tots_jazz_data.as_str(), settings.tots_jazz_enabled),
+        ("ya-docs", settings.tots_ya_docs_data.as_str(), settings.tots_ya_docs_enabled),
+        ("mail-docs", settings.tots_mail_docs_data.as_str(), settings.tots_mail_docs_enabled),
+        ("cups", settings.tots_cups_data.as_str(), settings.tots_cups_enabled),
+    ] {
+        if enabled {
+            if let Some(value) = crate::tots::parse_json_object(raw) {
+                provider_data.insert(name.into(), value);
+            }
+        }
+    }
+
+    if settings.tots_jazz_enabled {
+        if let Some(jazz) = provider_data.get_mut("jazz") {
+            if let Some(object) = jazz.as_object_mut() {
+                if !settings.tots_jazz_room_name.trim().is_empty() {
+                    object.insert(
+                        "name".into(),
+                        serde_json::Value::String(settings.tots_jazz_room_name.trim().into()),
+                    );
+                }
+            }
+        }
+    }
+
+    let workers = settings.tots_workers.clamp(1, 256) as usize;
+    let provider = if provider_data.contains_key(&parsed.provider) {
+        parsed.provider.clone()
+    } else {
+        ["vk", "jazz", "ya-docs", "mail-docs", "cups"]
+            .into_iter()
+            .find(|name| provider_data.contains_key(*name))
+            .unwrap_or("vk")
+            .to_string()
+    };
+
+    let percentages = crate::tots::normalize_percentages(&[
+        ("vk", settings.tots_vk_enabled, settings.tots_vk_percent, provider_data.contains_key("vk")),
+        ("jazz", settings.tots_jazz_enabled, settings.tots_jazz_percent, provider_data.contains_key("jazz")),
+        ("ya-docs", settings.tots_ya_docs_enabled, settings.tots_ya_docs_percent, provider_data.contains_key("ya-docs")),
+        ("mail-docs", settings.tots_mail_docs_enabled, settings.tots_mail_docs_percent, provider_data.contains_key("mail-docs")),
+        ("cups", settings.tots_cups_enabled, settings.tots_cups_percent, provider_data.contains_key("cups")),
+    ]);
+
+    let mut args: Vec<String> = vec![
+        "--peer".into(), parsed.peer,
+        "--webrtc-port".into(), parsed.webrtc_port.to_string(),
+        "--turn-port".into(), parsed.turn_port.to_string(),
+        "--password".into(), parsed.password,
+        "--device-id".into(), parsed.device_id,
+        "--provider".into(), provider,
+        "--provider-data".into(), serde_json::Value::Object(provider_data).to_string(),
+        "--n".into(), workers.to_string(),
+        "--mtu".into(), settings.tots_mtu.clamp(576, 1400).to_string(),
+        // Интерфейс создаёт само ядро: на роутере есть root и /dev/net/tun.
+        "--tun-name".into(), crate::vpn::TOTS_TUN_NAME.into(),
+        "--tun-default-route".into(),
+    ];
+    if let Some(pct) = percentages {
+        args.push("--workers_percent".into());
+        args.push(pct.to_string());
+    }
+    if settings.tots_relay_only {
+        args.push("--relay-only".into());
     }
     args
 }

@@ -14,25 +14,31 @@ pub enum Core {
     Csqtt,
     Csqttr,
     Legacy,
+    /// ToTS — multi-provider транспорт (VK, Jazz, Ya Docs, Mail Docs, Cups).
+    Tots,
     /// WDTToR — Rust-клиент WDTT (WireGuard поверх TURN/DTLS).
     Wdtt,
 }
 
 impl Core {
-    pub const ALL: [Self; 4] = [Self::Csqtt, Self::Csqttr, Self::Legacy, Self::Wdtt];
+    pub const ALL: [Self; 5] =
+        [Self::Csqtt, Self::Csqttr, Self::Legacy, Self::Tots, Self::Wdtt];
 
     pub fn parse(id: &str) -> Option<Self> {
         match id.trim().to_ascii_uppercase().as_str() {
             "CSQTT" | "CSQTT 2.5.1" => Some(Self::Csqtt),
             "CSQTTR" | "CSQTTR 2.5.2" => Some(Self::Csqttr),
             "CSQTT 2.1.9" => Some(Self::Legacy),
+            "TOTS" => Some(Self::Tots),
             "WDTTOR" | "WDTT" | "WDTTO" => Some(Self::Wdtt),
             _ => None,
         }
     }
 
     pub fn supported(id: &str) -> Option<Self> {
-        Self::parse(id).filter(|core| *core == Self::Csqtt || available())
+        // Каждый протокол доступен ровно тогда, когда его ядро есть на
+        // устройстве: вшито в архив или залито в LEAN_DIR.
+        Self::parse(id).filter(|core| core.bundled())
     }
 
     pub fn id(self) -> &'static str {
@@ -40,6 +46,7 @@ impl Core {
             Self::Csqtt => "CSQTT",
             Self::Csqttr => "CSQTTR",
             Self::Legacy => "CSQTT 2.1.9",
+            Self::Tots => "ToTS",
             Self::Wdtt => "WDTToR",
         }
     }
@@ -49,12 +56,13 @@ impl Core {
             Self::Csqtt => "csqtt-client",
             Self::Csqttr => "csqttr-client",
             Self::Legacy => "csqtt-219",
+            Self::Tots => "tots-openwrt",
             Self::Wdtt => "wdtt-core",
         }
     }
 
     pub fn password_env(self) -> bool {
-        // WDTToR получает пароль флагом --password, а не через окружение.
+        // ToTS и WDTToR получают пароль флагом --password, а не через окружение.
         self == Self::Csqttr || (self == Self::Csqtt && available())
     }
 }
@@ -66,8 +74,9 @@ impl Core {
     /// Есть ли это ядро в вшитом архиве или на флеше.
     ///
     /// Общий `available()` отвечает на вопрос «есть ли хоть одно ядро», а
-    /// список протоколов должен показывать только те, что реально запустятся:
-    /// например, для mipsel сборки WDTToR не существует.
+    /// список протоколов должен показывать только те, что реально запустятся.
+    /// Все пять ядер собираются из исходников для каждого ABI, поэтому в
+    /// обычной сборке доступны все.
     pub fn bundled(self) -> bool {
         let Some(bytes) = BUNDLE else {
             return Path::new(LEAN_DIR).join(self.filename()).is_file();

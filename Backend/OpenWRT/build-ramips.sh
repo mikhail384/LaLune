@@ -50,6 +50,9 @@ export CARGO_ENCODED_RUSTFLAGS="${rustflags%$'\037'}"
 
 rust_toolchain=nightly-2026-11-06
 rust_target=mipsel-unknown-linux-musl
+# mipsel — tier-3: std собираем из исходников, как и для остальных ядер.
+build_std=1
+abi=ramips
 rustup toolchain install "$rust_toolchain" --profile minimal --component rust-src
 
 build() {
@@ -103,9 +106,15 @@ build_core csqttr-core afab4c1f279c3e132699130b95184e628f7dda1c \
 build_core csqtt-core eda00fce6343430b40413da01791946dccb9c6ff \
     f1c7427b4bd67ecb181c2a01eeb3455bb8959bedbe91dd29ef08650a7c10f530 csqtt-219
 
+# ToTS и WDTToR собираются из исходников тем же тулчейном, что и ядра CSQTT.
+source "$backend_dir/build-thirdparty-cores.sh"
+build_tots_core "$work/tots-openwrt"
+build_wdtt_core "$work/wdtt-core"
+
 (
     cd "$work"
-    zip -9 -X openwrt-cores.zip csqtt-client csqttr-client csqtt-219
+    zip -9 -X openwrt-cores.zip \
+        csqtt-client csqttr-client csqtt-219 tots-openwrt wdtt-core
     unzip -t openwrt-cores.zip
 )
 export LALUNE_OPENWRT_CORES="$work/openwrt-cores.zip"
@@ -129,6 +138,6 @@ cp "$LALUNE_OPENWRT_CORES" output/lalune-openwrt-cores-ramips.zip
     verify_mipsel "$lean_binary"
     install -m 755 "$lean_binary" output/lalune-openwrt-backend-ramips-lean
 )
-for core in csqtt-client csqttr-client csqtt-219; do
+for core in csqtt-client csqttr-client csqtt-219 tots-openwrt wdtt-core; do
     install -m 755 "$work/$core" "output/$core-ramips"
 done

@@ -20,6 +20,7 @@ mod panel;
 mod settings;
 mod socks5;
 mod state;
+mod tots;
 mod vk;
 mod vpn;
 

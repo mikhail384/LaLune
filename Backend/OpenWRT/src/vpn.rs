@@ -21,6 +21,10 @@ use std::time::Instant;
 use crate::events::{Event, EventBus};
 
 pub const CORE_LISTEN_PORT: u16 = 52230;
+/// ToTS создаёт и владеет своим интерфейсом (как и на десктопе).
+pub const TOTS_TUN_NAME: &str = "tots0";
+/// WDTToR создаёт и владеет своим интерфейсом.
+pub const WDTT_TUN_NAME: &str = "wdtt0";
 pub const TUN_NAME: &str = "lalune0";
 pub const TUN_MTU: u16 = 1300;
 pub const DEFAULT_TUN_IP: &str = "10.66.67.12";

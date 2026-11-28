@@ -113,48 +113,16 @@ build_core csqttr-core afab4c1f279c3e132699130b95184e628f7dda1c \
 build_core csqtt-core eda00fce6343430b40413da01791946dccb9c6ff \
     f1c7427b4bd67ecb181c2a01eeb3455bb8959bedbe91dd29ef08650a7c10f530 csqtt-219
 
-# WDTToR публикуется готовым бинарником (Rust, musl static), поэтому не
-# собирается из исходников: скачиваем подходящий ABI и кладём в тот же архив.
-fetch_wdtt_core() {
-    local asset=$1
-    if [ -z "$asset" ]; then
-        log "WDTToR core is not published for this ABI; skipping"
-        return 0
-    fi
-    local url="https://github.com/Endlad2/wdtt-rslib/releases/latest/download/$asset"
-    log "downloading WDTToR core: $url"
-    local level
-    for level in 1 2 3; do
-        if curl -fL --retry 2 --retry-delay 2 -o "$work/wdtt-core" "$url"; then
-            chmod 755 "$work/wdtt-core"
-            # verify_elf определён только в build-multiarch.sh, поэтому здесь
-            # проверяем то же самое напрямую: это ELF без интерпретатора.
-            if ! readelf -h "$work/wdtt-core" | grep -q 'ELF' ||
-               readelf -l "$work/wdtt-core" | grep -q 'INTERP'; then
-                printf 'WDTToR core is not a static ELF: %s\n' "$work/wdtt-core" >&2
-                exit 1
-            fi
-            log "WDTToR core OK ($(wc -c < "$work/wdtt-core") bytes)"
-            WDTT_BUNDLED=1
-            return 0
-        fi
-        sleep 2
-    done
-    printf 'Cannot download the WDTToR core (%s)\n' "$asset" >&2
-    exit 1
-}
-WDTT_BUNDLED=0
-fetch_wdtt_core "$wdtt_asset"
-
-if [ "$WDTT_BUNDLED" = 1 ]; then
-    cores="csqtt-client csqttr-client csqtt-219 wdtt-core"
-else
-    cores="csqtt-client csqttr-client csqtt-219"
-fi
+# ToTS и WDTToR собираются из исходников тем же тулчейном, что и ядра CSQTT:
+# так на роутер попадают ядра, собранные именно под этот ABI.
+source "$backend_dir/build-thirdparty-cores.sh"
+build_tots_core "$work/tots-openwrt"
+build_wdtt_core "$work/wdtt-core"
 
 (
     cd "$work"
-    zip -9 -X openwrt-cores.zip $cores
+    zip -9 -X openwrt-cores.zip \
+        csqtt-client csqttr-client csqtt-219 tots-openwrt wdtt-core
     unzip -t openwrt-cores.zip
 )
 export LALUNE_OPENWRT_CORES="$work/openwrt-cores.zip"

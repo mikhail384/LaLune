@@ -376,7 +376,7 @@ jobs:
           done
           jq -e '.ok and .platform == "openwrt" and .arch == "aarch64"' "$test_home/ping.json"
           curl -fsS http://127.0.0.1:1062/core/protocols | jq -e \
-            'all(.[]; .bundled == true) and (map(.id) | sort == ["CSQTT", "CSQTT 2.1.9", "CSQTTR", "WDTToR"])'
+            'all(.[]; .bundled == true) and (map(.id) | sort == ["CSQTT", "CSQTT 2.1.9", "CSQTTR", "ToTS", "WDTToR"])'
       - uses: actions/upload-artifact@v4
         with:
           name: Output-OpenWRT
@@ -389,7 +389,8 @@ jobs:
     name: OpenWRT Backend (ramips)
     needs: prepare-version
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # Пять ядер из исходников под tier-3 цель: сборка std плюс ToTS/WDTToR.
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
         with:
@@ -421,7 +422,7 @@ jobs:
           done
           jq -e '.ok and .platform == "openwrt" and .arch == "mips"' "$test_home/ping.json"
           curl -fsS http://127.0.0.1:1062/core/protocols | jq -e \
-            'all(.[]; .bundled == true) and (map(.id) | sort == ["CSQTT", "CSQTT 2.1.9", "CSQTTR"])'
+            'all(.[]; .bundled == true) and (map(.id) | sort == ["CSQTT", "CSQTT 2.1.9", "CSQTTR", "ToTS", "WDTToR"])'
           test "$(curl -fsS -o "$test_home/panel.html" -w '%{http_code}' http://127.0.0.1:1062/panel)" = 200
           grep -F 'href="/panel/panel.css"' "$test_home/panel.html"
           grep -F 'src="/panel/panel.js"' "$test_home/panel.html"
@@ -438,6 +439,8 @@ jobs:
             Backend/OpenWRT/output/csqtt-client-ramips
             Backend/OpenWRT/output/csqttr-client-ramips
             Backend/OpenWRT/output/csqtt-219-ramips
+            Backend/OpenWRT/output/tots-openwrt-ramips
+            Backend/OpenWRT/output/wdtt-core-ramips
           if-no-files-found: error
           compression-level: 0
 
@@ -1046,8 +1049,9 @@ jobs:
           cp release/openwrt-ramips/lalune-openwrt-backend-ramips release/assets/
           cp release/openwrt-ramips/lalune-openwrt-cores-ramips.zip release/assets/
           cp release/openwrt-ramips/lalune-openwrt-backend-ramips-lean release/assets/
-          for core in csqtt-client csqttr-client csqtt-219; do cp "release/openwrt-ramips/$core-ramips" release/assets/; done
-          # WDTToR под mipsel не выпускается, поэтому отдельного файла нет.
+          for core in csqtt-client csqttr-client csqtt-219 tots-openwrt wdtt-core; do
+            cp "release/openwrt-ramips/$core-ramips" release/assets/
+          done
           for abi in x86_64 i386 armv7 armv5 mips; do
             cp "release/openwrt-multi/lalune-openwrt-backend-$abi" release/assets/
             cp "release/openwrt-multi/lalune-openwrt-cores-$abi.zip" release/assets/

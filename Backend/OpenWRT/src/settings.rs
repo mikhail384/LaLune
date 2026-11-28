@@ -39,6 +39,34 @@ pub struct Settings {
     pub auto_api_workers: i32,
 
 
+    // -------- ToTS --------
+    /// Число воркеров ToTS.
+    pub tots_workers: i32,
+    pub tots_mtu: i32,
+    pub tots_relay_only: bool,
+    /// Какие провайдеры включены.
+    pub tots_vk_enabled: bool,
+    pub tots_jazz_enabled: bool,
+    pub tots_ya_docs_enabled: bool,
+    pub tots_mail_docs_enabled: bool,
+    pub tots_cups_enabled: bool,
+    /// Доли воркеров по провайдерам (нормализуются до 100).
+    pub tots_vk_percent: i32,
+    pub tots_jazz_percent: i32,
+    pub tots_ya_docs_percent: i32,
+    pub tots_mail_docs_percent: i32,
+    pub tots_cups_percent: i32,
+    /// Откуда брать VK-звонки: manual (из конфига) или autoApi.
+    pub tots_vk_auth_mode: String,
+    pub tots_vk_call_links: String,
+    pub tots_jazz_room_name: String,
+    pub tots_jazz_random_name: bool,
+    /// provider_data провайдеров, введённые вручную.
+    pub tots_jazz_data: String,
+    pub tots_ya_docs_data: String,
+    pub tots_mail_docs_data: String,
+    pub tots_cups_data: String,
+
     // -------- WDTToR (WDTT) --------
     /// Число сессий-воркеров (кратно 9).
     pub wdtt_workers: i32,
@@ -64,6 +92,27 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            tots_workers: 8,
+            tots_mtu: 1200,
+            tots_relay_only: false,
+            tots_vk_enabled: true,
+            tots_jazz_enabled: true,
+            tots_ya_docs_enabled: true,
+            tots_mail_docs_enabled: true,
+            tots_cups_enabled: true,
+            tots_vk_percent: 100,
+            tots_jazz_percent: 0,
+            tots_ya_docs_percent: 0,
+            tots_mail_docs_percent: 0,
+            tots_cups_percent: 0,
+            tots_vk_auth_mode: "manual".into(),
+            tots_vk_call_links: String::new(),
+            tots_jazz_room_name: String::new(),
+            tots_jazz_random_name: true,
+            tots_jazz_data: String::new(),
+            tots_ya_docs_data: String::new(),
+            tots_mail_docs_data: String::new(),
+            tots_cups_data: String::new(),
             wdtt_workers: 9,
             wdtt_obfs: "audio".into(),
             wdtt_vk_auth_mode: "manual".into(),
@@ -104,6 +153,17 @@ impl Settings {
     pub fn normalize(&mut self) {
         if self.workers < MIN_WORKERS { self.workers = MIN_WORKERS; }
         if self.workers > MAX_WORKERS { self.workers = MAX_WORKERS; }
+
+        self.tots_workers = self.tots_workers.clamp(1, 256);
+        self.tots_mtu = self.tots_mtu.clamp(576, 1400);
+        self.tots_vk_percent = self.tots_vk_percent.clamp(0, 100);
+        self.tots_jazz_percent = self.tots_jazz_percent.clamp(0, 100);
+        self.tots_ya_docs_percent = self.tots_ya_docs_percent.clamp(0, 100);
+        self.tots_mail_docs_percent = self.tots_mail_docs_percent.clamp(0, 100);
+        self.tots_cups_percent = self.tots_cups_percent.clamp(0, 100);
+        if self.tots_vk_auth_mode != "autoApi" {
+            self.tots_vk_auth_mode = "manual".into();
+        }
 
         // WDTToR: воркеры кратны 9 (одна группа), обфускация audio/video.
         self.wdtt_workers = self.wdtt_workers.clamp(9, 108);

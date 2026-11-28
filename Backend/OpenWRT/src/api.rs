@@ -526,13 +526,42 @@ async fn vpn_connect(State(state): State<Arc<AppState>>, Json(body): Json<Connec
     }
 }
 
+/// Подставляет хеши VK-звонков в ToTS-конфиг как ссылки на звонки.
+///
+/// ToTS ждёт `provider_data.vk.vk_call_links`, а не список хешей: хеш без
+/// ссылки ядро не примет.
+fn settings_vk_links(config: &mut ConfigItem, hashes: &str) {
+    let links = crate::tots::vk_call_links(hashes);
+    if links.is_empty() {
+        return;
+    }
+    // Ссылка хранит весь конфиг, поэтому пересобираем её с новыми ссылками.
+    if let Ok(mut uri) = crate::tots::parse_uri(&config.raw_link) {
+        let mut vk = uri
+            .provider_data
+            .get("vk")
+            .and_then(serde_json::Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        vk.insert("vk_call_links".into(), serde_json::json!(links));
+        uri.provider_data.insert("vk".into(), serde_json::Value::Object(vk));
+        if let Some(encoded) = crate::tots::encode_uri(&uri) {
+            config.raw_link = encoded;
+        }
+    }
+}
+
 async fn connect_profile(state: &Arc<AppState>, config: ConfigItem, temporary: bool) -> axum::response::Response {
     let _operation = state.vpn.operation.lock().await;
     let Some(kind) = Core::supported(&config.protocol) else {
         return err(400, "Протокол не поддерживается этой сборкой");
     };
-    if config.peer.trim().is_empty() || config.password.is_empty() {
+    // ToTS получает всё из ссылки tots://, а WDTToR/CSQTT — адрес и пароль.
+    if kind != Core::Tots && (config.peer.trim().is_empty() || config.password.is_empty()) {
         return err(400, "Укажите адрес и пароль в профиле");
+    }
+    if kind == Core::Tots && config.raw_link.trim().is_empty() {
+        return err(400, "ToTS-профиль должен содержать ссылку tots://");
     }
     let settings = state.settings.read().clone();
     let mut token = if matches!(settings.auth_mode.as_str(), "autoApi" | "autoVk") {
@@ -582,17 +611,36 @@ async fn connect_profile(state: &Arc<AppState>, config: ConfigItem, temporary: b
             }
         }
     }
-    let workers = core_manager::effective_workers(&settings);
-    if settings.auto_workers {
+    // У каждого протокола своё число воркеров: CSQTT считает по своим
+    // настройкам, ToTS и WDTToR — по своим.
+    let workers = match kind {
+        Core::Tots => settings.tots_workers.clamp(1, 256),
+        Core::Wdtt => settings.wdtt_workers.clamp(9, 108),
+        _ => core_manager::effective_workers(&settings),
+    };
+    if settings.auto_workers && !matches!(kind, Core::Tots | Core::Wdtt) {
         state.log(format!("[VPN] Автоматический выбор воркеров: {workers}"));
     }
-    let auto_calls = if settings.auth_mode == "autoApi" {
+
+    // АвтоAPI создаёт VK-звонки перед запуском ядра. У ToTS и WDTToR свой
+    // переключатель, у CSQTT — общий authMode.
+    let wants_auto_api = match kind {
+        Core::Tots => settings.tots_vk_enabled && settings.tots_vk_auth_mode == "autoApi",
+        Core::Wdtt => settings.wdtt_vk_auth_mode == "autoApi",
+        _ => settings.auth_mode == "autoApi",
+    };
+    let auto_calls = if wants_auto_api {
         state.log("[VK] AutoAPI: запрашиваю хеши звонков");
         match vk::ActiveCalls::start(
             token.take().expect("AutoAPI token checked"), workers, settings.auto_api_workers,
         ).await {
             Ok((calls, hashes)) => {
-                runtime_config.hashes = hashes;
+                if kind == Core::Tots {
+                    // ToTS принимает VK-ссылки в provider_data, а не хеши.
+                    settings_vk_links(&mut runtime_config, &hashes);
+                } else {
+                    runtime_config.hashes = hashes;
+                }
                 Some(calls)
             }
             Err(vk::AutoApiError::InvalidToken) => return err(401, "VK-токен недействителен"),
@@ -603,6 +651,9 @@ async fn connect_profile(state: &Arc<AppState>, config: ConfigItem, temporary: b
         None
     };
     let args = core_manager::build_args(&runtime_config, &settings, vpn::CORE_LISTEN_PORT, workers);
+    if args.is_empty() {
+        return err(500, "Не удалось подготовить аргументы ядра");
+    }
     let core_path = bundle_core.as_ref().map(|core| core.path()).unwrap_or(&state.core_path);
     let core = match CoreProcess::spawn(core_path, &args, state.core_logs.clone(), state.events.clone(),
         kind.password_env().then_some(runtime_config.password.as_str()), token.as_deref()).await {
