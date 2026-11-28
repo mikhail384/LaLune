@@ -278,15 +278,18 @@ if [ "$ok" != 1 ]; then
     fail "backend did not answer /ping"
 fi
 curl -fsS http://127.0.0.1:1062/core/protocols -o "$smoke_home/protocols.json"
-python3 - "$smoke_home" <<'PY'
+python3 - "$smoke_home" "$WDTT_BUNDLED" <<'PY'
 import json, sys
-home = sys.argv[1]
+home, wdtt_bundled = sys.argv[1], sys.argv[2] == "1"
 ping = json.load(open(home + "/ping.json"))
 assert ping.get("ok") and ping.get("platform") == "openwrt", ping
 protocols = json.load(open(home + "/protocols.json"))
 ids = sorted(p["id"] for p in protocols)
 assert all(p.get("bundled") for p in protocols), protocols
-assert ids == ["CSQTT", "CSQTT 2.1.9", "CSQTTR"], ids
+# WDTToR вшит только для тех ABI, под которые он публикуется.
+expected = ["CSQTT", "CSQTT 2.1.9", "CSQTTR"] + (["WDTToR"] if wdtt_bundled else [])
+expected.sort()
+assert ids == expected, (ids, expected)
 print("smoke OK:", ping.get("arch"), ids)
 PY
 cleanup_smoke
