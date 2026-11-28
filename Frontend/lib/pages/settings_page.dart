@@ -1103,6 +1103,20 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           style: TextStyle(fontSize: 11.5, height: 1.4,
               color: Colors.white.withOpacity(0.55)),
         ),
+        const SizedBox(height: 12),
+        Text(
+          'Кнопка в шторке',
+          style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600,
+              color: Colors.white.withOpacity(0.85)),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Потяните шторку дважды, нажмите «Изменить» (карандаш) и перетащите '
+          'плитку LaLune в панель. Одно нажатие подключает последний выбранный '
+          'конфиг, повторное — отключает.',
+          style: TextStyle(fontSize: 11.5, height: 1.4,
+              color: Colors.white.withOpacity(0.55)),
+        ),
       ],
     );
   }

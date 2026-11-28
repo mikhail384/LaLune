@@ -76,6 +76,24 @@
                 android:value="vpn_tunnel" />
         </service>
 
+        <!-- Плитка Quick Settings: запуск последнего выбранного конфига.
+             exported=true обязателен: сервис привязывает системная панель. -->
+        <service
+            android:name="com.lalune.lalune.LaLuneTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_lalune_tile"
+            android:label="LaLune"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <!-- Android 13+: одно нажатие переключает состояние, а не
+                 открывает диалог подробностей. -->
+            <meta-data
+                android:name="android.service.quicksettings.TOGGLEABLE_TILE"
+                android:value="true" />
+        </service>
+
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />

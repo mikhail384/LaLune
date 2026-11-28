@@ -15,6 +15,8 @@
 package com.lalune.lalune
 
 import android.Manifest
+import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.VpnService
@@ -68,6 +70,135 @@ class MainActivity : FlutterActivity() {
         private const val PING_FAILURES_BEFORE_RESTART = 3
         private const val PING_TIMEOUT_MS = 3000
         private val backendMutex = Mutex()
+
+        /**
+         * Запускает (или проверяет) backend без Activity.
+         *
+         * Нужно Quick Settings плитке: система создаёт её сервис в процессе
+         * приложения, но Activity может отсутствовать. Возвращает true, если
+         * backend отвечает на /ping.
+         */
+        suspend fun ensureBackendFromService(context: Context): Boolean {
+            val app = context.applicationContext
+            ensureBackendImpl(app, null, "tile")
+            // HTTP-сервер поднимается в отдельном потоке и может ещё
+            // освобождать порт после перезапуска: ждём готовности, а не
+            // считаем первый же отказ окончательным.
+            repeat(20) {
+                if (isBackendAlive(app)) return true
+                delay(250)
+            }
+            return false
+        }
+
+        /**
+         * Проверка живости HTTP-сервера. Вынесена в companion: её используют и
+         * Activity-watchdog, и плитка.
+         */
+        fun isBackendAlive(context: Context): Boolean {
+            var conn: HttpURLConnection? = null
+            val port = Backend.portFor(context.packageName)
+            return try {
+                conn = URL("http://127.0.0.1:$port/ping").openConnection() as HttpURLConnection
+                conn.connectTimeout = PING_TIMEOUT_MS
+                conn.readTimeout = PING_TIMEOUT_MS
+                conn.requestMethod = "GET"
+                if (conn.responseCode !in 200..299) return false
+                val body = conn.inputStream.bufferedReader().use { it.readText() }
+                val pkg = JSONObject(body).optString("package", "")
+                pkg.isEmpty() || pkg == context.packageName
+            } catch (_: Exception) {
+                false
+            } finally {
+                try { conn?.disconnect() } catch (_: Exception) {}
+            }
+        }
+
+        /**
+         * Общая реализация запуска/перезапуска backend.
+         *
+         * `activity` может быть null (плитка Quick Settings): тогда backend
+         * стартует без привязки к экрану, а VPN-согласие запрашивает сама
+         * плитка.
+         */
+        private suspend fun ensureBackendImpl(context: Context, activity: Activity?, reason: String) {
+            if (!backendMutex.tryLock()) {
+                Log.d(TAG, "ensureBackend($reason): busy, skip")
+                return
+            }
+            try {
+                val now = SystemClock.elapsedRealtime()
+                var current = sharedBackend
+
+                if (current != null) {
+                    if (current.httpReady && isBackendAlive(context)) {
+                        if (restartCount != 0) Log.i(TAG, "backend recovered after $restartCount restart(s)")
+                        if (pingFailures != 0) Log.i(TAG, "ping recovered after $pingFailures failure(s), no restart needed")
+                        restartCount = 0
+                        pingFailures = 0
+                        if (activity != null) current.attachActivity(activity)
+                        return
+                    }
+                    if (current.httpReady) {
+                        // Готовый backend не ответил: перезапускаем только после
+                        // нескольких неудач подряд, а не по одному таймауту.
+                        pingFailures++
+                        if (pingFailures < PING_FAILURES_BEFORE_RESTART) {
+                            Log.w(TAG, "ping failed ($pingFailures/$PING_FAILURES_BEFORE_RESTART), waiting")
+                            return
+                        }
+                        // Сервер жив (accept-цикл работает), просто не ответил: это
+                        // типично для энергосбережения/выключенного экрана. Перезапуск
+                        // оборвал бы работающий VPN, поэтому в этих случаях не трогаем.
+                        val screenOn = (context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager)
+                            ?.isInteractive ?: true
+                        if (LaLuneVpnService.snapshotConnected || !screenOn) {
+                            if (pingFailures == PING_FAILURES_BEFORE_RESTART) {
+                                Log.w(
+                                    TAG,
+                                    "ping failing but server is up; no restart " +
+                                        "(vpn=${LaLuneVpnService.snapshotConnected}, screenOn=$screenOn)"
+                                )
+                            }
+                            return
+                        }
+                    }
+                    val age = now - backendStartedAt
+                    if (current.httpError.isEmpty() && !current.httpReady && age < STARTUP_GRACE_MS) {
+                        Log.d(TAG, "ensureBackend($reason): starting, ${age}ms < grace")
+                        return
+                    }
+                    // Backoff: 3s, 6s, 12s ... 60s между попытками.
+                    val wait = minOf(BACKOFF_MAX_MS, BACKOFF_BASE_MS shl minOf(restartCount, 5))
+                    if (now - lastRestartAt < wait) {
+                        Log.d(TAG, "ensureBackend($reason): backoff ${wait}ms")
+                        return
+                    }
+                    Log.w(
+                        TAG,
+                        "backend not healthy (reason=$reason ready=${current.httpReady} " +
+                            "err='${current.httpError}', restart #${restartCount + 1})"
+                    )
+                    try { current.stop() } catch (e: Exception) {
+                        Log.w(TAG, "stop failed: ${e.message}")
+                    }
+                    restartCount++
+                    pingFailures = 0
+                    lastRestartAt = now
+                }
+
+                Log.i(TAG, "starting backend (reason=$reason, port=${Backend.portFor(context.packageName)})")
+                val fresh = Backend(context.applicationContext)
+                if (activity != null) fresh.attachActivity(activity)
+                fresh.run()
+                sharedBackend = fresh
+                backendStartedAt = SystemClock.elapsedRealtime()
+            } catch (e: Exception) {
+                Log.e(TAG, "ensureBackend($reason) failed: ${e.message}", e)
+            } finally {
+                backendMutex.unlock()
+            }
+        }
     }
 
     private var methodChannel: MethodChannel? = null
@@ -94,7 +225,7 @@ class MainActivity : FlutterActivity() {
                 "getApiPort" -> result.success(apiPort)
                 "isBackendAlive" -> {
                     scope.launch {
-                        val alive = isBackendAlive()
+                        val alive = isBackendAlive(applicationContext)
                         runOnUiThread { result.success(alive) }
                     }
                 }
@@ -186,106 +317,12 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    /** /ping отвечает именно НАШ backend (проверяем package), а не чужой. */
-    private fun isBackendAlive(): Boolean {
-        var conn: HttpURLConnection? = null
-        return try {
-            conn = URL("http://127.0.0.1:$apiPort/ping").openConnection() as HttpURLConnection
-            conn.connectTimeout = PING_TIMEOUT_MS
-            conn.readTimeout = PING_TIMEOUT_MS
-            conn.requestMethod = "GET"
-            if (conn.responseCode !in 200..299) return false
-            val body = conn.inputStream.bufferedReader().use { it.readText() }
-            val pkg = JSONObject(body).optString("package", "")
-            pkg.isEmpty() || pkg == packageName
-        } catch (_: Exception) {
-            false
-        } finally {
-            try { conn?.disconnect() } catch (_: Exception) {}
-        }
-    }
-
     /**
      * Единственная точка запуска/перезапуска backend.
      * Идемпотентна и single-flight: если другой вызов уже работает — выходим.
      */
     private suspend fun ensureBackend(reason: String) {
-        if (!backendMutex.tryLock()) {
-            Log.d(TAG, "ensureBackend($reason): busy, skip")
-            return
-        }
-        try {
-            val now = SystemClock.elapsedRealtime()
-            var current = sharedBackend
-
-            if (current != null) {
-                if (current.httpReady && isBackendAlive()) {
-                    if (restartCount != 0) Log.i(TAG, "backend recovered after $restartCount restart(s)")
-                    if (pingFailures != 0) Log.i(TAG, "ping recovered after $pingFailures failure(s), no restart needed")
-                    restartCount = 0
-                    pingFailures = 0
-                    current.attachActivity(this)
-                    return
-                }
-                if (current.httpReady) {
-                    // Готовый backend не ответил: перезапускаем только после
-                    // нескольких неудач подряд, а не по одному таймауту.
-                    pingFailures++
-                    if (pingFailures < PING_FAILURES_BEFORE_RESTART) {
-                        Log.w(TAG, "ping failed ($pingFailures/$PING_FAILURES_BEFORE_RESTART), waiting")
-                        return
-                    }
-                    // Сервер жив (accept-цикл работает), просто не ответил: это
-                    // типично для энергосбережения/выключенного экрана. Перезапуск
-                    // оборвал бы работающий VPN, поэтому в этих случаях не трогаем.
-                    val screenOn = (getSystemService(POWER_SERVICE) as? android.os.PowerManager)
-                        ?.isInteractive ?: true
-                    if (LaLuneVpnService.snapshotConnected || !screenOn) {
-                        if (pingFailures == PING_FAILURES_BEFORE_RESTART) {
-                            Log.w(
-                                TAG,
-                                "ping failing but server is up; no restart " +
-                                    "(vpn=${LaLuneVpnService.snapshotConnected}, screenOn=$screenOn)"
-                            )
-                        }
-                        return
-                    }
-                }
-                val age = now - backendStartedAt
-                if (current.httpError.isEmpty() && !current.httpReady && age < STARTUP_GRACE_MS) {
-                    Log.d(TAG, "ensureBackend($reason): starting, ${age}ms < grace")
-                    return
-                }
-                // Backoff: 3s, 6s, 12s ... 60s между попытками.
-                val wait = minOf(BACKOFF_MAX_MS, BACKOFF_BASE_MS shl minOf(restartCount, 5))
-                if (now - lastRestartAt < wait) {
-                    Log.d(TAG, "ensureBackend($reason): backoff ${wait}ms")
-                    return
-                }
-                Log.w(
-                    TAG,
-                    "backend not healthy (reason=$reason ready=${current.httpReady} " +
-                        "err='${current.httpError}', restart #${restartCount + 1})"
-                )
-                try { current.stop() } catch (e: Exception) {
-                    Log.w(TAG, "stop failed: ${e.message}")
-                }
-                restartCount++
-                pingFailures = 0
-                lastRestartAt = now
-            }
-
-            Log.i(TAG, "starting backend (reason=$reason, port=$apiPort)")
-            val fresh = Backend(applicationContext)
-            fresh.attachActivity(this)
-            fresh.run()
-            sharedBackend = fresh
-            backendStartedAt = SystemClock.elapsedRealtime()
-        } catch (e: Exception) {
-            Log.e(TAG, "ensureBackend($reason) failed: ${e.message}", e)
-        } finally {
-            backendMutex.unlock()
-        }
+        ensureBackendImpl(applicationContext, this, reason)
     }
 
     override fun onDestroy() {

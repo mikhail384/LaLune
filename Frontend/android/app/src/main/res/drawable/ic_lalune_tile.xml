@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Иконка Quick Settings для LaLune: месяц (La Lune).
+
+  Плитка рендерится системой в один цвет, поэтому используем сплошной белый
+  цвет и маску: система сама перекрасит её под текущую тему и состояние.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="?attr/colorControlNormal">
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M12.34,2.02C6.59,1.82 2,6.42 2,12c0,5.52 4.48,10 10,10 3.71,0 6.93,-2.02 8.66,-5.03 -0.94,0.31 -1.95,0.49 -3,0.49 -5.52,0 -10,-4.48 -10,-10 0,-1.97 0.57,-3.8 1.55,-5.34 -0.87,-0.08 -1.76,-0.11 -2.67,-0.1z" />
+</vector>
