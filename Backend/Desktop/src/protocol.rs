@@ -627,6 +627,34 @@ mod wdtt_tests {
     }
 
     #[test]
+    fn wdtt_is_advertised_to_the_ui() {
+        let protocols = supported_protocols();
+        let wdtt = protocols
+            .iter()
+            .find(|p| p.get("id").and_then(|v| v.as_str()) == Some("WDTToR"))
+            .expect("WDTToR must be advertised");
+        assert_eq!(
+            wdtt.get("displayName").and_then(|v| v.as_str()),
+            Some("WDTToR (WDTT)"),
+            "UI label must be «WDTToR (WDTT)»"
+        );
+        assert_eq!(
+            wdtt.get("repo").and_then(|v| v.as_str()),
+            Some("Endlad2/wdtt-rslib")
+        );
+        assert!(!wdtt
+            .get("coreAsset")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .is_empty());
+        // The link placeholder shown in the add-config dialog.
+        assert_eq!(
+            link_placeholder(ProtocolKind::Wdtt),
+            "wdtt://host:56000:56001:9000:пароль:хеш1,хеш2"
+        );
+    }
+
+    #[test]
     fn recognizes_wdtt_ids() {
         for id in ["WDTToR", "wdtto", "WDTT", "WDTToR (WDTT)"] {
             assert_eq!(ProtocolKind::from_id(id), Some(ProtocolKind::Wdtt), "{id}");
