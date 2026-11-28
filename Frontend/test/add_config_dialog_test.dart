@@ -40,12 +40,23 @@ void main() {
     })));
 
     await tester.tap(find.text('open-no-scrim'));
+    // Один pump только запускает переход маршрута: ModalBarrier появляется на
+    // следующем кадре, поэтому прокручиваем анимацию открытия.
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
 
     final barriers = tester.widgetList<ModalBarrier>(find.byType(ModalBarrier));
+    expect(barriers, isNotEmpty, reason: 'the dialog route must own a barrier');
+    // Замысел теста: диалог не затемняет страницу. Flutter представляет это
+    // по-разному — barrierColor может быть null или прозрачным цветом, —
+    // поэтому проверяем именно отсутствие видимой заливки.
     expect(
-      barriers.where((barrier) => barrier.color == Colors.transparent),
-      isNotEmpty,
+      barriers.every((barrier) {
+        final color = barrier.color;
+        return color == null || color.alpha == 0;
+      }),
+      isTrue,
+      reason: 'the barrier must not darken the page',
     );
   });
 
