@@ -54,6 +54,9 @@ class CoreManager(private val context: Context) {
         const val PROTO_CSQTT_251 = "CSQTT 2.5.1"
         const val PROTO_CSQTTR = "CSQTTR"
         const val PROTO_TOTS = "ToTS"
+
+        /** WDTToR — Rust-клиент WDTT (WireGuard поверх TURN/DTLS). */
+        const val PROTO_WDTT = "WDTToR"
         const val CSQTT_219_RELEASE = "2026.09.17.17.36"
 
         const val LATEST_CSQTT_URL =
@@ -67,6 +70,8 @@ class CoreManager(private val context: Context) {
             "https://github.com/Endlad2/csqtt-core/releases/download/%s/%s"
         const val TOTS_ANDROID_URL =
             "https://github.com/Endlad2/ToTS/releases/latest/download/tots-android-multiabi.zip"
+        const val WDTT_ANDROID_URL =
+            "https://github.com/Endlad2/wdtt-rslib/releases/latest/download/wdtt-android-multiabi.zip"
 
         const val PROXY_URL = "http://31.77.148.203:8855/?url="
         const val UA_BROWSER =
@@ -89,6 +94,7 @@ class CoreManager(private val context: Context) {
     private val latestCsqtt219 = File(appDir, "LATEST.CSQTT-2.1.9")
     private val latestCsqttr = File(appDir, "LATEST.CSQTTR")
     private val latestTots = File(appDir, "LATEST.ToTS")
+    private val latestWdtt = File(appDir, "LATEST.WDTToR")
 
     // The core process is process-wide: a restarted Backend creates a new
     // CoreManager, and it must still be able to stop the core started by the
@@ -125,6 +131,9 @@ class CoreManager(private val context: Context) {
                 else -> null
             }
             PROTO_TOTS.uppercase() -> "libtots.so"
+            // Android пакует исполняемые файлы как .so в jniLibs: ядро
+            // запускается из nativeLibraryDir через ProcessBuilder.
+            PROTO_WDTT.uppercase() -> "libwdtt.so"
             else -> null
         }
     }
@@ -153,6 +162,16 @@ class CoreManager(private val context: Context) {
                 }
                 "jniLibs/$abiDir/libtots.so"
             }
+            PROTO_WDTT.uppercase() -> {
+                val abi = android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: return null
+                val abiDir = when {
+                    abi.contains("arm64") -> "arm64-v8a"
+                    abi.contains("armeabi-v7a") || abi.contains("arm") -> "armeabi-v7a"
+                    abi.contains("x86_64") -> "x86_64"
+                    else -> return null
+                }
+                "jniLibs/$abiDir/libwdtt.so"
+            }
             else -> null
         }
     }
@@ -175,12 +194,14 @@ class CoreManager(private val context: Context) {
         protocol.equals(PROTO_CSQTTR, ignoreCase = true) -> latestCsqttr
         protocol.equals(PROTO_CSQTT_219, ignoreCase = true) -> latestCsqtt219
         protocol.equals(PROTO_TOTS, ignoreCase = true) -> latestTots
+        protocol.equals(PROTO_WDTT, ignoreCase = true) -> latestWdtt
         else -> latestCsqtt
     }
 
     fun fetchLatestVersion(protocol: String = PROTO_CSQTT): String? {
         if (protocol.equals(PROTO_CSQTT_219, ignoreCase = true)) return CSQTT_219_RELEASE
         if (protocol.equals(PROTO_TOTS, ignoreCase = true)) return "latest"
+        if (protocol.equals(PROTO_WDTT, ignoreCase = true)) return "latest"
         val baseUrl = when {
             protocol.equals(PROTO_CSQTTR, ignoreCase = true) -> LATEST_CSQTTR_URL
             else -> LATEST_CSQTT_URL
@@ -217,6 +238,7 @@ class CoreManager(private val context: Context) {
             protocol.equals(PROTO_CSQTT_219, ignoreCase = true) -> downloadCsqtt219()
             protocol.equals(PROTO_CSQTTR, ignoreCase = true) -> downloadCsqttr()
             protocol.equals(PROTO_TOTS, ignoreCase = true) -> downloadTots()
+            protocol.equals(PROTO_WDTT, ignoreCase = true) -> downloadWdtt()
             else -> downloadCsqtt()
         }
     }
@@ -285,6 +307,39 @@ class CoreManager(private val context: Context) {
         return false
     }
 
+    /** Скачивает и распаковывает ядро WDTToR (libwdtt.so из multi-ABI zip). */
+    private fun downloadWdtt(): Boolean {
+        val remoteEntry = getRemoteAssetName(PROTO_WDTT) ?: return false
+        Log.i(TAG, "[CORE] downloading WDTToR $WDTT_ANDROID_URL")
+        for (level in 1..3) {
+            try {
+                val useUrl = if (level == 1) WDTT_ANDROID_URL
+                    else PROXY_URL + URLEncoder.encode(WDTT_ANDROID_URL, "UTF-8")
+                val conn = URL(useUrl).openConnection() as HttpURLConnection
+                conn.connectTimeout = 30_000
+                conn.readTimeout = 120_000
+                conn.setRequestProperty("User-Agent", if (level == 3) UA_CURL else UA_BROWSER)
+                if (conn.responseCode == 200) {
+                    val tmpZip = File(coreDir, "wdtt-android-multiabi.zip.tmp")
+                    conn.inputStream.use { input -> FileOutputStream(tmpZip).use { input.copyTo(it) } }
+                    if (tmpZip.length() < 1024) { tmpZip.delete(); continue }
+                    val dest = File(coreDir, "libwdtt.so")
+                    if (extractFileFromZip(tmpZip, remoteEntry, dest)) {
+                        dest.setExecutable(true, false)
+                        try { latestWdtt.writeText("latest") } catch (_: Exception) {}
+                        tmpZip.delete()
+                        Log.i(TAG, "[CORE] WDTToR extracted OK (${dest.length()} bytes)")
+                        return true
+                    }
+                    tmpZip.delete()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "[DOWNLOAD][WDTToR][LEVEL $level] ${e.message}")
+            }
+        }
+        return false
+    }
+
     private fun extractFileFromZip(zip: File, entryName: String, dest: File): Boolean {
         return try {
             java.util.zip.ZipFile(zip).use { zf ->
@@ -348,6 +403,8 @@ class CoreManager(private val context: Context) {
 
         val finalArgs = if (args != null) {
             listOf(corePath) + args
+        } else if (protocol.equals(PROTO_WDTT, ignoreCase = true)) {
+            buildWdttArgs(corePath, peer, password, hashes)
         } else {
             buildCsqttArgs(corePath, protocol, peer, password, hashes)
         }
@@ -403,6 +460,73 @@ class CoreManager(private val context: Context) {
             onLog("[CORE] start failed: ${e.message}")
             false
         }
+    }
+
+    /**
+     * Аргументы ядра WDTToR.
+     *
+     * Ядро само поднимает WireGuard (boringtun) и TUN, поэтому LaLune не создаёт
+     * интерфейс. Пароль передаётся через --password, хеши — через --vk; режим
+     * АвтоAPI переиспользует настройку wdttVkAuthMode и токен VK, который ядро
+     * читает из файла, если он есть.
+     */
+    private fun buildWdttArgs(
+        corePath: String,
+        peer: String,
+        password: String,
+        hashes: String,
+    ): List<String> {
+        val settingsFile = File(appDir, "settings.json")
+        val settings = if (settingsFile.exists()) {
+            try { org.json.JSONObject(settingsFile.readText()) }
+            catch (_: Exception) { org.json.JSONObject() }
+        } else org.json.JSONObject()
+
+        var workers = settings.optInt("wdttWorkers", 9)
+        workers = ((workers.coerceIn(9, 108)) / 9) * 9
+        if (workers < 9) workers = 9
+
+        val obfs = settings.optString("wdttObfs", "audio").let {
+            if (it == "video") "video" else "audio"
+        }
+        // --vk-auth-mode управляет тем, как ядро получает TURN-креды у VK
+        // (vkcalls или legacy), а не источником хешей. Источник хешей —
+        // wdttVkAuthMode: в ручном режиме они из конфига, в АвтоAPI их
+        // подставляет бэкенд перед запуском.
+        val vkAuthMode = settings.optString("vkAuthMode", "vkcalls").let {
+            if (it == "legacy") "legacy" else "vkcalls"
+        }
+        val localPort = settings.optInt("wdttLocalPort", 9000).coerceIn(1024, 65535)
+        val deviceId = settings.optString("wdttDeviceId", "").trim()
+
+        val normalized = hashes.replace(' ', ',').replace('\t', ',')
+            .replace('\n', ',').replace('\r', ',')
+        val clean = normalized.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+
+        val args = mutableListOf(
+            corePath,
+            "--peer", peer,
+            "--password", password,
+            "--workers", workers.toString(),
+            "--obfs", obfs,
+            "--vk-auth-mode", vkAuthMode,
+            // На Android интерфейс создаёт VpnService, а ядро принимает от
+            // него сырые IP-пакеты: /dev/net/tun здесь недоступен без root.
+            "--packet-port", "127.0.0.1:$localPort",
+            "--listen", "127.0.0.1:${localPort + 1}",
+            // События нужны бэкенду, чтобы увидеть READY и статистику.
+            "--events",
+            "--log-level", "info",
+        )
+        if (clean.isNotEmpty()) {
+            args.add("--vk")
+            args.add(clean.joinToString(","))
+        }
+        if (deviceId.isNotEmpty()) {
+            args.add("--device-id")
+            args.add(deviceId)
+        }
+        return args
     }
 
     /** buildCsqttArgs: deviceId УБРАН — новое ядро его не принимает. */
@@ -517,7 +641,10 @@ class CoreManager(private val context: Context) {
             "-captcha-mode", "-turn-transport", "--transport", "--client-ip",
             "--tcp-recovery", "--mode", "--socks5", "--webrtc-port",
             "--turn-port", "--provider", "--n", "--workers_percent", "--mtu",
-            "--tun-fd", "--relay-only"
+            "--tun-fd", "--relay-only",
+            // WDTToR
+            "--obfs", "--vk-auth-mode", "--listen", "--workers", "--device-id",
+            "--log-level", "--tun-name", "--mtu"
         )
         var redactNext = false
         return args.mapIndexed { i, arg ->

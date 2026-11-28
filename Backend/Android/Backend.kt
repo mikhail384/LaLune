@@ -724,6 +724,14 @@ class Backend(private val context: Context) {
             put("description", "Multi-provider ToTS tunnel")
             put("coreAsset", coreManager?.getCoreName(PROTO_TOTS) ?: "")
         })
+        put(JSONObject().apply {
+            put("id", CoreManager.PROTO_WDTT)
+            put("displayName", "WDTToR (WDTT)")
+            put("repo", "Endlad2/wdtt-rslib")
+            put("realtime", true)
+            put("description", "WireGuard поверх TURN/DTLS, совместим с сервером WDTT")
+            put("coreAsset", coreManager?.getCoreName(CoreManager.PROTO_WDTT) ?: "")
+        })
     }
 
     private fun routeCore(method: String, rest: String): Pair<Int, String> {
@@ -845,6 +853,16 @@ class Backend(private val context: Context) {
                     "shareVpn", "showCoreLogs"
                 )))
                 put("linkPlaceholder", "tots://eyJ2ZXJzaW9uIjoxLC4uLn0")
+            }
+        } else if (upper == CoreManager.PROTO_WDTT.uppercase()) {
+            JSONObject().apply {
+                put("protocol", CoreManager.PROTO_WDTT)
+                put("keys", JSONArray(listOf(
+                    "wdttWorkers", "wdttObfs", "wdttVkAuthMode", "wdttLocalPort",
+                    "wdttDeviceId", "autoApiWorkers", "vkAuthMode",
+                    "shareVpn", "showCoreLogs"
+                )))
+                put("linkPlaceholder", "wdtt://host:56000:56001:9000:пароль:хеш1,хеш2")
             }
         } else {
             JSONObject().apply {
@@ -1205,7 +1223,7 @@ class Backend(private val context: Context) {
 
     private fun normalizeConfigLink(rawLink: String, selectedProtocol: String): Pair<String, String> {
         val trimmed = rawLink.trim()
-        val schemes = listOf("csqtt://", "csqttr://", "tots://")
+        val schemes = listOf("csqtt://", "csqttr://", "tots://", "wdtt://")
         val match = schemes.mapNotNull { scheme ->
             val index = trimmed.indexOf(scheme, ignoreCase = true)
             if (index >= 0) index to scheme else null
@@ -1219,6 +1237,8 @@ class Backend(private val context: Context) {
             "csqtt 2.5.1" -> PROTO_CSQTT_251
             "csqttr" -> CoreManager.PROTO_CSQTTR
             "tots" -> PROTO_TOTS
+            // Подпись «WDTToR (WDTT)» в нижнем регистре — «wdttor (wdtt)».
+            "wdttor", "wdttor (wdtt)", "wdtt", "wdtto" -> CoreManager.PROTO_WDTT
             else -> null
         }
 
@@ -1229,6 +1249,7 @@ class Backend(private val context: Context) {
         val effectiveProtocol = explicitProtocol ?: when {
             normalizedScheme == "csqttr://" -> CoreManager.PROTO_CSQTTR
             normalizedScheme == "tots://" -> PROTO_TOTS
+            normalizedScheme == "wdtt://" -> CoreManager.PROTO_WDTT
             isOpaqueCsqtt && selectedProtocol.equals(PROTO_CSQTT_219, ignoreCase = true) -> PROTO_CSQTT_251
             else -> selectedProtocol
         }
@@ -1245,6 +1266,9 @@ class Backend(private val context: Context) {
         val lower = normalizedLink.trim().lowercase(Locale.ROOT)
         if (lower.startsWith("tots://")) {
             return parseTots(normalizedLink)
+        }
+        if (lower.startsWith("wdtt://")) {
+            return parseWdtt(normalizedLink)
         }
         return parseCsqtt(normalizedLink, effectiveProtocol).apply {
             when {
@@ -1279,6 +1303,40 @@ class Backend(private val context: Context) {
             put("name", "ToTS · $peer")
             put("rawLink", link)
             put("totsConfig", cfg)
+        }
+    }
+
+    /**
+     * Разбирает wdtt:// ссылку: host:dtls:wg:local:password:hashes.
+     *
+     * Пароль не содержит ':', поэтому split с ограничением 6 безопасен; хеши
+     * разделены запятыми и уходят в поле hashes как есть.
+     */
+    private fun parseWdtt(link: String): JSONObject {
+        require(link.startsWith("wdtt://", ignoreCase = true)) { "invalid WDTToR URI" }
+        val body = link.substringAfter("://").trim()
+        require(body.isNotEmpty()) { "empty WDTToR payload" }
+
+        val parts = body.split(":", limit = 6)
+        require(parts.size >= 5) {
+            "WDTToR link needs host:dtls:wg:local:password:hashes"
+        }
+        val host = parts[0].trim()
+        require(host.isNotEmpty()) { "WDTToR link has no server address" }
+        val dtlsPort = parts[1].trim()
+        val password = parts[4].trim()
+        require(password.isNotEmpty()) { "WDTToR link has no connection password" }
+        val hashes = if (parts.size >= 6) parts[5].trim() else ""
+
+        val peer = if (dtlsPort.isEmpty()) host else "$host:$dtlsPort"
+        return JSONObject().apply {
+            put("protocol", CoreManager.PROTO_WDTT)
+            put("peer", peer)
+            put("password", password)
+            put("hashes", hashes)
+            put("name", "WDTToR · $host")
+            // Ядро умеет разбирать ссылку само, поэтому сохраняем её целиком.
+            put("rawLink", link)
         }
     }
 
@@ -1530,14 +1588,44 @@ class Backend(private val context: Context) {
         } else if (cfgHashes.isNotEmpty()) cfgHashes
         else settings.optString("vkHashes", "")
 
+        // WDTToR «АвтоAPI»: создаём звонки прямо перед запуском ядра и
+        // передаём их хеши. Ручной режим берёт хеши из конфига.
+        val isWdtt = protocol.equals(CoreManager.PROTO_WDTT, ignoreCase = true)
+        val wdttAutoApi = isWdtt &&
+            settings.optString("wdttVkAuthMode", "manual").equals("autoApi", ignoreCase = true)
+        val finalHashes = if (wdttAutoApi) {
+            val token = readVkToken()
+            if (token.isNullOrEmpty()) return 400 to jsonErr("Для АвтоAPI требуется авторизация ВК")
+            val workers = settings.optInt("wdttWorkers", DEFAULT_WORKERS)
+            val aw = settings.optInt("autoApiWorkers", DEFAULT_AUTO_API_WORKERS)
+            val count = callCountForWorkers(workers, aw)
+            val created = mutableListOf<String>()
+            addLog("[VK] WDTToR АвтоAPI: запрашиваю $count звонк(ов)")
+            for (slot in 0 until count) {
+                if (slot > 0) Thread.sleep(if (count <= 4) 80L else 202L)
+                val (callId, hash, errCode) = startVkCall(token)
+                if (hash.isNotEmpty()) {
+                    created.add(hash)
+                    activeCallIds.add(callId)
+                } else if (errCode in listOf(4, 5, 27, 28)) {
+                    return 401 to jsonErr("VK token invalid")
+                }
+            }
+            if (created.isEmpty()) return 500 to jsonErr("АвтоAPI не смог создать ни одного звонка")
+            addLog("[VK] WDTToR АвтоAPI: получено ${created.size} хеш(ей)")
+            created.joinToString(",")
+        } else {
+            hashes
+        }
+
         val started = cm.startCore(
             protocol = protocol,
             peer = peer,
             password = password,
-            hashes = hashes,
+            hashes = finalHashes,
             onLog = { line -> addCoreLog(line) }
         )
-        if (!started) return 500 to jsonErr("csqtt core start failed")
+        if (!started) return 500 to jsonErr("$protocol core start failed")
 
         if (temporaryProfile == null && settings.optBoolean("shareVpn", false)) startSocks5()
 
@@ -1546,6 +1634,9 @@ class Backend(private val context: Context) {
 
     private fun beginVpnService(selectedId: Long, temporary: Boolean): Pair<Int, String> {
         LaLuneVpnService.snapshotConfigId = selectedId
+        LaLuneVpnService.snapshotProtocol = runCatching {
+            findConfig(selectedId)?.optString("protocol").orEmpty()
+        }.getOrDefault("")
         markVpnConnecting()
         // The temporary path does not need an Activity. Submit START before
         // returning to the caller so cleanup cannot overtake a posted START.

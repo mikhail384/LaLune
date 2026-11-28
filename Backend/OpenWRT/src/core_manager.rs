@@ -39,13 +39,27 @@ pub fn core_asset_name() -> &'static str {
 pub fn supported_protocols() -> Vec<serde_json::Value> {
     use crate::bundled_cores::{available, Core};
     let bundled = available();
-    Core::ALL.into_iter().filter(|core| bundled || *core == Core::Csqtt)
+    // Показываем ядро, если оно реально есть в архиве (или на флеше); CSQTT
+    // доступен всегда, потому что его можно скачать.
+    Core::ALL
+        .into_iter()
+        .filter(|core| core.bundled() || *core == Core::Csqtt)
         .map(|core| serde_json::json!({
             "id": core.id(),
-            "displayName": core.id(),
-            "repo": if core == Core::Csqttr { "Endlad2/csqttr-core" } else { "Endlad2/csqtt-core" },
+            "displayName": match core {
+                Core::Wdtt => "WDTToR (WDTT)",
+                _ => core.id(),
+            },
+            "repo": match core {
+                Core::Csqttr => "Endlad2/csqttr-core",
+                Core::Wdtt => "Endlad2/wdtt-rslib",
+                _ => "Endlad2/csqtt-core",
+            },
             "realtime": true,
-            "description": "VK Calls, TURN и WRAP",
+            "description": match core {
+                Core::Wdtt => "WireGuard поверх TURN/DTLS, совместим с сервером WDTT",
+                _ => "VK Calls, TURN и WRAP",
+            },
             "coreAsset": if bundled { core.filename() } else { core_asset_name() },
             "bundled": bundled,
         })).collect()
@@ -413,6 +427,11 @@ pub fn build_args(
 ) -> Vec<String> {
     use crate::bundled_cores::{available, Core};
     let kind = Core::parse(&config.protocol).unwrap_or(Core::Csqtt);
+
+    // WDTToR: ядро само поднимает WireGuard и TUN, поэтому аргументы свои.
+    if kind == Core::Wdtt {
+        return build_wdtt_args(config, settings);
+    }
     // Fallback: если в конфиге хешей нет — берём из settings.vk_hashes.
     let source_hashes = if config.hashes.trim().is_empty() {
         settings.vk_hashes.as_str()
@@ -485,6 +504,72 @@ pub fn build_args(
     }
     if settings.allow_hash_redistribution && (kind == Core::Legacy || (!available() && kind == Core::Csqtt)) {
         args.push("--allow-hash-redistribution".into());
+    }
+    args
+}
+
+/// Аргументы ядра WDTToR для OpenWRT.
+///
+/// На роутере есть root, поэтому TUN создаёт само ядро (без --no-tun и без
+/// пакетного режима). Пароль передаётся флагом, хеши — либо из конфига
+/// (ручной режим), либо из settings.vk_hashes (АвтоAPI).
+fn build_wdtt_args(
+    config: &crate::config::ConfigItem,
+    settings: &crate::settings::Settings,
+) -> Vec<String> {
+    let mut workers = settings.wdtt_workers.clamp(9, 108);
+    workers = (workers / 9) * 9;
+    if workers < 9 {
+        workers = 9;
+    }
+
+    let source_hashes = if config.hashes.trim().is_empty() {
+        settings.vk_hashes.as_str()
+    } else {
+        config.hashes.as_str()
+    };
+    let normalized = source_hashes.replace([' ', '\t', '\n', '\r'], ",");
+    let hashes: Vec<String> = normalized
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let obfs = if settings.wdtt_obfs == "video" {
+        "video"
+    } else {
+        "audio"
+    };
+    let vk_auth_mode = if settings.vk_auth_mode == "legacy" {
+        "legacy"
+    } else {
+        "vkcalls"
+    };
+
+    let mut args: Vec<String> = vec![
+        "--peer".into(),
+        config.peer.clone(),
+        "--password".into(),
+        config.password.clone(),
+        "--workers".into(),
+        workers.to_string(),
+        "--obfs".into(),
+        obfs.into(),
+        "--vk-auth-mode".into(),
+        vk_auth_mode.into(),
+        "--listen".into(),
+        format!("127.0.0.1:{}", settings.wdtt_local_port),
+        "--events".into(),
+        "--log-level".into(),
+        "info".into(),
+    ];
+    if !hashes.is_empty() {
+        args.push("--vk".into());
+        args.push(hashes.join(","));
+    }
+    if !settings.wdtt_device_id.trim().is_empty() {
+        args.push("--device-id".into());
+        args.push(settings.wdtt_device_id.trim().into());
     }
     args
 }

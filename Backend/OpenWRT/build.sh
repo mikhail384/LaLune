@@ -18,6 +18,7 @@ trap 'rm -rf -- "$work"' EXIT
 log() { printf '[openwrt-arm64-build] %s\n' "$*"; }
 fail() { printf '[openwrt-arm64-build][ERROR] %s\n' "$*" >&2; exit 1; }
 
+wdtt_asset=wdtt-openwrt-aarch64
 for cmd in curl tar zstd sha256sum cargo rustup unzip zip readelf python3; do
     command -v "$cmd" >/dev/null 2>&1 || fail "Не найдена команда: $cmd"
 done
@@ -112,9 +113,42 @@ build_core csqttr-core afab4c1f279c3e132699130b95184e628f7dda1c \
 build_core csqtt-core eda00fce6343430b40413da01791946dccb9c6ff \
     f1c7427b4bd67ecb181c2a01eeb3455bb8959bedbe91dd29ef08650a7c10f530 csqtt-219
 
+# WDTToR публикуется готовым бинарником (Rust, musl static), поэтому не
+# собирается из исходников: скачиваем подходящий ABI и кладём в тот же архив.
+fetch_wdtt_core() {
+    local asset=$1
+    if [ -z "$asset" ]; then
+        log "WDTToR core is not published for this ABI; skipping"
+        return 0
+    fi
+    local url="https://github.com/Endlad2/wdtt-rslib/releases/latest/download/$asset"
+    log "downloading WDTToR core: $url"
+    local level
+    for level in 1 2 3; do
+        if curl -fL --retry 2 --retry-delay 2 -o "$work/wdtt-core" "$url"; then
+            chmod 755 "$work/wdtt-core"
+            verify_elf "$work/wdtt-core"
+            log "WDTToR core OK ($(wc -c < "$work/wdtt-core") bytes)"
+            WDTT_BUNDLED=1
+            return 0
+        fi
+        sleep 2
+    done
+    printf 'Cannot download the WDTToR core (%s)\n' "$asset" >&2
+    exit 1
+}
+WDTT_BUNDLED=0
+fetch_wdtt_core "$wdtt_asset"
+
+if [ "$WDTT_BUNDLED" = 1 ]; then
+    cores="csqtt-client csqttr-client csqtt-219 wdtt-core"
+else
+    cores="csqtt-client csqttr-client csqtt-219"
+fi
+
 (
     cd "$work"
-    zip -9 -X openwrt-cores.zip csqtt-client csqttr-client csqtt-219
+    zip -9 -X openwrt-cores.zip $cores
     unzip -t openwrt-cores.zip
 )
 export LALUNE_OPENWRT_CORES="$work/openwrt-cores.zip"

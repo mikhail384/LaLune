@@ -39,6 +39,18 @@ pub struct Settings {
     pub auto_api_workers: i32,
 
 
+    // -------- WDTToR (WDTT) --------
+    /// Число сессий-воркеров (кратно 9).
+    pub wdtt_workers: i32,
+    /// Режим обфускации: audio или video.
+    pub wdtt_obfs: String,
+    /// Как получать хеши: manual (из конфига) или autoApi (VK API).
+    pub wdtt_vk_auth_mode: String,
+    /// Локальный порт WireGuard-эндпоинта.
+    pub wdtt_local_port: i32,
+    /// Переопределение device id.
+    pub wdtt_device_id: String,
+
     // -------- Экспериментальное --------
     pub enable_smart_tunnel: bool,
     pub show_core_logs: bool,
@@ -52,6 +64,11 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            wdtt_workers: 9,
+            wdtt_obfs: "audio".into(),
+            wdtt_vk_auth_mode: "manual".into(),
+            wdtt_local_port: 9000,
+            wdtt_device_id: String::new(),
             peer: String::new(),
             vk_hashes: String::new(),
             vk_js_token: String::new(),
@@ -87,6 +104,19 @@ impl Settings {
     pub fn normalize(&mut self) {
         if self.workers < MIN_WORKERS { self.workers = MIN_WORKERS; }
         if self.workers > MAX_WORKERS { self.workers = MAX_WORKERS; }
+
+        // WDTToR: воркеры кратны 9 (одна группа), обфускация audio/video.
+        self.wdtt_workers = self.wdtt_workers.clamp(9, 108);
+        self.wdtt_workers = (self.wdtt_workers / 9) * 9;
+        if self.wdtt_workers < 9 { self.wdtt_workers = 9; }
+        if !matches!(self.wdtt_obfs.as_str(), "audio" | "video") {
+            self.wdtt_obfs = "audio".into();
+        }
+        if self.wdtt_vk_auth_mode != "autoApi" {
+            self.wdtt_vk_auth_mode = "manual".into();
+        }
+        self.wdtt_local_port = self.wdtt_local_port.clamp(1024, 65535);
+        self.wdtt_device_id = self.wdtt_device_id.trim().to_string();
 
         if self.auto_api_workers < MIN_AUTO_API_WORKERS { self.auto_api_workers = MIN_AUTO_API_WORKERS; }
         if self.auto_api_workers > MAX_AUTO_API_WORKERS { self.auto_api_workers = MAX_AUTO_API_WORKERS; }

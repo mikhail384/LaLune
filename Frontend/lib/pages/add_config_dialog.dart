@@ -4,6 +4,8 @@
 // поэтому живёт столько же, сколько TextField, и корректно освобождается
 // при закрытии через кнопку, системный Back или нажатие вне модалки.
 
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 
 import '../widgets/glass_dialog.dart';
@@ -24,6 +26,12 @@ const _protocols = <String>[
   'WDTToR',
   'LaLuneSUB',
 ];
+
+/// На iOS WDTToR недоступен: клиент там работает без NetworkExtension
+/// (трафик идёт в incy через SOCKS5), а WireGuard-туннелю нужен именно
+/// системный VPN-провайдер.
+List<String> protocolsForCurrentPlatform() =>
+    Platform.isIOS ? _protocols.where((p) => p != 'WDTToR').toList() : _protocols;
 
 String _placeholderFor(String protocol) {
   switch (protocol) {
@@ -136,7 +144,7 @@ class _AddConfigDialogState extends State<_AddConfigDialog>
               const SizedBox(height: 6),
               GlassSelectField(
                 value: _protocol,
-                items: _protocols,
+                items: protocolsForCurrentPlatform(),
                 title: 'Протокол',
                 trailingBuilder: (context, value) {
                   if (value != 'CSQTT 2.5.1') return null;

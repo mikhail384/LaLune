@@ -825,14 +825,22 @@ async fn connect_profile(state: &Arc<AppState>, mut config: ConfigItem, _tempora
     let tots_auto_api = kind == ProtocolKind::Tots
         && settings.tots_vk_enabled
         && settings.tots_vk_auth_mode == "autoApi";
+    // WDTToR: режим «АвтоAPI» создаёт звонки так же, как CSQTT, и подставляет
+    // их хеши в settings.vk_hashes — оттуда их берёт build_wdtt_args.
+    let wdtt_auto_api = kind == ProtocolKind::Wdtt
+        && settings.wdtt_vk_auth_mode == "autoApi";
     if (matches!(kind, ProtocolKind::Csqtt | ProtocolKind::Csqttr)
-        && settings.auth_mode == "autoApi") || tots_auto_api
+        && settings.auth_mode == "autoApi") || tots_auto_api || wdtt_auto_api
     {
         let token = match vk::read_token(&state.app_dir) {
             Some(token) => token,
             None => return err(400, "Auto API requires VK token"),
         };
-        let call_workers = if kind == ProtocolKind::Tots { settings.tots_workers } else { settings.workers };
+        let call_workers = match kind {
+            ProtocolKind::Tots => settings.tots_workers,
+            ProtocolKind::Wdtt => settings.wdtt_workers,
+            _ => settings.workers,
+        };
         let count = vk::call_count_for_workers(call_workers, settings.auto_api_workers);
         let client = vk::VkApiClient::new(token);
         let mut hashes: Vec<String> = Vec::new();
@@ -888,8 +896,9 @@ async fn connect_profile(state: &Arc<AppState>, mut config: ConfigItem, _tempora
             // build_args take settings.vk_hashes without modifying the saved config.
             config.hashes.clear();
             state.log(format!(
-                "[VK] Auto API: received {} hash(es); passing them to CSQTT via --vk",
-                hashes.len()
+                "[VK] Auto API: received {} hash(es); passing them to {} via --vk",
+                hashes.len(),
+                kind.id()
             ));
         }
     }

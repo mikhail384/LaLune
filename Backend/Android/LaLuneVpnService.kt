@@ -120,6 +120,8 @@ class LaLuneVpnService : VpnService() {
         @Volatile var snapshotActiveSessions: Int = 0
         @Volatile var snapshotSessionId: String = ""
         @Volatile var snapshotConfigId: Long = 0
+        /** Протокол активного профиля: WDTToR работает на своём порту. */
+        @Volatile var snapshotProtocol: String = ""
         @Volatile var snapshotState: String = "disconnected"
         @Volatile var snapshotMessage: String = ""
         @Volatile private var activeService: LaLuneVpnService? = null
@@ -569,11 +571,19 @@ class LaLuneVpnService : VpnService() {
                 return true
             }
 
+            // WDTToR принимает сырые IP-пакеты на своём порту (--packet-port),
+            // остальные ядра — на общем CORE_PORT.
+            val bridgePort = if (snapshotProtocol.equals(CoreManager.PROTO_WDTT, ignoreCase = true)) {
+                routing.optInt("wdttLocalPort", CORE_PORT).coerceIn(1024, 65535)
+            } else {
+                CORE_PORT
+            }
+
             val socket = try {
                 DatagramSocket().also { bridge ->
                     // UDP-мост к ядру обязан идти вне VPN, иначе получим рекурсию.
                     if (!protect(bridge)) Log.w(TAG, "protect(UDP bridge) returned false")
-                    bridge.connect(InetAddress.getByName("127.0.0.1"), CORE_PORT)
+                    bridge.connect(InetAddress.getByName("127.0.0.1"), bridgePort)
                 }
             } catch (e: Exception) {
                 try { iface.close() } catch (_: Exception) {}
@@ -587,7 +597,7 @@ class LaLuneVpnService : VpnService() {
             udpSocket = socket
             tunAddress = tunIP
             tunEstablished = true
-            Log.i(TAG, "TUN up: IP=$tunIP, UDP bridge to 127.0.0.1:$CORE_PORT")
+            Log.i(TAG, "TUN up: IP=$tunIP, UDP bridge to 127.0.0.1:$bridgePort")
 
             bridgeJobs += scope.launch {
                 readTun(iface, generation) { buf, size ->

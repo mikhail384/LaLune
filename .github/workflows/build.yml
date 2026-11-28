@@ -350,7 +350,7 @@ jobs:
           done
           jq -e '.ok and .platform == "openwrt" and .arch == "aarch64"' "$test_home/ping.json"
           curl -fsS http://127.0.0.1:1062/core/protocols | jq -e \
-            'all(.[]; .bundled == true) and (map(.id) | sort == ["CSQTT", "CSQTT 2.1.9", "CSQTTR"])'
+            'all(.[]; .bundled == true) and (map(.id) | sort == ["CSQTT", "CSQTT 2.1.9", "CSQTTR", "WDTToR"])'
       - uses: actions/upload-artifact@v4
         with:
           name: Output-OpenWRT
@@ -761,6 +761,27 @@ jobs:
           fi
           rm -rf "$TMP_TOTS"
 
+      - name: Refresh WDTToR core binaries (jniLibs)
+        shell: bash
+        run: |
+          set -euo pipefail
+          TMP_WDTT=$(mktemp -d)
+          URL=https://github.com/Endlad2/wdtt-rslib/releases/latest/download/wdtt-android-multiabi.zip
+          if curl -L --fail --retry 3 -o "$TMP_WDTT/wdtt-android-multiabi.zip" "$URL"; then
+            unzip -o "$TMP_WDTT/wdtt-android-multiabi.zip" -d "$TMP_WDTT/extracted"
+            for abi in arm64-v8a armeabi-v7a x86_64; do
+              src="$TMP_WDTT/extracted/jniLibs/$abi/libwdtt.so"
+              [ -f "$src" ] || { echo "Missing WDTToR ABI in release: $abi" >&2; exit 1; }
+              mkdir -p "Frontend/android/app/src/main/jniLibs/$abi"
+              cp "$src" "Frontend/android/app/src/main/jniLibs/$abi/libwdtt.so"
+              chmod +x "Frontend/android/app/src/main/jniLibs/$abi/libwdtt.so"
+            done
+            echo "WDTToR core downloaded from the latest release."
+          else
+            echo "::warning::WDTToR multi-ABI release asset is unavailable; the protocol will be downloaded at runtime."
+          fi
+          rm -rf "$TMP_WDTT"
+
       - name: Copy Lua scripts to assets
         shell: bash
         run: |
@@ -987,6 +1008,7 @@ jobs:
           cp release/openwrt-ramips/lalune-openwrt-cores-ramips.zip release/assets/
           cp release/openwrt-ramips/lalune-openwrt-backend-ramips-lean release/assets/
           for core in csqtt-client csqttr-client csqtt-219; do cp "release/openwrt-ramips/$core-ramips" release/assets/; done
+          # WDTToR под mipsel не выпускается, поэтому отдельного файла нет.
           for abi in x86_64 i386 armv7 armv5 mips; do
             cp "release/openwrt-multi/lalune-openwrt-backend-$abi" release/assets/
             cp "release/openwrt-multi/lalune-openwrt-cores-$abi.zip" release/assets/

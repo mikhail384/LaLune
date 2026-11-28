@@ -14,16 +14,19 @@ pub enum Core {
     Csqtt,
     Csqttr,
     Legacy,
+    /// WDTToR — Rust-клиент WDTT (WireGuard поверх TURN/DTLS).
+    Wdtt,
 }
 
 impl Core {
-    pub const ALL: [Self; 3] = [Self::Csqtt, Self::Csqttr, Self::Legacy];
+    pub const ALL: [Self; 4] = [Self::Csqtt, Self::Csqttr, Self::Legacy, Self::Wdtt];
 
     pub fn parse(id: &str) -> Option<Self> {
         match id.trim().to_ascii_uppercase().as_str() {
             "CSQTT" | "CSQTT 2.5.1" => Some(Self::Csqtt),
             "CSQTTR" | "CSQTTR 2.5.2" => Some(Self::Csqttr),
             "CSQTT 2.1.9" => Some(Self::Legacy),
+            "WDTTOR" | "WDTT" | "WDTTO" => Some(Self::Wdtt),
             _ => None,
         }
     }
@@ -37,6 +40,7 @@ impl Core {
             Self::Csqtt => "CSQTT",
             Self::Csqttr => "CSQTTR",
             Self::Legacy => "CSQTT 2.1.9",
+            Self::Wdtt => "WDTToR",
         }
     }
 
@@ -45,16 +49,47 @@ impl Core {
             Self::Csqtt => "csqtt-client",
             Self::Csqttr => "csqttr-client",
             Self::Legacy => "csqtt-219",
+            Self::Wdtt => "wdtt-core",
         }
     }
 
     pub fn password_env(self) -> bool {
+        // WDTToR получает пароль флагом --password, а не через окружение.
         self == Self::Csqttr || (self == Self::Csqtt && available())
     }
 }
 
 /// Каталог, куда приложение заливает ядра для лёгкой сборки без вшитого архива.
 pub const LEAN_DIR: &str = "/usr/lib/lalune-run";
+
+impl Core {
+    /// Есть ли это ядро в вшитом архиве или на флеше.
+    ///
+    /// Общий `available()` отвечает на вопрос «есть ли хоть одно ядро», а
+    /// список протоколов должен показывать только те, что реально запустятся:
+    /// например, для mipsel сборки WDTToR не существует.
+    pub fn bundled(self) -> bool {
+        let Some(bytes) = BUNDLE else {
+            return Path::new(LEAN_DIR).join(self.filename()).is_file();
+        };
+        let _ = bytes;
+        bundled_entries().iter().any(|name| name == self.filename())
+    }
+}
+
+/// Имена файлов внутри вшитого архива (читаются один раз).
+fn bundled_entries() -> &'static [String] {
+    static ENTRIES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    ENTRIES.get_or_init(|| {
+        let Some(bytes) = BUNDLE else {
+            return Vec::new();
+        };
+        match zip::ZipArchive::new(Cursor::new(bytes)) {
+            Ok(archive) => archive.file_names().map(str::to_string).collect(),
+            Err(_) => Vec::new(),
+        }
+    })
+}
 
 pub fn available() -> bool {
     BUNDLE.is_some()
