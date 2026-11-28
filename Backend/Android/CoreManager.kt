@@ -496,7 +496,10 @@ class CoreManager(private val context: Context) {
         val vkAuthMode = settings.optString("vkAuthMode", "vkcalls").let {
             if (it == "legacy") "legacy" else "vkcalls"
         }
-        val localPort = settings.optInt("wdttLocalPort", 9000).coerceIn(1024, 65535)
+        // Порт пакетного режима и порт WireGuard-эндпоинта должны различаться,
+        // поэтому сверху ограничиваем 65534: соседний порт остаётся валидным.
+        val localPort = settings.optInt("wdttLocalPort", 9000).coerceIn(1024, 65534)
+        val wgPort = localPort + 1
         val deviceId = settings.optString("wdttDeviceId", "").trim()
 
         val normalized = hashes.replace(' ', ',').replace('\t', ',')
@@ -513,7 +516,7 @@ class CoreManager(private val context: Context) {
             // На Android интерфейс создаёт VpnService, а ядро принимает от
             // него сырые IP-пакеты: /dev/net/tun здесь недоступен без root.
             "--packet-port", "127.0.0.1:$localPort",
-            "--listen", "127.0.0.1:${localPort + 1}",
+            "--listen", "127.0.0.1:$wgPort",
             // События нужны бэкенду, чтобы увидеть READY и статистику.
             "--events",
             "--log-level", "info",

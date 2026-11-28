@@ -1069,6 +1069,18 @@ class Backend(private val context: Context) {
             s.put(key, s.optInt(key, if (key == "totsVkPercent") 100 else 0).coerceIn(0, 100))
         }
         if (s.optString("totsVkAuthMode", "manual") != "autoApi") s.put("totsVkAuthMode", "manual")
+        // WDTToR: воркеры кратны 9 (одна группа), обфускация audio/video,
+        // режим хешей manual/autoApi.
+        val wdttWorkers = s.optInt("wdttWorkers", 9).coerceIn(9, 108)
+        s.put("wdttWorkers", (wdttWorkers / 9) * 9)
+        if (s.optString("wdttObfs", "audio") !in setOf("audio", "video")) {
+            s.put("wdttObfs", "audio")
+        }
+        if (s.optString("wdttVkAuthMode", "manual") != "autoApi") {
+            s.put("wdttVkAuthMode", "manual")
+        }
+        s.put("wdttLocalPort", s.optInt("wdttLocalPort", 9000).coerceIn(1024, 65535))
+        s.put("wdttDeviceId", s.optString("wdttDeviceId", "").trim())
         val authMode = s.optString("authMode", "manual")
         if (authMode !in setOf("manual", "autoApi", "autoVk", "externalHashes")) {
             s.put("authMode", "manual")
