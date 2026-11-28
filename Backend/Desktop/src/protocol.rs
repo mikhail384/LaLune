@@ -238,6 +238,11 @@ fn build_wdtt_args(config: &ConfigItem, settings: &Settings) -> Result<Vec<Strin
         args.push(settings.wdtt_device_id.trim().to_string());
     }
 
+    // Имя интерфейса должно совпадать с тем, что знает LaLune: по нему
+    // latency-проба выбирает исходящий интерфейс.
+    args.push("--tun-name".into());
+    args.push(crate::vpn::WDTT_TUN_NAME.into());
+
     // События в stdout нужны, чтобы UI видел готовность и статистику.
     args.push("--events".into());
     args.push("--log-level".into());
@@ -699,6 +704,8 @@ mod wdtt_tests {
         assert_eq!(value("--workers"), "18");
         assert_eq!(value("--obfs"), "video");
         assert_eq!(value("--listen"), "127.0.0.1:9100");
+        // LaLune must know the interface name to bind its latency probe.
+        assert_eq!(value("--tun-name"), crate::vpn::WDTT_TUN_NAME);
     }
 
     #[test]

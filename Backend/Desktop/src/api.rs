@@ -965,6 +965,13 @@ async fn connect_profile(state: &Arc<AppState>, mut config: ConfigItem, _tempora
     state.vpn.core_pid.store(core.child.id().unwrap_or(0), std::sync::atomic::Ordering::Release);
     *state.vpn.core_peer.lock() = config.peer.clone();
     *state.vpn.active_config_id.lock() = config.id;
+    // Запоминаем, какой интерфейс создаёт ядро: по нему latency-проба
+    // выбирает исходящий интерфейс, когда TUN не принадлежит LaLune.
+    *state.vpn.core_tun_name.lock() = match kind {
+        ProtocolKind::Tots => vpn::TOTS_TUN_NAME.to_string(),
+        ProtocolKind::Wdtt => vpn::WDTT_TUN_NAME.to_string(),
+        _ => String::new(),
+    };
     *state.core.lock() = Some(core);
     if !auto_api_call_ids.is_empty() {
         *state.active_vk_call_ids.lock() = auto_api_call_ids;
@@ -976,12 +983,16 @@ async fn connect_profile(state: &Arc<AppState>, mut config: ConfigItem, _tempora
 
     let state2 = state.clone();
     let kind_for_watchdog = kind;
-    let watchdog_timeout = if kind == ProtocolKind::Tots {
+    let watchdog_timeout = match kind {
         // tots-client waits up to 45s + 5s per requested worker before its
         // own healthy-pool deadline. Give the subsequent TUN/route setup room.
-        Duration::from_secs((45 + settings.tots_workers.max(1) as u64 * 5).min(300) + 30)
-    } else {
-        Duration::from_secs(90)
+        ProtocolKind::Tots => {
+            Duration::from_secs((45 + settings.tots_workers.max(1) as u64 * 5).min(300) + 30)
+        }
+        // WDTToR поднимает по TURN-аллокации на воркер, затем DTLS и
+        // WireGuard-хендшейк: на 9 воркерах это занимает до минуты.
+        ProtocolKind::Wdtt => Duration::from_secs(180),
+        _ => Duration::from_secs(90),
     };
     let watchdog = tokio::spawn(async move {
         let deadline = tokio::time::Instant::now() + watchdog_timeout;

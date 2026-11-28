@@ -26,6 +26,8 @@ pub const CORE_LISTEN_PORT: u16 = 1080;
 pub const CSQTT_TUN_NAME: &str = "csqtt0";
 /// ToTS creates and owns its own TUN interface.
 pub const TOTS_TUN_NAME: &str = "tots0";
+/// WDTToR creates and owns its own TUN interface.
+pub const WDTT_TUN_NAME: &str = "wdtt0";
 pub const TUN_MTU: u16 = 1400;
 pub const DEFAULT_TUN_IP: &str = "10.66.67.12";
 pub const DEFAULT_DNS: &str = "8.8.8.8,8.8.4.4";
@@ -137,6 +139,9 @@ pub struct VpnRuntime {
     /// PID и адрес сервера ядра: нужны macOS, чтобы трафик самого ядра шёл мимо TUN.
     pub core_pid: std::sync::atomic::AtomicU32,
     pub core_peer: Mutex<String>,
+    /// Интерфейс, которым владеет ядро (ToTS, WDTToR). Пусто, когда TUN
+    /// создаёт сама LaLune (CSQTT): тогда адрес берётся из `tun_conf`.
+    pub core_tun_name: Mutex<String>,
     pub lifecycle: tokio::sync::Mutex<()>,
     pub operation: tokio::sync::Mutex<()>,
     pub watchdog: Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -171,6 +176,7 @@ impl VpnRuntime {
             physical_gateway: Arc::new(Mutex::new(String::new())),
             phase: Arc::new(RwLock::new("disconnected".into())),
             phase_message: Arc::new(RwLock::new(String::new())),
+            core_tun_name: Mutex::new(String::new()),
 
             #[cfg(target_os = "windows")]
             wintun: crate::wintun::new_shared_session(),
@@ -439,7 +445,14 @@ pub fn latency_socket(runtime: &VpnRuntime, source: Option<Ipv4Addr>) -> Result<
     {
         let _ = runtime;
         use std::os::fd::AsRawFd;
-        let name = if source.is_some() { CSQTT_TUN_NAME } else { TOTS_TUN_NAME };
+        let name = if source.is_some() {
+            CSQTT_TUN_NAME.to_string()
+        } else {
+            runtime.core_tun_name.lock().clone()
+        };
+        if name.is_empty() {
+            return Err(anyhow::anyhow!("no active tunnel interface"));
+        }
         let name = std::ffi::CString::new(name)?.into_bytes_with_nul();
         let result = unsafe {
             libc::setsockopt(socket.as_raw_fd(), libc::SOL_SOCKET, libc::SO_BINDTODEVICE,
@@ -456,8 +469,11 @@ pub fn latency_socket(runtime: &VpnRuntime, source: Option<Ipv4Addr>) -> Result<
             runtime.handle.lock().as_ref().map(|h| h.interface.clone())
                 .ok_or_else(|| anyhow::anyhow!("no active tunnel interface"))?
         } else {
-            TOTS_TUN_NAME.to_string()
+            runtime.core_tun_name.lock().clone()
         };
+        if name.is_empty() {
+            return Err(anyhow::anyhow!("no active tunnel interface"));
+        }
         let name = std::ffi::CString::new(name)?;
         let index = unsafe { libc::if_nametoindex(name.as_ptr()) };
         if index == 0 { return Err(std::io::Error::last_os_error().into()); }
@@ -482,10 +498,13 @@ pub fn latency_socket(runtime: &VpnRuntime, source: Option<Ipv4Addr>) -> Result<
         }
         let _ = runtime;
         let alias_name = if source.is_some() {
-            crate::wintun::WINTUN_ADAPTER_NAME
+            crate::wintun::WINTUN_ADAPTER_NAME.to_string()
         } else {
-            TOTS_TUN_NAME
+            runtime.core_tun_name.lock().clone()
         };
+        if alias_name.is_empty() {
+            return Err(anyhow::anyhow!("no active tunnel interface"));
+        }
         let alias: Vec<u16> = alias_name.encode_utf16().chain([0]).collect();
         let mut luid = 0;
         let mut index = 0;
