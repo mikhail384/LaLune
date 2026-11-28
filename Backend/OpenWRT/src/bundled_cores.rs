@@ -222,3 +222,41 @@ mod tests {
         assert!(Core::parse("../core").is_none());
     }
 }
+
+#[cfg(test)]
+mod bundled_tests {
+    use super::*;
+
+    /// Проверяет, что список протоколов отражает содержимое вшитого архива.
+    ///
+    /// Тест осмысленен только в сборке с LALUNE_OPENWRT_CORES: без архива
+    /// BUNDLE пуст, и проверять нечего.
+    #[test]
+    fn all_five_cores_are_bundled() {
+        if BUNDLE.is_none() {
+            return;
+        }
+        for core in Core::ALL {
+            assert!(
+                core.bundled(),
+                "ядро {} отсутствует в архиве",
+                core.filename()
+            );
+            assert_eq!(
+                Core::supported(core.id()),
+                Some(core),
+                "протокол {} должен поддерживаться",
+                core.id()
+            );
+        }
+        assert_eq!(Core::ALL.len(), 5);
+        assert_eq!(Core::parse("ToTS"), Some(Core::Tots));
+        assert_eq!(Core::parse("WDTToR"), Some(Core::Wdtt));
+    }
+
+    #[test]
+    fn unknown_protocols_are_rejected() {
+        assert_eq!(Core::parse("OLCRTC"), None);
+        assert_eq!(Core::supported("OLCRTC"), None);
+    }
+}
